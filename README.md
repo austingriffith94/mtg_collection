@@ -23,7 +23,7 @@ mtg_dashboard/
 │   ├── games_played.csv
 │   ├── game_changers.csv             # your custom Game Changer categories
 │   ├── mana_tags.csv                 # your optimized-mana categories
-│   └── deck_themes.csv               # ← not included yet, see note below
+│   └── deck_themes.csv               # main/sub theme per deck
 └── scripts/
     ├── scryfall_lookup.py            # Scryfall API client (lazy fetch + cache)
     ├── migrate.py                    # main migration script — run this
@@ -41,15 +41,6 @@ mtg_dashboard/
 cd mtg_dashboard
 pip install -r requirements.txt
 ```
-
-## ⚠️ One file is missing: `deck_themes.csv`
-
-You uploaded this earlier in our conversation, but it didn't carry over into
-this file set — only `decks.csv`, `deck_mapping.csv`, and `games_played.csv`
-came through in your last message. Drop `deck_themes.csv` into `data/`
-before running the migration if you want theme data included. If it's
-absent, `migrate.py` will skip themes with a warning and load everything
-else fine — you can re-run the migration later once you add it.
 
 ## Easiest way to run this: the launcher
 
@@ -139,6 +130,9 @@ before handing this off. Confirmed:
   and the drift-detection view correctly flags disagreements between
   your custom list and the (mocked, for this test) Scryfall flag in
   both directions
+- `deck_themes.csv` loads correctly — 74 theme assignments across all 22
+  tracked decks, and Raktres's main theme resolves to "Group Slug",
+  matching your PDF exactly
 
 What I *couldn't* test here: the real Scryfall responses, since this
 sandbox has no network access. Read the resolution report closely on your

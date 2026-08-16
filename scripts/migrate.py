@@ -97,16 +97,16 @@ class Migrator:
 
     # ------------------------------------------------------------
     def run(self):
-        self.log("=== 1/6 Loading decks + themes + win/strength/weakness ===")
+        self.log("=== 1/7 Loading decks + themes + win/strength/weakness ===")
         self.load_decks()
 
-        self.log("=== 2/6 Loading collection (Scryfall: exact set+number) ===")
+        self.log("=== 2/7 Loading collection (Scryfall: exact set+number) ===")
         self.load_collection()
 
-        self.log("=== 3/6 Loading decklists + strategy tags ===")
+        self.log("=== 3/7 Loading decklists + strategy tags ===")
         self.load_decklists()
 
-        self.log("=== 4/6 Loading maybeboard ===")
+        self.log("=== 4/7 Loading maybeboard ===")
         self.load_maybeboard()
 
         self.log("=== 5/7 Loading game log ===")

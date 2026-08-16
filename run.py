@@ -1,87 +1,80 @@
-#!/usr/bin/env python3
 """
-MTG Dashboard — one-stop launcher.
+MTG Dashboard — launcher.
 
 Double-click run.bat (Windows) / run.command (Mac) / run.sh (Linux),
-or just run `python run.py` / `python3 run.py` from a terminal.
+or just run `python run.py` / `python3 run.py` from a terminal —
+after activating whatever conda/venv environment you're managing
+yourself (see requirements.txt / README for the two packages needed:
+pandas and requests). This script does NOT install anything on its
+own; it just checks what's importable in your current environment
+and tells you what's missing if something is.
 
-Handles first-time setup (virtual environment + dependencies), running
-the migration, exporting a deck to Moxfield format, and — once built —
-launching the Streamlit dashboard.
+Handles running the migration, exporting a deck to Moxfield format,
+syncing the local image cache, and — once built — launching the
+Streamlit dashboard.
 """
 import os
 import sys
-import venv
-import hashlib
 import subprocess
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-VENV_DIR = os.path.join(BASE_DIR, ".venv")
-REQUIREMENTS = os.path.join(BASE_DIR, "requirements.txt")
-REQ_HASH_MARKER = os.path.join(VENV_DIR, ".requirements_hash")
 DB_PATH = os.path.join(BASE_DIR, "mtg_collection.db")
 SCRIPTS_DIR = os.path.join(BASE_DIR, "scripts")
 DASHBOARD_PATH = os.path.join(BASE_DIR, "dashboard.py")  # doesn't exist yet — see run_dashboard()
 
-
-def venv_python():
-    if os.name == "nt":
-        return os.path.join(VENV_DIR, "Scripts", "python.exe")
-    return os.path.join(VENV_DIR, "bin", "python")
+MIN_PYTHON = (3, 8)
 
 
-def requirements_hash():
-    with open(REQUIREMENTS, "rb") as f:
-        return hashlib.md5(f.read()).hexdigest()
+def check_python_version():
+    if sys.version_info < MIN_PYTHON:
+        print(f"⚠ This needs Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ — "
+              f"you're running {sys.version_info[0]}.{sys.version_info[1]}.")
+        print("Switch to a newer environment and re-run.")
+        sys.exit(1)
 
 
-def ensure_venv():
-    """Create the venv once, and re-install dependencies whenever
-    requirements.txt changes (e.g. when the dashboard adds streamlit
-    later) — not just on the very first run."""
-    first_time = not os.path.exists(venv_python())
-    if first_time:
-        print("First-time setup: creating a virtual environment (.venv)...")
-        venv.create(VENV_DIR, with_pip=True)
-
-    need_install = first_time
-    if not need_install:
-        if not os.path.exists(REQ_HASH_MARKER):
-            need_install = True
-        else:
-            with open(REQ_HASH_MARKER) as f:
-                need_install = f.read().strip() != requirements_hash()
-
-    if need_install:
-        print("Installing dependencies (only happens on first run or when they change)...")
+def require(*modules, label):
+    """Check the given modules are importable in the CURRENT environment
+    (whatever conda/venv you've activated) without installing anything.
+    Returns True if all present; otherwise prints what's missing and
+    how to install it, and returns False so the caller can bail out of
+    just that one action."""
+    missing = []
+    for m in modules:
         try:
-            subprocess.run(
-                [venv_python(), "-m", "pip", "install", "-q", "-r", REQUIREMENTS],
-                check=True,
-            )
-        except subprocess.CalledProcessError:
-            print("\n⚠ Dependency install failed — check your internet connection and try again.")
-            sys.exit(1)
-        with open(REQ_HASH_MARKER, "w") as f:
-            f.write(requirements_hash())
-        print("Setup complete.\n")
+            __import__(m)
+        except ImportError:
+            missing.append(m)
+    if missing:
+        names = " ".join(missing)
+        print(f"\n⚠ Missing package(s) needed for {label}: {', '.join(missing)}")
+        print(f"  pip install {names}")
+        print(f"  conda install {names}")
+        print("Install into your active environment, then try again.\n")
+        return False
+    return True
 
 
 def run_migration():
+    if not require("pandas", "requests", label="the migration"):
+        return
     print("\nRunning migration — this hits the Scryfall API for each unique "
           "printing and can take a few minutes.\n")
-    subprocess.run([venv_python(), "migrate.py"], cwd=SCRIPTS_DIR)
+    subprocess.run([sys.executable, "migrate.py"], cwd=SCRIPTS_DIR)
 
 
 def run_export():
+    # pure stdlib — no dependency check needed
     deck = input("Deck name (exact — leave blank to see the full list): ").strip()
-    args = [venv_python(), "export_moxfield.py"]
+    args = [sys.executable, "export_moxfield.py"]
     args.append(deck if deck else "--list")
     subprocess.run(args, cwd=SCRIPTS_DIR)
 
 
 def run_image_sync():
-    subprocess.run([venv_python(), "sync_images.py"], cwd=SCRIPTS_DIR)
+    if not require("requests", label="image sync"):
+        return
+    subprocess.run([sys.executable, "sync_images.py"], cwd=SCRIPTS_DIR)
 
 
 def run_dashboard():
@@ -89,16 +82,19 @@ def run_dashboard():
         print("\nThe Streamlit dashboard hasn't been built yet — that's the next phase "
               "of the project. For now, use the migration and Moxfield export below.\n")
         return
-    subprocess.run([venv_python(), "-m", "streamlit", "run", "dashboard.py"], cwd=BASE_DIR)
+    if not require("streamlit", label="the dashboard"):
+        return
+    subprocess.run([sys.executable, "-m", "streamlit", "run", "dashboard.py"], cwd=BASE_DIR)
 
 
 def main():
-    ensure_venv()
+    check_python_version()
 
     while True:
         db_exists = os.path.exists(DB_PATH)
         print("=" * 50)
         print("MTG Collection Dashboard")
+        print(f"(using: {sys.executable})")
         print("=" * 50)
         if not db_exists:
             print("No database found yet — run the migration first (option 1).\n")

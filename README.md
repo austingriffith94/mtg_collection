@@ -37,23 +37,60 @@ mtg_dashboard/
 
 ## Setup
 
+This project needs exactly two third-party packages — everything else
+it uses is Python standard library. Install these into whatever
+environment you're managing yourself (conda, venv, VS Code's env
+picker, etc.):
+
 ```bash
-cd mtg_dashboard
-pip install -r requirements.txt
+pip install pandas requests
+# or
+conda install pandas requests
 ```
+
+`requirements.txt` lists the same two, if you'd rather point a tool at
+a file (`pip install -r requirements.txt` / `conda install --file requirements.txt`).
+
+**Which script needs what**, if you want to scope an environment more
+tightly:
+
+| Script | pandas | requests |
+|---|:---:|:---:|
+| `migrate.py` | ✅ | ✅ (via `scryfall_lookup.py`) |
+| `sync_images.py` | — | ✅ |
+| `export_moxfield.py` | — | — |
+
+`pandas` is migration-only. `requests` is shared between migration and
+image sync. Moxfield export is pure stdlib — no install needed at all
+for that one.
 
 ## Easiest way to run this: the launcher
 
-You don't need to touch a terminal for day-to-day use. Double-click:
+The launcher (`run.py`) does **not** install anything or manage
+environments for you — by design, so you stay in control of your own
+conda/venv setup. It runs using whatever Python interpreter is currently
+active when you launch it (prints which one at the top of the menu, so
+you can confirm you're in the right environment), and checks each
+action's specific dependencies right before running it — e.g. picking
+"Export to Moxfield" never complains about pandas, since that action
+doesn't need it. If something's missing for the action you picked,
+it prints the exact `pip`/`conda` install command and stops, rather than
+installing anything on its own.
 
-- **Windows:** `run.bat`
+It still checks you're on Python 3.8+ and gives a clear message (not a
+raw crash) if not — that's a version check, not a package install, so
+it stays regardless of how you manage dependencies.
+
+You don't need to touch a terminal for day-to-day use — just make sure
+your environment is activated first. Double-click:
+
+- **Windows:** `run.bat` (activate your conda/venv env in the same
+  terminal first if you're not using a global install)
 - **Mac:** `run.command` (first time, right-click → Open, since it's
   unsigned — macOS will ask you to confirm once)
 - **Linux:** `run.sh` from a terminal (`./run.sh`), or just `python3 run.py`
 
-First run creates a virtual environment (`.venv/`) and installs
-dependencies automatically — that's a one-time ~30 second wait. Every run
-after that opens straight into a menu:
+Opens straight into a menu:
 
 ```
 1) Run / refresh database migration (rebuilds from CSVs in data/)
@@ -64,18 +101,22 @@ after that opens straight into a menu:
 ```
 
 If `requirements.txt` ever changes (e.g. once the Streamlit dashboard adds
-`streamlit` as a dependency), the launcher detects that and re-installs
-automatically — you'll never need to remember to `pip install` again.
+`streamlit` as a dependency), you'll need to install the new package
+yourself into your active environment — the launcher won't do it for
+you, in keeping with staying out of your environment management.
 
 Option 2 currently prints a "not built yet" message, since the Streamlit
 dashboard itself is the next phase of the project — the launcher is
-already wired for it, so it'll just work once `dashboard.py` exists.
+already wired for it, so it'll just work once `dashboard.py` exists
+(and once `streamlit` is installed in your environment).
 
-I tested every menu path (blocked options before migration, invalid
-input, migration → dashboard placeholder, exit) with a mocked
-environment; the one thing I couldn't verify here is the real
-`pip install` step itself, since this sandbox has no network access —
-that'll run for real the first time you double-click the launcher.
+I tested every menu path against a mocked environment: normal exit,
+blocked options before migration, invalid input, and the missing-package
+warning correctly firing only for actions that actually need pandas/
+requests (confirmed Moxfield export triggers no warning at all, since
+it's pure stdlib). The one thing I can't verify here is a real `pip`/
+`conda install` in your actual environment, since this sandbox doesn't
+have one to test against.
 
 ### Manual alternative
 

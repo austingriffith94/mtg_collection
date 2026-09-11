@@ -10,8 +10,9 @@ own; it just checks what's importable in your current environment
 and tells you what's missing if something is.
 
 Handles running the migration, exporting a deck to Moxfield format,
-syncing the local image cache, and — once built — launching the
-Streamlit dashboard.
+syncing the local image cache, refreshing Scryfall-derived card fields
+(Reserved List/Game Changer/legality/price) without a full migration,
+and launching the Streamlit dashboard.
 """
 import os
 import sys
@@ -20,7 +21,6 @@ import subprocess
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "mtg_collection.db")
 SCRIPTS_DIR = os.path.join(BASE_DIR, "scripts")
-DASHBOARD_PATH = os.path.join(BASE_DIR, "dashboard.py")  # doesn't exist yet — see run_dashboard()
 
 MIN_PYTHON = (3, 8)
 
@@ -77,11 +77,16 @@ def run_image_sync():
     subprocess.run([sys.executable, "sync_images.py"], cwd=SCRIPTS_DIR)
 
 
-def run_dashboard():
-    if not os.path.exists(DASHBOARD_PATH):
-        print("\nThe Streamlit dashboard hasn't been built yet — that's the next phase "
-              "of the project. For now, use the migration and Moxfield export below.\n")
+def run_refresh_card_data():
+    if not require("requests", label="refreshing card data"):
         return
+    print("\nRe-fetching every card by its Scryfall ID to refresh Reserved List / "
+          "Game Changer / legality / price — this doesn't touch your collection, "
+          "decklists, tags, or anything else.\n")
+    subprocess.run([sys.executable, "refresh_card_data.py"], cwd=SCRIPTS_DIR)
+
+
+def run_dashboard():
     if not require("streamlit", label="the dashboard"):
         return
     subprocess.run([sys.executable, "-m", "streamlit", "run", "dashboard.py"], cwd=BASE_DIR)
@@ -103,7 +108,8 @@ def main():
         print("2) Launch dashboard" + ("" if db_exists else "  [needs migration first]"))
         print("3) Export a deck to Moxfield format" + ("" if db_exists else "  [needs migration first]"))
         print("4) Sync image cache (download new + prune unused)" + ("" if db_exists else "  [needs migration first]"))
-        print("5) Exit")
+        print("5) Refresh Scryfall card data (Reserved List/Game Changer/legality/price)" + ("" if db_exists else "  [needs migration first]"))
+        print("6) Exit")
         choice = input("> ").strip()
 
         if choice == "1":
@@ -124,6 +130,11 @@ def main():
                 continue
             run_image_sync()
         elif choice == "5":
+            if not db_exists:
+                print("Run the migration first (option 1).\n")
+                continue
+            run_refresh_card_data()
+        elif choice == "6":
             break
         else:
             print("Not a valid option.\n")

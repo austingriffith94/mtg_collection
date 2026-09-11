@@ -8,8 +8,13 @@ Run locally (requires network + `requests`):
 Reads from ../data/*.csv, writes ../mtg_collection.db, and prints a
 resolution report at the end — review it before trusting the data.
 
-Idempotent-ish: re-running deletes and rebuilds mtg_collection.db from
-scratch, since incremental re-import isn't worth the complexity here.
+ONE-WAY, CSV -> DB. Re-running deletes and rebuilds mtg_collection.db
+from scratch every time. This is intentional: once you've moved to
+managing decks/collection/tags directly in the dashboard (Editor / Tag
+Editor pages), don't run this again for that data — a re-run always wins
+against whatever's in the database and will silently discard any
+dashboard-made edits since the last migration. Use this script for your
+initial CSV import, then leave it alone.
 """
 import os
 import sys
@@ -61,7 +66,14 @@ def split_label_description(text):
 class Migrator:
     def __init__(self, db_path=DB_PATH, verbose=True):
         self.verbose = verbose
+
         if os.path.exists(db_path):
+            self.log(
+                f"⚠ {os.path.basename(db_path)} already exists and will be wiped and rebuilt "
+                f"from the CSVs. If you've been managing decks/tags/collection directly in the "
+                f"dashboard, this will discard those edits — this script is meant for your "
+                f"initial CSV import only. Ctrl+C now to abort."
+            )
             os.remove(db_path)
         self.conn = sqlite3.connect(db_path)
         self.conn.execute("PRAGMA foreign_keys = ON")

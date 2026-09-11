@@ -25,6 +25,7 @@ CREATE TABLE cards (
     local_image_path  TEXT,               -- relative path under image_cache/, once downloaded
     is_basic_land     BOOLEAN DEFAULT 0,
     is_game_changer   BOOLEAN DEFAULT 0,
+    is_reserved       BOOLEAN DEFAULT 0,  -- Scryfall's `reserved` field (Reserved List)
     commander_legal   BOOLEAN DEFAULT 1,
     current_price_usd REAL,
     price_updated_at  DATE,

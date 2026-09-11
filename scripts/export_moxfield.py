@@ -10,6 +10,12 @@ falling back to a default Scryfall printing only for cards you don't
 own yet). That's what makes the pasted-in art match what you actually
 have.
 
+This is also available directly in the dashboard now (Decks & Maybeboard
+page — copy to clipboard or save to moxfield_exports/), which shares the
+exact same formatting logic via dashboard_lib/moxfield_export.py so the
+two never drift apart. This CLI script remains useful for scripting/
+automation outside the dashboard.
+
 Usage:
     python export_moxfield.py "Raktres, Lord of Discounts"
     python export_moxfield.py "Raktres, Lord of Discounts" --maybeboard
@@ -23,6 +29,9 @@ import argparse
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "mtg_collection.db")
 
+sys.path.insert(0, BASE_DIR)
+from dashboard_lib import moxfield_export
+
 
 def list_decks(conn):
     print("Decks in database:")
@@ -33,11 +42,6 @@ def list_decks(conn):
         print(f"  - {name}{tag}")
 
 
-def format_line(name, set_code, collector_number, quantity):
-    qty = quantity if quantity else 1
-    return f"{qty} {name} ({set_code.upper()}) {collector_number}"
-
-
 def export_deck(conn, deck_name, include_maybeboard=False):
     deck_row = conn.execute(
         "SELECT deck_id FROM decks WHERE name = ?", (deck_name,)
@@ -46,35 +50,8 @@ def export_deck(conn, deck_name, include_maybeboard=False):
         print(f"No deck found named '{deck_name}'. Use --list to see valid names.")
         sys.exit(1)
     deck_id = deck_row[0]
-
-    lines = []
-    unresolved = []
-
-    rows = conn.execute(
-        """SELECT c.name, c.set_code, c.collector_number, dc.quantity
-           FROM deck_cards dc JOIN cards c ON c.scryfall_id = dc.scryfall_id
-           WHERE dc.deck_id = ?
-           ORDER BY c.name""",
-        (deck_id,),
-    ).fetchall()
-    for name, set_code, collector_number, qty in rows:
-        lines.append(format_line(name, set_code, collector_number, qty))
-
-    if include_maybeboard:
-        mb_rows = conn.execute(
-            """SELECT c.name, c.set_code, c.collector_number
-               FROM maybeboard mb JOIN cards c ON c.scryfall_id = mb.scryfall_id
-               WHERE mb.deck_id = ?
-               ORDER BY c.name""",
-            (deck_id,),
-        ).fetchall()
-        if mb_rows:
-            lines.append("")
-            lines.append("// Maybeboard")
-            for name, set_code, collector_number in mb_rows:
-                lines.append(format_line(name, set_code, collector_number, 1))
-
-    return lines, unresolved
+    lines = moxfield_export.export_deck_lines(conn, deck_id, include_maybeboard)
+    return lines, []
 
 
 def main():

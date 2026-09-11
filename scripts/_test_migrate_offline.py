@@ -43,7 +43,13 @@ class MockScryfallClient(scryfall_lookup.ScryfallClient):
         if name.strip().lower() == "cantankerous keepers":
             return None
         set_code = "tst"
-        collector_number = str(abs(hash(name)) % 999)
+        # hashlib (not built-in hash()) so this is stable across separate
+        # process runs too, not just within one — built-in hash() is
+        # salted per-process by PYTHONHASHSEED, which would otherwise
+        # silently reassign every name-resolved card a new scryfall_id on
+        # every re-run, breaking anything that depends on ID stability
+        # across migrations (e.g. restoring dashboard-made tags).
+        collector_number = str(int(hashlib.md5(name.encode()).hexdigest(), 16) % 999)
         return self._synth(name, set_code, collector_number)
 
     def _synth(self, name, set_code, collector_number):

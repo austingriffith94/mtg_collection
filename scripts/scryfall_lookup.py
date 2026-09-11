@@ -57,6 +57,18 @@ class ScryfallClient:
             self._miss_log.append((f"{set_code}/{collector_number}", "not found by set+number"))
         return data
 
+    def get_by_id(self, scryfall_id):
+        """Direct lookup by Scryfall's permanent per-printing ID — the
+        fastest, most precise way to re-fetch a card you already have.
+        Used by dashboard_lib/refresh.py to pick up changed prices,
+        legality, or Game Changer / Reserved List membership over time,
+        without needing to re-resolve by name or set+number."""
+        url = f"{SCRYFALL_API}/cards/{scryfall_id}"
+        data = self._get(url)
+        if data is None:
+            self._miss_log.append((scryfall_id, "not found by id"))
+        return data
+
     def get_by_name(self, name):
         """
         Name-based lookup for cards without a pinned printing (e.g. new
@@ -136,6 +148,9 @@ def to_card_row(data):
         # Commander Bracket Game Changers list and updates automatically
         # as Scryfall's data changes, no manual seed list to maintain.
         "is_game_changer": 1 if data.get("game_changer") else 0,
+        # Also pulled live from Scryfall's `reserved` field — no manual
+        # list to maintain here either.
+        "is_reserved": 1 if data.get("reserved") else 0,
         "commander_legal": 1 if legalities.get("commander") == "legal" else 0,
         "current_price_usd": float(price) if price else None,
         "price_updated_at": None,  # set by caller to today's date

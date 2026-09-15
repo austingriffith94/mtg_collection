@@ -103,11 +103,13 @@ def resolve_or_fetch_card(conn, name=None, set_code=None, collector_number=None)
         """INSERT OR IGNORE INTO cards (
             scryfall_id, oracle_id, name, set_code, collector_number, type_line,
             mana_cost, cmc, color_identity, oracle_text, rarity, image_uri,
-            is_basic_land, is_game_changer, is_reserved, commander_legal, current_price_usd,
+            is_basic_land, is_game_changer, is_reserved, is_showcase, is_borderless,
+            commander_legal, current_price_usd,
             price_updated_at, last_fetched_at
         ) VALUES (:scryfall_id, :oracle_id, :name, :set_code, :collector_number, :type_line,
                   :mana_cost, :cmc, :color_identity, :oracle_text, :rarity, :image_uri,
-                  :is_basic_land, :is_game_changer, :is_reserved, :commander_legal, :current_price_usd,
+                  :is_basic_land, :is_game_changer, :is_reserved, :is_showcase, :is_borderless,
+                  :commander_legal, :current_price_usd,
                   :price_updated_at, :last_fetched_at)""",
         row,
     )

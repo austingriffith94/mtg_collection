@@ -1,12 +1,13 @@
 """
 Editor page — add, rename, and remove things directly in the database:
-deck names/metadata, whole new decks, retiring/reactivating a deck,
-themes, mainboard and maybeboard cards (including brand-new cards, via a
-live Scryfall lookup when needed), and collection lots. No CSV editing or
-re-migration required for any of this.
+deck names/metadata, whole new decks, themes, card tags, mainboard and
+maybeboard cards (including brand-new cards, via a live Scryfall lookup
+when needed), and collection lots. No CSV editing or re-migration
+required for any of this.
 
-Card tags and deck tags have their own dedicated page (Tag Editor) —
-not duplicated here.
+Card Tags (bulk-editing any tag_type across a deck's mainboard) lives
+here now too, moved from the earlier standalone Tag Editor page. Deck-
+level tags were removed entirely — use description/combos/tutors instead.
 
 Migration is one-way (CSV -> DB): re-running scripts/migrate.py wipes and
 rebuilds the whole database from the CSVs, discarding anything edited
@@ -15,6 +16,7 @@ import, then manage everything here from then on — see the README.
 """
 import sys
 import os
+import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -23,28 +25,37 @@ import streamlit as st
 
 from dashboard_lib import db, loaders, writes, card_resolver, refresh, formatting as fmt
 
+DECK_COVER_DIR = os.path.join(db.BASE_DIR, "image_cache", "deck_covers")
+
+
+def _parse_iso_date(value):
+    """'YYYY-MM-DD' (or NaN/None/'') -> datetime.date, else None — for
+    seeding st.date_input widgets from whatever's already in the DB."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    text = str(value).strip()
+    if not text or text.lower() == "nan":
+        return None
+    try:
+        return datetime.date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
 st.set_page_config(page_title="Editor · MTG Dashboard", page_icon="✏️", layout="wide")
 
 db.require_db()
 conn = db.get_connection()
 
 st.title("✏️ Editor")
-st.caption(
-    "Writes straight to the database — no CSV editing or re-migration needed for any of this. "
-    "Tags live on the separate Tag Editor page."
-)
+st.caption("Writes straight to the database — no CSV editing or re-migration needed for any of this.")
 
 st.sidebar.header("Deck")
 db.refresh_data_button()
-include_retired = st.sidebar.toggle("Show retired decks", value=True, key="editor_include_retired")
-decks_df = loaders.load_decks_df(conn, include_retired=include_retired)
+decks_df = loaders.load_decks_df(conn)
 
 deck_id = None
 if not decks_df.empty:
-    deck_labels = [
-        row["name"] + ("  (retired)" if not row["is_active"] else "")
-        for _, row in decks_df.iterrows()
-    ]
+    deck_labels = [row["name"] for _, row in decks_df.iterrows()]
     label_to_id = dict(zip(deck_labels, decks_df["deck_id"]))
     chosen_label = st.sidebar.selectbox("Choose a deck", deck_labels, key="editor_deck_select")
     deck_id = int(label_to_id[chosen_label])
@@ -74,8 +85,8 @@ with st.sidebar.expander("➕ Create a new deck"):
                 st.session_state["editor_deck_select"] = cn_name.strip()
                 st.rerun()
 
-tab_info, tab_themes, tab_main, tab_maybe, tab_coll, tab_carddata = st.tabs(
-    ["Deck Info", "Themes", "Mainboard", "Maybeboard", "Collection", "Card Data"]
+tab_info, tab_themes, tab_cardtags, tab_main, tab_maybe, tab_coll, tab_gc, tab_carddata = st.tabs(
+    ["Deck Info", "Themes", "Card Tags", "Mainboard", "Maybeboard", "Collection", "Game Changers", "Card Data"]
 )
 
 # ------------------------------------------------------------------
@@ -107,12 +118,6 @@ with tab_info:
                     st.rerun()
             else:
                 st.info("No change to save.")
-        st.caption(
-            "This only updates the database, not deck_mapping.csv. If you later re-run the CSV "
-            "migration, a rename made here (without a matching CSV update) can cause a duplicate "
-            "deck entry."
-        )
-
         st.divider()
         st.markdown("#### Deck details")
         commander = st.text_input("Commander", value=meta.get("commander") or "", key=f"editor_{deck_id}_commander")
@@ -161,30 +166,68 @@ with tab_info:
             st.rerun()
 
         st.divider()
-        st.markdown("#### Active / Retired")
-        is_active = bool(meta.get("is_active"))
-        if is_active:
-            st.write("Status: **Active**")
-            other_decks = decks_df[decks_df["deck_id"] != deck_id]
-            successor_options = ["(none)"] + other_decks["name"].tolist()
-            successor_label = st.selectbox(
-                "Successor (optional, only used if retiring)", successor_options, key=f"editor_{deck_id}_successor"
-            )
-            if st.button("🗄️ Retire this deck", key=f"editor_{deck_id}_retire"):
-                succ_id = None
-                if successor_label != "(none)":
-                    succ_id = int(other_decks[other_decks["name"] == successor_label]["deck_id"].iloc[0])
-                writes.set_deck_active(conn, deck_id, False, successor_deck_id=succ_id)
-                loaders.invalidate_deck_caches()
-                st.success("Retired.")
-                st.rerun()
+        st.markdown("#### Cover image")
+        st.caption("A custom PNG shown as this deck's thumbnail on the Decks & Maybeboard page.")
+        current_cover = fmt.resolve_local_image(meta.get("cover_image_path"))
+        cov_col1, cov_col2 = st.columns([1, 3])
+        if current_cover:
+            cov_col1.image(current_cover, width=120)
         else:
-            st.write("Status: **Retired**")
-            if st.button("↩️ Reactivate this deck", key=f"editor_{deck_id}_reactivate"):
-                writes.set_deck_active(conn, deck_id, True)
+            cov_col1.caption("No cover image set.")
+        with cov_col2:
+            cover_upload = st.file_uploader(
+                "Upload a PNG", type=["png"], key=f"editor_{deck_id}_cover_upload"
+            )
+            up_col, rm_col = st.columns(2)
+            if up_col.button("💾 Save cover image", key=f"editor_{deck_id}_cover_save", disabled=cover_upload is None):
+                os.makedirs(DECK_COVER_DIR, exist_ok=True)
+                dest_path = os.path.join(DECK_COVER_DIR, f"{deck_id}.png")
+                with open(dest_path, "wb") as f:
+                    f.write(cover_upload.getbuffer())
+                rel_path = os.path.relpath(dest_path, db.BASE_DIR)
+                writes.set_deck_cover_image(conn, deck_id, rel_path)
                 loaders.invalidate_deck_caches()
-                st.success("Reactivated.")
+                st.success("Cover image saved.")
                 st.rerun()
+            if rm_col.button("🗑️ Remove cover image", key=f"editor_{deck_id}_cover_remove", disabled=not meta.get("cover_image_path")):
+                writes.set_deck_cover_image(conn, deck_id, None)
+                loaders.invalidate_deck_caches()
+                st.success("Cover image removed.")
+                st.rerun()
+
+        st.divider()
+        st.markdown("#### Win Conditions / Strengths / Weaknesses")
+        st.caption("Up to 3 ranked entries each, as \"Label\" + an optional longer description.")
+
+        rank_kinds = [("win_conditions", "Win Conditions"), ("strengths", "Strengths"), ("weaknesses", "Weaknesses")]
+        rank_col1, rank_col2, rank_col3 = st.columns(3)
+        rank_containers = {"win_conditions": rank_col1, "strengths": rank_col2, "weaknesses": rank_col3}
+        rank_inputs = {}
+
+        for kind, title in rank_kinds:
+            container = rank_containers[kind]
+            container.markdown(f"**{title}**")
+            existing = {r["rank"]: r for r in loaders.load_deck_rank_list(conn, deck_id, kind)}
+            entries = []
+            for rank in (1, 2, 3):
+                row = existing.get(rank, {})
+                label = container.text_input(
+                    f"{title} {rank} — label", value=row.get("label") or "",
+                    key=f"editor_{deck_id}_{kind}_{rank}_label",
+                )
+                desc = container.text_area(
+                    f"{title} {rank} — description", value=row.get("description") or "",
+                    key=f"editor_{deck_id}_{kind}_{rank}_desc", height=68,
+                )
+                entries.append({"label": label, "description": desc})
+            rank_inputs[kind] = entries
+
+        if st.button("💾 Save Win Conditions / Strengths / Weaknesses", key=f"editor_{deck_id}_ranks_save"):
+            for kind, _ in rank_kinds:
+                writes.set_deck_rank_list(conn, deck_id, kind, rank_inputs[kind])
+            loaders.invalidate_deck_caches()
+            st.success("Saved.")
+            st.rerun()
 
         st.divider()
         st.markdown("#### ⚠️ Delete this deck")
@@ -250,16 +293,120 @@ with tab_themes:
 
         st.divider()
         st.markdown("**Add a theme**")
-        theme_name = st.text_input("Theme", key=f"editor_{deck_id}_theme_add_name")
+        st.caption("Pick from the master theme list, or create a new one on the fly.")
+        theme_catalog = loaders.load_theme_catalog(conn)
+        theme_pick_options = theme_catalog + ["+ Create new theme..."]
+        theme_pick = st.selectbox("Theme", theme_pick_options, key=f"editor_{deck_id}_theme_add_pick")
+        if theme_pick == "+ Create new theme...":
+            theme_name = st.text_input("New theme name", key=f"editor_{deck_id}_theme_add_name_new")
+        else:
+            theme_name = theme_pick
         theme_role = st.selectbox("Role", ["main", "sub"], key=f"editor_{deck_id}_theme_add_role")
         if st.button("➕ Add theme", key=f"editor_{deck_id}_theme_add_btn"):
             if not theme_name.strip():
                 st.warning("Enter a theme name.")
             else:
+                writes.add_theme_to_catalog(conn, theme_name.strip())
                 writes.add_deck_theme(conn, deck_id, theme_name.strip(), theme_role)
                 loaders.invalidate_deck_caches()
+                loaders.invalidate_reference_caches()
                 st.success(f"Added '{theme_name.strip()}' ({theme_role}).")
                 st.rerun()
+
+        with st.expander("⚙️ Manage the master theme list"):
+            st.caption(
+                "Adding/removing here only changes what's offered above — it never touches "
+                "any deck's existing theme assignments."
+            )
+            new_catalog_theme = st.text_input("New theme name", key=f"editor_{deck_id}_theme_catalog_add")
+            if st.button("➕ Add to master list", key=f"editor_{deck_id}_theme_catalog_add_btn"):
+                if new_catalog_theme.strip():
+                    writes.add_theme_to_catalog(conn, new_catalog_theme.strip())
+                    loaders.invalidate_reference_caches()
+                    st.success(f"Added '{new_catalog_theme.strip()}' to the master list.")
+                    st.rerun()
+                else:
+                    st.warning("Enter a theme name.")
+
+            if theme_catalog:
+                catalog_remove_choice = st.selectbox(
+                    "Remove from master list", theme_catalog, key=f"editor_{deck_id}_theme_catalog_remove"
+                )
+                if st.button("🗑️ Remove from master list", key=f"editor_{deck_id}_theme_catalog_remove_btn"):
+                    writes.remove_theme_from_catalog(conn, catalog_remove_choice)
+                    loaders.invalidate_reference_caches()
+                    st.success(f"Removed '{catalog_remove_choice}' from the master list.")
+                    st.rerun()
+            else:
+                st.caption("Master theme list is empty.")
+
+# ------------------------------------------------------------------
+# Card Tags — bulk-edit a whole deck's mainboard tags for one tag_type
+# at a time. Moved here from the earlier standalone Tag Editor page;
+# deck-level tags (the old "Deck Tags" tab) were removed entirely — use
+# the Deck Info tab's description/combos/tutors fields instead.
+# ------------------------------------------------------------------
+with tab_cardtags:
+    if deck_id is None:
+        st.info("Create a deck in the sidebar to get started.")
+    else:
+        cardtags_library_df = loaders.load_deck_cards_df(conn, deck_id)
+
+        if cardtags_library_df.empty:
+            st.info("No mainboard cards loaded for this deck yet.")
+        else:
+            existing_types = loaders.load_tag_types(conn)
+            type_options = sorted(set(existing_types) | {"strategy"}) + ["+ Create new tag type..."]
+            type_choice = st.selectbox("Tag type to edit", type_options, key=f"editor_{deck_id}_cardtag_type_choice")
+
+            if type_choice == "+ Create new tag type...":
+                new_type = st.text_input("New tag type name (e.g. 'rule0')", key=f"editor_{deck_id}_cardtag_type_new")
+                tag_type = new_type.strip() or None
+            else:
+                tag_type = type_choice
+
+            if not tag_type:
+                st.info("Enter a tag type name above to start editing.")
+            else:
+                current_tags = loaders.load_card_tags_by_type(conn, deck_id, tag_type)
+                existing_labels = sorted({label for labels in current_tags.values() for label in labels})
+                if existing_labels:
+                    st.caption(f"Existing **{tag_type}** labels in this deck: " + ", ".join(existing_labels))
+                else:
+                    st.caption(f"No **{tag_type}** tags on any card in this deck yet.")
+
+                cardtags_editor_rows = [
+                    {
+                        "scryfall_id": row["scryfall_id"],
+                        "Card": row["name"],
+                        "Tags": ", ".join(current_tags.get(row["scryfall_id"], [])),
+                    }
+                    for _, row in cardtags_library_df.iterrows()
+                ]
+                cardtags_editor_df = pd.DataFrame(cardtags_editor_rows)
+
+                cardtags_edited = st.data_editor(
+                    cardtags_editor_df,
+                    column_config={
+                        "Card": st.column_config.TextColumn("Card", disabled=True),
+                        "Tags": st.column_config.TextColumn(f"{tag_type} tags (comma-separated)"),
+                    },
+                    column_order=["Card", "Tags"],
+                    hide_index=True,
+                    use_container_width=True,
+                    key=f"editor_{deck_id}_{tag_type}_cardtags_editor",
+                )
+
+                if st.button("💾 Save tag changes", key=f"editor_{deck_id}_{tag_type}_cardtags_save"):
+                    cardtags_edits = {}
+                    for _, row in cardtags_edited.iterrows():
+                        raw = row["Tags"]
+                        labels = [] if pd.isna(raw) else [x.strip() for x in str(raw).split(",")]
+                        cardtags_edits[row["scryfall_id"]] = labels
+                    changed = writes.bulk_set_card_tags(conn, deck_id, tag_type, cardtags_edits)
+                    loaders.invalidate_deck_caches()
+                    st.success(f"Updated {tag_type} tags on {changed} card(s).")
+                    st.rerun()
 
 # ------------------------------------------------------------------
 # Mainboard
@@ -419,7 +566,10 @@ with tab_coll:
     coll_add_price = cc7.number_input("Price paid", min_value=0.0, value=0.0, step=0.5, key="editor_coll_add_price")
 
     cc8, cc9 = st.columns(2)
-    coll_add_date = cc8.text_input("Date acquired (YYYY-MM-DD, optional)", key="editor_coll_add_date")
+    coll_add_date = cc8.date_input(
+        "Date acquired", value=datetime.date.today(), key="editor_coll_add_date",
+        help="Defaults to today — change it if you're logging a past acquisition.",
+    )
     coll_add_source = cc9.text_input("Source (optional)", key="editor_coll_add_source")
 
     if st.button("➕ Add to collection", key="editor_coll_add_btn"):
@@ -438,7 +588,7 @@ with tab_coll:
                     quantity=int(coll_add_qty) if coll_add_qty else None,
                     foil=coll_add_foil,
                     location=coll_add_location.strip() or None,
-                    date_acquired=coll_add_date.strip() or None,
+                    date_acquired=coll_add_date.isoformat() if coll_add_date else None,
                     price_paid=float(coll_add_price) if coll_add_price else None,
                     source=coll_add_source.strip() or None,
                 )
@@ -466,7 +616,7 @@ with tab_coll:
                     "Qty": int(r["quantity"]) if pd.notna(r["quantity"]) else None,
                     "Foil": bool(r["foil"]),
                     "Location": r["location"] if pd.notna(r["location"]) else "",
-                    "Date": r["date_acquired"] if pd.notna(r["date_acquired"]) else "",
+                    "Date": _parse_iso_date(r["date_acquired"]),
                     "Price Paid": float(r["price_paid"]) if pd.notna(r["price_paid"]) else None,
                     "Source": r["source"] if pd.notna(r["source"]) else "",
                     "Delete": False,
@@ -482,7 +632,7 @@ with tab_coll:
                     "Qty": st.column_config.NumberColumn("Qty", min_value=0, step=1),
                     "Foil": st.column_config.CheckboxColumn("Foil"),
                     "Location": st.column_config.TextColumn("Location"),
-                    "Date": st.column_config.TextColumn("Acquired (YYYY-MM-DD)"),
+                    "Date": st.column_config.DateColumn("Acquired", format="YYYY-MM-DD"),
                     "Price Paid": st.column_config.NumberColumn("Price Paid", format="$%.2f"),
                     "Source": st.column_config.TextColumn("Source"),
                     "Delete": st.column_config.CheckboxColumn("Delete"),
@@ -494,12 +644,13 @@ with tab_coll:
             if st.button("💾 Save collection changes", key="editor_coll_save"):
                 coll_updates = {}
                 for _, row in coll_edited.iterrows():
+                    row_date = row["Date"]
                     coll_updates[row["collection_id"]] = {
                         "_delete": bool(row["Delete"]),
                         "quantity": int(row["Qty"]) if pd.notna(row["Qty"]) else None,
                         "foil": bool(row["Foil"]),
                         "location": row["Location"] or None,
-                        "date_acquired": row["Date"] or None,
+                        "date_acquired": row_date.isoformat() if pd.notna(row_date) and row_date else None,
                         "price_paid": float(row["Price Paid"]) if pd.notna(row["Price Paid"]) else None,
                         "source": row["Source"] or None,
                     }
@@ -509,6 +660,99 @@ with tab_coll:
                 st.rerun()
 
 # ------------------------------------------------------------------
+# Game Changers — card_name-keyed (NOT deck-scoped), across every card
+# in the database that's either Scryfall-flagged or already carries a
+# custom category. Categories come from a master catalog (add/remove
+# below), same pattern as the Themes catalog above.
+# ------------------------------------------------------------------
+with tab_gc:
+    st.caption(
+        "Every card that's either flagged by Scryfall's live Game Changer field, or already "
+        "carries one of your custom categories below — across your whole database, not just "
+        "one deck. 'Owned' sums collection quantity across all printings of the card; "
+        "'In decks' counts how many of your decks currently run it."
+    )
+
+    with st.expander("⚙️ Manage the master category list"):
+        st.caption(
+            "Adding/removing here only changes what's offered below — it never touches any "
+            "card's existing category assignments."
+        )
+        gc_catalog = loaders.load_game_changer_categories(conn)
+        new_gc_category = st.text_input("New category name", key="editor_gc_catalog_add")
+        if st.button("➕ Add to master list", key="editor_gc_catalog_add_btn"):
+            if new_gc_category.strip():
+                writes.add_game_changer_category(conn, new_gc_category.strip())
+                loaders.invalidate_reference_caches()
+                st.success(f"Added '{new_gc_category.strip()}' to the master list.")
+                st.rerun()
+            else:
+                st.warning("Enter a category name.")
+
+        if gc_catalog:
+            gc_catalog_remove = st.selectbox(
+                "Remove from master list", gc_catalog, key="editor_gc_catalog_remove"
+            )
+            if st.button("🗑️ Remove from master list", key="editor_gc_catalog_remove_btn"):
+                writes.remove_game_changer_category(conn, gc_catalog_remove)
+                loaders.invalidate_reference_caches()
+                st.success(f"Removed '{gc_catalog_remove}' from the master list.")
+                st.rerun()
+        else:
+            st.caption("Master category list is empty.")
+
+    st.divider()
+
+    gc_df = loaders.load_game_changers_overview(conn)
+    if gc_df.empty:
+        st.info(
+            "No Game Changers found yet — cards only show up here once they're already in "
+            "your database (owned, or run in a deck) and either Scryfall-flagged or carrying "
+            "one of your custom categories."
+        )
+    else:
+        gc_search = st.text_input("Search by card name", key="editor_gc_search")
+        gc_scoped = gc_df[gc_df["name"].str.contains(gc_search, case=False, na=False, regex=False)] if gc_search else gc_df
+
+        gc_rows = [
+            {
+                "scryfall_id": r["scryfall_id"],
+                "image_uri": fmt.resolve_local_image(r["local_image_path"]) or r["image_uri"],
+                "Card": r["name"],
+                "Scryfall flag": bool(r["scryfall_flag"]),
+                "Categories": r["categories"] if pd.notna(r["categories"]) else "",
+                "Owned": int(r["owned_qty"]),
+                "In decks": int(r["deck_count"]),
+            }
+            for _, r in gc_scoped.iterrows()
+        ]
+        gc_editor_df = pd.DataFrame(gc_rows)
+        gc_edited = st.data_editor(
+            gc_editor_df,
+            column_config={
+                "image_uri": st.column_config.ImageColumn("Art", width="small"),
+                "Card": st.column_config.TextColumn("Card", disabled=True),
+                "Scryfall flag": st.column_config.CheckboxColumn("Scryfall flag", disabled=True),
+                "Categories": st.column_config.TextColumn("Categories (comma-separated)"),
+                "Owned": st.column_config.NumberColumn("Owned", disabled=True),
+                "In decks": st.column_config.NumberColumn("In decks", disabled=True),
+            },
+            column_order=["image_uri", "Card", "Scryfall flag", "Categories", "Owned", "In decks"],
+            hide_index=True, use_container_width=True,
+            key=f"editor_gc_editor_{gc_search}",
+        )
+        if st.button("💾 Save category changes", key="editor_gc_save"):
+            gc_edits = {}
+            for _, row in gc_edited.iterrows():
+                raw = row["Categories"]
+                labels = [] if pd.isna(raw) or not str(raw).strip() else [x.strip() for x in str(raw).split(",")]
+                gc_edits[row["Card"]] = labels
+            changed = writes.bulk_set_game_changer_tags(conn, gc_edits)
+            loaders.invalidate_reference_caches()
+            st.success(f"Updated categories on {changed} card(s).")
+            st.rerun()
+
+# ------------------------------------------------------------------
 # Card Data — refresh Reserved List / Game Changer / legality / price
 # straight from Scryfall for every card already in the database
 # ------------------------------------------------------------------
@@ -516,9 +760,13 @@ with tab_carddata:
     st.markdown("**Refresh Scryfall data**")
     st.caption(
         "Re-fetches every card already in your database by its permanent Scryfall ID and "
-        "updates its Reserved List flag, Game Changer flag, Commander legality, and current "
-        "price. Doesn't touch your collection, decklists, tags, or anything else — safe to "
-        "run anytime, as often as you like. Needs network access and the `requests` package."
+        "updates its Reserved List flag, Game Changer flag, Showcase/Borderless flags, "
+        "Commander legality, and current price. Doesn't touch your decklists or tags — safe "
+        "to run anytime, as often as you like. Needs network access and the `requests` "
+        "package. Afterward, it also automatically prunes your collection: any lot with no "
+        "assigned location, a quantity of 0/none, and not present in any deck's mainboard or "
+        "maybeboard is deleted. Note: it does NOT touch Salt Scores below — EDHREC salt isn't "
+        "a Scryfall field, so that stays hand-maintained."
     )
     total_cards = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
     st.caption(f"{total_cards} card(s) in your database.")
@@ -536,6 +784,7 @@ with tab_carddata:
         summary = refresh.refresh_all_cards(conn, progress_callback=_progress)
         loaders.invalidate_deck_caches()
         loaders.invalidate_collection_caches()
+        loaders.invalidate_reference_caches()
 
         st.success(f"Checked {summary['checked']} card(s), updated {summary['updated']}.")
         if summary["newly_reserved"]:
@@ -544,3 +793,54 @@ with tab_carddata:
             st.info("Newly flagged Game Changer: " + ", ".join(summary["newly_game_changer"]))
         if summary["unresolved"]:
             st.warning(f"Couldn't refresh {len(summary['unresolved'])} card(s): " + ", ".join(summary["unresolved"]))
+        if summary["pruned_count"]:
+            st.info(
+                f"Pruned {summary['pruned_count']} collection lot(s) with no location, no "
+                f"quantity, and not in any deck's mainboard/maybeboard: "
+                + ", ".join(summary["pruned_cards"])
+            )
+        else:
+            st.caption("Nothing to prune from the collection this time.")
+
+    st.divider()
+    st.markdown("**Salt Scores (EDHREC)**")
+    st.caption(
+        "EDHREC salt scores aren't exposed by the Scryfall API, so they're maintained by hand "
+        "here rather than fetched automatically — used by the Decks & Maybeboard page's "
+        "'Top 10 saltiest cards' panel. Leave a card blank to exclude it from that panel."
+    )
+    salt_search = st.text_input("Search by card name", key="editor_salt_search")
+    salt_rows_query = conn.execute(
+        "SELECT scryfall_id, name, set_code, edhrec_salt FROM cards ORDER BY name COLLATE NOCASE"
+    ).fetchall()
+    salt_df_full = pd.DataFrame(salt_rows_query, columns=["scryfall_id", "Card", "Set", "Salt"])
+    salt_scoped = (
+        salt_df_full[salt_df_full["Card"].str.contains(salt_search, case=False, na=False, regex=False)]
+        if salt_search else salt_df_full
+    )
+    if salt_search and salt_scoped.empty:
+        st.caption("No matching cards.")
+    elif not salt_search:
+        st.caption("Type a card name above to find and edit its salt score.")
+    else:
+        salt_edited = st.data_editor(
+            salt_scoped,
+            column_config={
+                "scryfall_id": None,
+                "Card": st.column_config.TextColumn("Card", disabled=True),
+                "Set": st.column_config.TextColumn("Set", disabled=True),
+                "Salt": st.column_config.NumberColumn("Salt score", min_value=0.0, max_value=5.0, step=0.01, format="%.2f"),
+            },
+            column_order=["Card", "Set", "Salt"],
+            hide_index=True, use_container_width=True,
+            key=f"editor_salt_editor_{salt_search}",
+        )
+        if st.button("💾 Save salt scores", key="editor_salt_save"):
+            salt_updates = {
+                row["scryfall_id"]: (float(row["Salt"]) if pd.notna(row["Salt"]) else None)
+                for _, row in salt_edited.iterrows()
+            }
+            changed = writes.bulk_set_salt_scores(conn, salt_updates)
+            loaders.invalidate_reference_caches()
+            st.success(f"Updated salt scores on {changed} card(s).")
+            st.rerun()

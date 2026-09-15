@@ -32,10 +32,17 @@ SCHEMA_PATH = os.path.join(BASE_DIR, "schema.sql")
 
 BASIC_LAND_NAMES = {"plains", "island", "swamp", "mountain", "forest", "wastes"}
 
-RETIRED_DECKS = [
-    # name, successor_name
-    ("Rakdos Showstopper", "Raktres, Lord of Discounts"),
-    ("Vorevold, Sac Master", "Vaevictis's Slot Machines"),
+# These two decks predate deck_mapping.csv (the CSV workflow only ever
+# tracked "current" decks at the time) but still appear by name in
+# games_played.csv. Registered here — with no metadata beyond a name —
+# so their game history links to a real deck_id and is_own_deck=1,
+# instead of falling through to the free-text "unmatched opponent" path
+# load_games() uses for anything it doesn't recognize. The app no longer
+# distinguishes retired/active decks (Phase 1 removed that concept
+# entirely), so these are ordinary decks like any other from here on.
+FORMER_DECK_NAMES = [
+    "Rakdos Showstopper",
+    "Vorevold, Sac Master",
 ]
 
 TAG_COLUMNS_TO_SKIP = {"", "nan", "none"}
@@ -164,7 +171,6 @@ class Migrator:
                 tutors=row.get("Tutors") if pd.notna(row.get("Tutors")) else None,
                 bracket=int(row["Bracket"]) if pd.notna(row.get("Bracket")) else None,
                 interaction=int(row["Interaction"]) if pd.notna(row.get("Interaction")) else None,
-                is_active=1,
             )
 
             for i in (1, 2, 3):
@@ -180,15 +186,11 @@ class Migrator:
                             (deck_id, i, label, desc),
                         )
 
-        # Retired decks — not in deck_mapping.csv, added manually, is_active=0
-        for name, successor_name in RETIRED_DECKS:
-            deck_id = self.get_or_create_deck(name, is_active=0)
-            successor_id = self._deck_id_by_name.get(successor_name)
-            if successor_id:
-                self.conn.execute(
-                    "UPDATE decks SET successor_deck_id = ? WHERE deck_id = ?",
-                    (successor_id, deck_id),
-                )
+        # These predate deck_mapping.csv but still show up by name in
+        # games_played.csv (see FORMER_DECK_NAMES above for why they're
+        # registered here rather than left for load_games() to shrug at).
+        for name in FORMER_DECK_NAMES:
+            self.get_or_create_deck(name)
 
         # Themes — optional file, skip gracefully if not present
         themes_path = os.path.join(DATA_DIR, "deck_themes.csv")
@@ -213,9 +215,19 @@ class Migrator:
             self.log("  deck_themes.csv not found in data/ — skipping themes "
                      "(re-run after adding it, or import separately later).")
 
+        # Phase 2: seed the master theme-catalog dropdown from whatever
+        # theme names ended up in deck_themes above, so a fresh install's
+        # Editor dropdown isn't empty on first launch (ensure_schema()'s
+        # own seeding only fires when upgrading a pre-Phase-2 database
+        # that doesn't have this table yet — a fresh migrate.py run
+        # already has the table from schema.sql, so it needs seeding here
+        # instead).
+        self.conn.execute(
+            "INSERT OR IGNORE INTO theme_catalog (theme) SELECT DISTINCT theme FROM deck_themes"
+        )
+
         self.conn.commit()
-        self.log(f"  {len(self._deck_id_by_name)} decks loaded "
-                 f"({len(RETIRED_DECKS)} retired).")
+        self.log(f"  {len(self._deck_id_by_name)} decks loaded.")
 
     # ------------------------------------------------------------
     def get_or_create_card_by_setnum(self, set_code, collector_number, name_hint=None):
@@ -471,6 +483,14 @@ class Migrator:
             self.log(f"  {n} game_changer_tags rows loaded ({gc['Game Changers'].nunique()} unique cards).")
         else:
             self.log("  game_changers.csv not found — skipping custom Game Changer categories.")
+
+        # Phase 2: seed the master Game Changer category dropdown from
+        # whatever tags ended up in game_changer_tags above — same reason
+        # as the theme_catalog seed in load_decks() above.
+        self.conn.execute(
+            "INSERT OR IGNORE INTO game_changer_category_catalog (category) "
+            "SELECT DISTINCT tag FROM game_changer_tags"
+        )
 
         mt_path = os.path.join(DATA_DIR, "mana_tags.csv")
         if os.path.exists(mt_path):

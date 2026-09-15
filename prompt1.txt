@@ -1,0 +1,23 @@
+I am working on updating the user interface and data visualization components of my project. Please maintain existing architecture and adapt to the current code structure.
+
+1. Navigation & Dashboard Structure:
+- Convert the "dashboard" tab into a landing page with image-backed links for each deck that navigate directly to their respective deck page.
+- Rename the section previously labeled "deck and maybeboard" to "Decks".
+- Reorder the layout: move the "optimized mana", "game changers", and "reserved list" components so they sit directly under the "win conditions/strengths/weaknesses" section.
+
+2. Table Display Fixes:
+- In the "Decks" section -> Game Changers table: Remove the "scryfall flag" column (since it only outputs a static value like "1").
+- In the "Decks" section -> Reserved List table: Remove the "Qty" column and replace it with the card's current price.
+- In the "Top 10 Most Expensive Cards" table: Hide the quantity column (use single-card unit pricing) and add a column displaying the "purchase price / cost paid".
+
+3. Filtering & Interactivity:
+- On the left sidebar: Update the "Refresh Data" button so that clicking it also resets all active sidebar filters.
+- Support multi-selection for the sidebar filter inputs.
+- In the Collection tab: Add a toggle to filter cards by: "In a deck", "Not in a deck", and "Not in a deck OR another location".
+
+4. Mana Curve Chart Formatting:
+- Group and order mana curve categories by: W, U, B, R, G, Multi-color, and Colorless.
+- Assign the following custom chart colors:
+  * W: White | U: Blue | B: Black | R: Red | G: Green
+  * Colorless: Grey
+  * Multi-colored: Dark Yellow

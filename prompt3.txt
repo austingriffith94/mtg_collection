@@ -1,0 +1,28 @@
+Please implement features for collection management, auto-complete input, and Moxfield export capabilities. Inspect existing export/sample files (e.g., in the `moxfield_samples` directory if present) to ensure exact schema compliance.
+
+1. Collection Input & Auto-Complete:
+- Add an auto-complete dropdown to the card editor input when adding to the collection.
+- As the user types, show matching cards from the master card registry.
+- Selecting a card or pressing Enter should present a second selector showing all printings for that card.
+- Deck Building Auto-Add: When adding a card to a deck that does not currently exist in the main collection, automatically append it to the collection database.
+
+2. Moxfield Collection CSV Exporter:
+- Add a feature to generate and download Moxfield-compatible collection CSVs for two subsets: (1) Full Collection and (2) Owned cards NOT in a deck.
+- Map the CSV headers and values strictly as follows:
+  * count: Total quantity owned
+  * tradelist count: Quantity owned that is NOT currently in a deck (set to 0 if in a deck)
+  * name: Card name
+  * edition: Lowercase set code
+  * condition: Always "Near Mint"
+  * language: Always "English"
+  * foil: Lowercase "foil" if applicable, otherwise blank
+  * tags: Blank
+  * last modified: Timestamp of last modification (or default to current timestamp)
+  * collector number: Collector number of the specific printing
+  * alter: Always FALSE
+  * Proxy: Always FALSE
+  * purchase price: Cost paid if recorded in DB
+
+3. Moxfield Deck Export:
+- Implement a deck list copy/export generator formatted for Moxfield standard input:
+  `[count] [card name] ([set]) [collector number]`

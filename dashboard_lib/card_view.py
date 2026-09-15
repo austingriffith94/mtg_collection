@@ -2,7 +2,8 @@
 Reusable card-browsing UI shared by the Collection page and the
 Decks & Maybeboard page:
 
-  - add_derived_columns()   adds card_type / color_display / scryfall_url
+  - add_derived_columns()   adds card_type / color_display / scryfall_url /
+                             is_land (Phase 3, MDFC-aware)
   - render_filter_panel()   sidebar filters (search, facets, colors, price, CMC)
   - render_browser()        the View toggle (Table / Image Grid) + "group by"
                              breakout controls + sort, then dispatches to...
@@ -46,6 +47,12 @@ def add_derived_columns(df):
         fmt.scryfall_card_url(s, n)
         for s, n in zip(df.get("set_code"), df.get("collector_number"))
     ]
+    # Phase 3: MDFC-aware land flag — True if EITHER face is a Land, unlike
+    # card_type above which only looks at the front face for display
+    # bucketing. Used by the mana curve and Land Probability page so a
+    # card like "Instant // Land" is correctly treated as a land for
+    # curve-exclusion, land-ratio, and draw-probability math.
+    df["is_land"] = df["type_line"].fillna("").apply(fmt.has_land_face)
     return df
 
 
@@ -334,7 +341,8 @@ def render_grid(df, key_prefix, columns_per_row=5):
 
     total = len(df)
     ctrl1, ctrl2 = st.columns([1, 1])
-    page_size = ctrl1.selectbox("Cards per page", PAGE_SIZE_OPTIONS, index=1, key=f"{key_prefix}_pagesize")
+    # Default is 48 (index 2 of [12, 24, 48, 96]), per Phase 2.
+    page_size = ctrl1.selectbox("Cards per page", PAGE_SIZE_OPTIONS, index=2, key=f"{key_prefix}_pagesize")
     n_pages = max(1, math.ceil(total / page_size))
     page = ctrl2.number_input("Page", min_value=1, max_value=n_pages, value=1, step=1, key=f"{key_prefix}_page")
 

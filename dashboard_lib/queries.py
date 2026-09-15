@@ -12,10 +12,15 @@ import pandas as pd
 # returns the same shape and can flow through the same rendering helpers.
 CARD_COLUMNS = """
     c.scryfall_id, c.name, c.set_code, c.collector_number, c.type_line,
-    c.mana_cost, c.cmc, c.color_identity, c.rarity, c.image_uri,
+    c.mana_cost, c.cmc, c.color_identity, c.oracle_text, c.rarity, c.image_uri,
     c.local_image_path, c.is_basic_land, c.is_game_changer, c.is_reserved,
-    c.commander_legal, c.current_price_usd
+    c.is_showcase, c.is_borderless,
+    c.commander_legal, c.current_price_usd, c.edhrec_salt
 """
+# oracle_text (Phase 3) feeds dashboard_lib.formatting's MDFC-aware land
+# detection and mana-source color classification (has_land_face(),
+# classify_mana_colors(), is_mana_rock_or_dork()) — it isn't rendered as
+# its own table column anywhere, only consumed by those pure functions.
 
 # Additive, non-destructive schema upgrades for databases built before a
 # given column existed. migrate.py is one-way and won't be re-run once
@@ -25,7 +30,95 @@ CARD_COLUMNS = """
 # and is a no-op once a database is already current.
 _SCHEMA_UPGRADES = [
     ("cards", "is_reserved", "ALTER TABLE cards ADD COLUMN is_reserved BOOLEAN DEFAULT 0"),
+    # Phase 2 additions:
+    ("cards", "is_showcase", "ALTER TABLE cards ADD COLUMN is_showcase BOOLEAN DEFAULT 0"),
+    ("cards", "is_borderless", "ALTER TABLE cards ADD COLUMN is_borderless BOOLEAN DEFAULT 0"),
+    ("cards", "edhrec_salt", "ALTER TABLE cards ADD COLUMN edhrec_salt REAL"),
+    ("decks", "cover_image_path", "ALTER TABLE decks ADD COLUMN cover_image_path TEXT"),
+    ("game_participants", "player_name", "ALTER TABLE game_participants ADD COLUMN player_name TEXT"),
 ]
+
+# Additive, non-destructive NEW TABLES for databases built before a given
+# table existed (same philosophy as _SCHEMA_UPGRADES above, just for
+# whole tables instead of columns — CREATE TABLE IF NOT EXISTS is
+# naturally a no-op on a database that already has it). Each entry is
+# (table_name, ddl, seed_function_or_None); seed_function runs ONLY the
+# first time the table is created on a given database, so a table you've
+# since edited (added/removed entries) never gets silently re-seeded.
+def _seed_theme_catalog(conn):
+    conn.execute(
+        """INSERT OR IGNORE INTO theme_catalog (theme)
+           SELECT DISTINCT theme FROM deck_themes"""
+    )
+
+
+def _seed_game_changer_category_catalog(conn):
+    conn.execute(
+        """INSERT OR IGNORE INTO game_changer_category_catalog (category)
+           SELECT DISTINCT tag FROM game_changer_tags"""
+    )
+
+
+_SCHEMA_TABLE_UPGRADES = [
+    ("theme_catalog", "CREATE TABLE theme_catalog (theme TEXT PRIMARY KEY)", _seed_theme_catalog),
+    (
+        "game_changer_category_catalog",
+        "CREATE TABLE game_changer_category_catalog (category TEXT PRIMARY KEY)",
+        _seed_game_changer_category_catalog,
+    ),
+]
+
+# Same additive philosophy as _SCHEMA_TABLE_UPGRADES, but for VIEWS (kept
+# separate since sqlite_master distinguishes type='table' from
+# type='view', and a view has no rows to seed).
+_SCHEMA_VIEW_UPGRADES = [
+    (
+        "player_stats",
+        """CREATE VIEW player_stats AS
+           SELECT
+               gp.player_name AS player_name,
+               COUNT(*) AS games_played,
+               SUM(CASE WHEN gp.is_winner THEN 1 ELSE 0 END) AS wins,
+               SUM(CASE WHEN NOT gp.is_winner THEN 1 ELSE 0 END) AS losses,
+               ROUND(1.0 * SUM(CASE WHEN gp.is_winner THEN 1 ELSE 0 END)
+                     / NULLIF(COUNT(*), 0), 3) AS win_rate
+           FROM game_participants gp
+           WHERE gp.player_name IS NOT NULL AND TRIM(gp.player_name) != ''
+           GROUP BY gp.player_name""",
+    ),
+]
+
+
+def _normalize_retired_decks(conn):
+    """Phase 1 removed the Retired Decks feature — the app now treats
+    every tracked deck as active, full stop. Databases built before this
+    change may still physically carry the old `is_active`/
+    `successor_deck_id` columns (dropping columns from a live SQLite file
+    is intentionally avoided here, in keeping with this project's
+    additive/non-destructive schema-upgrade policy — see _SCHEMA_UPGRADES
+    above). Rather than leave stale "retired" data lying around for code
+    that no longer looks at it, this normalizes those columns in place —
+    every deck becomes active and any successor link is cleared — which
+    is idempotent and a no-op after the first run on a given database."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(decks)").fetchall()}
+    changed = False
+    if "is_active" in cols:
+        conn.execute("UPDATE decks SET is_active = 1 WHERE is_active != 1")
+        changed = True
+    if "successor_deck_id" in cols:
+        conn.execute("UPDATE decks SET successor_deck_id = NULL WHERE successor_deck_id IS NOT NULL")
+        changed = True
+    if changed:
+        conn.commit()
+
+
+def _existing_objects(conn, kind):
+    return {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type=?", (kind,)
+        ).fetchall()
+    }
 
 
 def ensure_schema(conn):
@@ -34,6 +127,23 @@ def ensure_schema(conn):
         if column not in cols:
             conn.execute(ddl)
             conn.commit()
+
+    existing_tables = _existing_objects(conn, "table")
+    for table, ddl, seed_fn in _SCHEMA_TABLE_UPGRADES:
+        if table not in existing_tables:
+            conn.execute(ddl)
+            conn.commit()
+            if seed_fn:
+                seed_fn(conn)
+                conn.commit()
+
+    existing_views = _existing_objects(conn, "view")
+    for view, ddl in _SCHEMA_VIEW_UPGRADES:
+        if view not in existing_views:
+            conn.execute(ddl)
+            conn.commit()
+
+    _normalize_retired_decks(conn)
 
 
 def get_connection(db_path):
@@ -47,22 +157,40 @@ def get_connection(db_path):
 # ------------------------------------------------------------------
 # Decks
 # ------------------------------------------------------------------
-def list_decks(conn, include_retired=True):
-    df = pd.read_sql_query(
+def list_decks(conn):
+    return pd.read_sql_query(
         """SELECT deck_id, name, commander, partner, representative,
-                  color_identity, deck_type, is_active, successor_deck_id
+                  color_identity, deck_type
            FROM decks
-           ORDER BY is_active DESC, name COLLATE NOCASE""",
+           ORDER BY name COLLATE NOCASE""",
         conn,
     )
-    if not include_retired:
-        df = df[df["is_active"] == 1].reset_index(drop=True)
-    return df
 
 
 def deck_meta(conn, deck_id):
     row = conn.execute("SELECT * FROM decks WHERE deck_id = ?", (deck_id,)).fetchone()
     return dict(row) if row else {}
+
+
+def cards_by_name(conn, names):
+    """Look up cards.* rows (mana_cost/cmc/color_identity/type_line/
+    oracle_text) by exact, case-insensitive name — used by the Commander
+    Cast Probability engine (Phase 3) to find the commander/partner's own
+    card data, since the commander itself is excluded from
+    deck_library_dataframe (it lives in the command zone, never in the
+    shuffled library). Grouped by name so a commander owned across
+    multiple printings still returns one row."""
+    names = [n for n in (names or []) if n]
+    if not names:
+        return pd.DataFrame(columns=["name", "mana_cost", "cmc", "color_identity", "type_line", "oracle_text"])
+    placeholders = ",".join("?" for _ in names)
+    return pd.read_sql_query(
+        f"""SELECT name, mana_cost, cmc, color_identity, type_line, oracle_text
+            FROM cards WHERE name COLLATE NOCASE IN ({placeholders})
+            GROUP BY name""",
+        conn,
+        params=names,
+    )
 
 
 def deck_stats_row(conn, deck_id):
@@ -153,6 +281,36 @@ def deck_game_changers(conn, deck_id):
 
     df["status"] = df.apply(status, axis=1)
     return df
+
+
+def deck_price_top10(conn, deck_id):
+    """Top 10 most expensive mainboard cards (by current_price_usd),
+    priced cards only. Ties broken alphabetically for a stable order."""
+    return pd.read_sql_query(
+        """SELECT c.name AS card_name, dc.quantity, c.current_price_usd AS price
+           FROM deck_cards dc JOIN cards c ON c.scryfall_id = dc.scryfall_id
+           WHERE dc.deck_id = ? AND c.current_price_usd IS NOT NULL
+           ORDER BY c.current_price_usd DESC, c.name COLLATE NOCASE
+           LIMIT 10""",
+        conn,
+        params=(deck_id,),
+    )
+
+
+def deck_salt_top10(conn, deck_id):
+    """Top 10 saltiest mainboard cards by cards.edhrec_salt — a hand-
+    maintained field (see Editor -> Card Data -> Salt Scores), since
+    Scryfall's API doesn't expose EDHREC salt scores. Cards with no salt
+    score recorded yet are excluded rather than shown as 0."""
+    return pd.read_sql_query(
+        """SELECT c.name AS card_name, dc.quantity, c.edhrec_salt AS salt
+           FROM deck_cards dc JOIN cards c ON c.scryfall_id = dc.scryfall_id
+           WHERE dc.deck_id = ? AND c.edhrec_salt IS NOT NULL
+           ORDER BY c.edhrec_salt DESC, c.name COLLATE NOCASE
+           LIMIT 10""",
+        conn,
+        params=(deck_id,),
+    )
 
 
 def deck_reserved_list_cards(conn, deck_id):
@@ -273,6 +431,110 @@ def collection_summary(conn):
 
 
 # ------------------------------------------------------------------
+# Game Changers overview (Editor -> Game Changers tab) — every card that's
+# EITHER Scryfall-flagged (c.is_game_changer) or carries a custom category
+# tag (game_changer_tags), across the whole database (not deck-scoped),
+# with art plus owned/assigned counters. Matches by card NAME (not
+# scryfall_id) for "owned"/"assigned" since the same Game Changer can be
+# owned across multiple printings and game_changer_tags is itself
+# name-keyed.
+# ------------------------------------------------------------------
+def game_changers_overview(conn):
+    df = pd.read_sql_query(
+        """SELECT c.scryfall_id, c.name, c.image_uri, c.local_image_path,
+                  c.is_game_changer AS scryfall_flag,
+                  GROUP_CONCAT(DISTINCT gct.tag) AS categories
+           FROM cards c
+           LEFT JOIN game_changer_tags gct ON gct.card_name = c.name
+           WHERE c.is_game_changer = 1 OR c.name IN (SELECT DISTINCT card_name FROM game_changer_tags)
+           GROUP BY c.name
+           ORDER BY c.name COLLATE NOCASE""",
+        conn,
+    )
+    if df.empty:
+        return df
+
+    owned = pd.read_sql_query(
+        """SELECT c.name AS name, SUM(col.quantity) AS owned_qty
+           FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
+           GROUP BY c.name""",
+        conn,
+    )
+    assigned = pd.read_sql_query(
+        """SELECT c.name AS name, COUNT(DISTINCT dc.deck_id) AS deck_count
+           FROM deck_cards dc JOIN cards c ON c.scryfall_id = dc.scryfall_id
+           GROUP BY c.name""",
+        conn,
+    )
+    df = df.merge(owned, on="name", how="left").merge(assigned, on="name", how="left")
+    df["owned_qty"] = df["owned_qty"].fillna(0).astype(int)
+    df["deck_count"] = df["deck_count"].fillna(0).astype(int)
+    return df
+
+
+# ------------------------------------------------------------------
+# Commander Game Tracking (Phase 2)
+# ------------------------------------------------------------------
+def games_list(conn):
+    """One row per logged game with its participants folded into a
+    single display-friendly string, newest first, for the Game History
+    view (an actual rendered list, not a raw dump of games/
+    game_participants)."""
+    games = pd.read_sql_query(
+        "SELECT game_id, date, note FROM games ORDER BY date DESC, game_id DESC", conn
+    )
+    if games.empty:
+        return games
+
+    parts = pd.read_sql_query(
+        """SELECT game_id, seat, deck_name, is_winner, player_name
+           FROM game_participants ORDER BY game_id, seat""",
+        conn,
+    )
+    by_game = {gid: grp for gid, grp in parts.groupby("game_id")}
+
+    def render(gid):
+        rows = by_game.get(gid)
+        if rows is None:
+            return []
+        out = []
+        for _, r in rows.iterrows():
+            label = r["deck_name"]
+            if pd.notna(r.get("player_name")) and r["player_name"]:
+                label += f" ({r['player_name']})"
+            if r["is_winner"]:
+                label += " 🏆"
+            out.append(label)
+        return out
+
+    games["participants"] = games["game_id"].apply(render)
+    return games
+
+
+def deck_win_rates(conn):
+    """All decks' win/loss/win-rate (deck_stats view), decks with at
+    least one logged game only, most-played first."""
+    return pd.read_sql_query(
+        """SELECT name, games_played, wins, losses, win_rate
+           FROM deck_stats WHERE games_played > 0
+           ORDER BY games_played DESC, win_rate DESC""",
+        conn,
+    )
+
+
+def player_win_rates(conn):
+    """Win/loss/win-rate by player_name (player_stats view) — only
+    reflects games logged since Phase 2 added player_name; older rows
+    won't contribute here."""
+    return pd.read_sql_query(
+        """SELECT player_name, games_played, wins, losses, win_rate
+           FROM player_stats
+           ORDER BY games_played DESC, win_rate DESC""",
+        conn,
+    )
+
+
+# ------------------------------------------------------------------
 # Home-page summary
 # ------------------------------------------------------------------
 def dashboard_summary(conn):
@@ -280,8 +542,7 @@ def dashboard_summary(conn):
         return conn.execute(q).fetchone()[0]
 
     return {
-        "active_decks": one("SELECT COUNT(*) FROM decks WHERE is_active = 1"),
-        "retired_decks": one("SELECT COUNT(*) FROM decks WHERE is_active = 0"),
+        "total_decks": one("SELECT COUNT(*) FROM decks"),
         "unique_printings": one("SELECT COUNT(*) FROM cards"),
         "collection_lots": one("SELECT COUNT(*) FROM collection"),
         "games_logged": one("SELECT COUNT(*) FROM games"),

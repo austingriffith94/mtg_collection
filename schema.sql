@@ -26,10 +26,16 @@ CREATE TABLE cards (
     is_basic_land     BOOLEAN DEFAULT 0,
     is_game_changer   BOOLEAN DEFAULT 0,
     is_reserved       BOOLEAN DEFAULT 0,  -- Scryfall's `reserved` field (Reserved List)
+    is_showcase       BOOLEAN DEFAULT 0,  -- Scryfall frame_effects contains "showcase"
+    is_borderless     BOOLEAN DEFAULT 0,  -- Scryfall border_color == "borderless"
     commander_legal   BOOLEAN DEFAULT 1,
     current_price_usd REAL,
     price_updated_at  DATE,
-    last_fetched_at   DATE
+    last_fetched_at   DATE,
+    edhrec_salt       REAL              -- EDHREC salt score; not a Scryfall field, so
+                                         -- this is maintained by hand in the dashboard
+                                         -- (Editor -> Card Data -> Salt Scores), never
+                                         -- touched by the Scryfall refresh action
 );
 CREATE INDEX idx_cards_name ON cards(name);
 CREATE INDEX idx_cards_oracle ON cards(oracle_id);
@@ -69,8 +75,13 @@ CREATE TABLE decks (
     tutors            TEXT,
     bracket           INTEGER,
     interaction       INTEGER,
-    is_active         BOOLEAN NOT NULL DEFAULT 1,   -- 0 = retired (kept for game history)
-    successor_deck_id INTEGER REFERENCES decks(deck_id)  -- optional link, NOT auto-merged into stats
+    cover_image_path  TEXT              -- relative path under image_cache/deck_covers/,
+                                         -- a user-picked PNG shown as the deck's thumbnail
+                                         -- (Editor -> Deck Info); NULL if none set
+    -- Note: there is no "retired"/active distinction — every tracked deck
+    -- is assumed active. (Phase 1 removed the earlier is_active/
+    -- successor_deck_id columns; see delete_deck() in writes.py for how a
+    -- deck that's genuinely gone is removed instead.)
 );
 
 -- Ranked (1-3) win conditions / strengths / weaknesses, each "Label: Description"
@@ -106,6 +117,17 @@ CREATE TABLE deck_themes (
     PRIMARY KEY (deck_id, theme, role)
 );
 
+-- Master list of theme names offered in the Editor's Themes dropdown
+-- (Phase 2). Seeded once from whatever distinct theme names already
+-- exist in deck_themes (originally sourced from deck_themes.csv at
+-- migration) — see migrate.py's load_decks() and queries.ensure_schema()'s
+-- bootstrap for upgraded pre-Phase-2 databases. Adding/removing entries
+-- here only affects what the dropdown offers; it never touches existing
+-- deck_themes assignments.
+CREATE TABLE theme_catalog (
+    theme  TEXT PRIMARY KEY
+);
+
 -- ------------------------------------------------------------
 -- Decklist (mainboard). Quantity supports basics (e.g. 10 Mountain).
 -- ------------------------------------------------------------
@@ -132,20 +154,16 @@ CREATE TABLE maybeboard (
 
 -- ------------------------------------------------------------
 -- Flexible multi-valued tagging (strategy tags, Rule 0 tags, etc.)
--- Supports many tags per card-in-deck and many tags per deck.
+-- Supports many tags per card-in-deck. There is deliberately no
+-- deck-level tags table — deck-level notes live in decks.description/
+-- combos/tutors instead (see the Editor page's "Card Tags" tab, moved
+-- here from the earlier standalone Tag Editor page).
 -- ------------------------------------------------------------
 CREATE TABLE tags (
     tag_id    INTEGER PRIMARY KEY AUTOINCREMENT,
     tag_type  TEXT NOT NULL,     -- 'strategy', 'rule0', or any custom category
     label     TEXT NOT NULL,
     UNIQUE(tag_type, label)
-);
-
-CREATE TABLE deck_tags (
-    deck_id  INTEGER NOT NULL REFERENCES decks(deck_id),
-    tag_id   INTEGER NOT NULL REFERENCES tags(tag_id),
-    notes    TEXT,
-    PRIMARY KEY (deck_id, tag_id)
 );
 
 -- Card tags are scoped to a specific deck (same card can carry
@@ -175,6 +193,16 @@ CREATE TABLE game_changer_tags (
     PRIMARY KEY (card_name, tag)
 );
 
+-- Master list of Game Changer categories offered in the Editor's Game
+-- Changers dropdown (Phase 2). Seeded once from whatever distinct tag
+-- values already exist in game_changer_tags (originally sourced from
+-- game_changers.csv at migration). Adding/removing entries here only
+-- affects what the dropdown offers; it never touches existing
+-- game_changer_tags assignments.
+CREATE TABLE game_changer_category_catalog (
+    category  TEXT PRIMARY KEY
+);
+
 -- Optimized-mana categorization (Fast, Dual, Shockland, Fetch, Ritual,
 -- Mana Doubler, Medallion, Moxen, etc.) — reconstructs the "Optimized
 -- Mana" footnote from your old PDFs, computed dynamically per deck.
@@ -201,6 +229,9 @@ CREATE TABLE game_participants (
     is_own_deck  BOOLEAN NOT NULL DEFAULT 0,
     is_winner    BOOLEAN NOT NULL DEFAULT 0,
     seat         INTEGER,                              -- 1-4, preserves original column order
+    player_name  TEXT,                                 -- who piloted this deck this game
+                                                         -- (Phase 2, Commander Game Tracking tab;
+                                                         -- NULL for games logged before this existed)
     PRIMARY KEY (game_id, seat)
 );
 CREATE INDEX idx_gp_deck_id ON game_participants(deck_id);
@@ -214,7 +245,6 @@ CREATE VIEW deck_stats AS
 SELECT
     d.deck_id,
     d.name,
-    d.is_active,
     COUNT(gp.game_id)                                   AS games_played,
     SUM(CASE WHEN gp.is_winner THEN 1 ELSE 0 END)        AS wins,
     SUM(CASE WHEN NOT gp.is_winner THEN 1 ELSE 0 END)    AS losses,
@@ -225,6 +255,24 @@ SELECT
 FROM decks d
 LEFT JOIN game_participants gp ON gp.deck_id = d.deck_id
 GROUP BY d.deck_id;
+
+-- Win/loss/win-rate by PLAYER rather than by deck (Phase 2, Commander
+-- Game Tracking tab) — only counts participant rows that actually have a
+-- player_name recorded, since that field didn't exist before Phase 2 and
+-- older game log rows won't have one.
+CREATE VIEW player_stats AS
+SELECT
+    gp.player_name                                      AS player_name,
+    COUNT(*)                                             AS games_played,
+    SUM(CASE WHEN gp.is_winner THEN 1 ELSE 0 END)        AS wins,
+    SUM(CASE WHEN NOT gp.is_winner THEN 1 ELSE 0 END)    AS losses,
+    ROUND(
+        1.0 * SUM(CASE WHEN gp.is_winner THEN 1 ELSE 0 END)
+        / NULLIF(COUNT(*), 0), 3
+    )                                                    AS win_rate
+FROM game_participants gp
+WHERE gp.player_name IS NOT NULL AND TRIM(gp.player_name) != ''
+GROUP BY gp.player_name;
 
 CREATE VIEW deck_value AS
 SELECT

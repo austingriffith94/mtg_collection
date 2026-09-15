@@ -3,9 +3,9 @@
 The foundation layer (SQLite schema + migration scripts converting your CSV
 exports into a real relational database) is complete and validated. The
 Streamlit dashboard is built out across five pages — Collection, Decks &
-Maybeboard, Land & Color Probability, Tag Editor, and Editor (see "Running
-the dashboard" below). The print-to-PDF deck report is the remaining next
-phase.
+Maybeboard, Land & Color Probability, Editor, and Commander Game Tracking
+(see "Running the dashboard" below). The print-to-PDF deck report is the
+remaining next phase.
 
 ## What's here
 
@@ -22,16 +22,16 @@ mtg_dashboard/
 │   ├── 1_Collection.py
 │   ├── 2_Decks_and_Maybeboard.py
 │   ├── 3_Land_Probability.py
-│   ├── 4_Tag_Editor.py
-│   └── 5_Editor.py
+│   ├── 4_Editor.py
+│   └── 5_Commander_Game_Tracking.py
 ├── dashboard_lib/                     # shared library code behind the pages
 │   ├── formatting.py                 # card-type/color/URL/filename helpers (no Streamlit dep)
 │   ├── queries.py                    # read-only sqlite3+pandas queries (no Streamlit dep)
 │   ├── probability.py                # hypergeometric draw math (no Streamlit dep)
-│   ├── writes.py                     # tags/deck/decklist/maybeboard/collection write layer (no Streamlit dep)
+│   ├── writes.py                     # card tags/deck/decklist/maybeboard/collection write layer (no Streamlit dep)
 │   ├── card_resolver.py              # find-or-fetch a card for "add a new card" flows (no Streamlit dep)
 │   ├── moxfield_export.py            # Moxfield format — shared by the CLI script and the dashboard (no Streamlit dep)
-│   ├── refresh.py                    # refresh Reserved List/Game Changer/legality/price by ID (no Streamlit dep)
+│   ├── refresh.py                    # refresh Reserved List/Game Changer/legality/price by ID, then prune the collection (no Streamlit dep)
 │   ├── db.py                         # cached connection + "no DB yet" guard
 │   ├── loaders.py                    # st.cache_data-wrapped versions of queries.py
 │   └── card_view.py                  # shared table/grid browser + filter UI
@@ -45,6 +45,8 @@ mtg_dashboard/
 │   ├── mana_tags.csv                 # your optimized-mana categories
 │   └── deck_themes.csv               # main/sub theme per deck
 ├── moxfield_exports/                  # created on first use — .txt files saved from the dashboard
+├── image_cache/                       # created on first use — one .jpg per printing (sync_images.py),
+│                                       # plus deck_covers/<deck_id>.png for custom deck thumbnails (Editor)
 └── scripts/
     ├── scryfall_lookup.py            # Scryfall API client (lazy fetch + cache) — also
     │                                  # reused directly by dashboard_lib/card_resolver.py
@@ -150,18 +152,22 @@ everything under `pages/`) — make sure `streamlit` is installed (see
 "Setup" above), then run the migration first if you haven't already.
 
 The dashboard currently covers:
-- **Collection** — table or image-grid view of your full physical
-  collection, with layered filters (color, type, rarity, set, location,
-  foil, basic land, Game Changer, Reserved List, price, mana value) and multi-level
+- **Collection** — table or image-grid view (48 cards per page by default)
+  of your full physical collection, with layered filters (color, type,
+  rarity, set, location, foil, basic land, Game Changer, Reserved List,
+  Showcase, Borderless, price, mana value) and multi-level
   "group by" breakouts. Every card links out to its Scryfall page from
   both views.
-- **Decks & Maybeboard** — pick any deck (active or retired) for a "Turn 0"
+- **Decks & Maybeboard** — pick any deck for a "Turn 0"
   summary: commander/partner, colors, bracket, interaction, combos,
   tutors, win/loss record, deck value, and how many of its cards are
-  physically sleeved in it; win conditions/strengths/weaknesses; themes;
+  physically sleeved in it; an optional custom cover-image thumbnail;
+  win conditions/strengths/weaknesses; themes;
   mana curve; type breakdown; strategy tag breakdown; optimized-mana
   summary; a Game Changers table showing Scryfall's live flag next to
-  your own category tag (drift highlighted); a Reserved List table; and
+  your own category tag (drift highlighted); a Reserved List table;
+  Top 10 Most Expensive and Top 10 Saltiest card lists (salt is
+  hand-maintained EDHREC data, not a Scryfall field); and
   an in-panel Moxfield export (copy-to-clipboard code box, or save a
   `.txt` file, mainboard-only or with maybeboard). Below that, the same
   table/grid browser as Collection, scoped to Mainboard, Maybeboard, or
@@ -174,71 +180,104 @@ The dashboard currently covers:
   turns. Library size and land count auto-detect from the decklist
   (commander/partner excluded, since they live in the command zone, not
   the shuffled deck) but are editable if you want to test a hypothetical.
-- **Tag Editor** — bulk-edit a whole deck's card tags for any tag_type in
-  one table (create new tag types on the fly, e.g. Rule 0 categories),
-  plus add/remove/annotate deck-level tags. Writes straight to
-  `card_tags`/`deck_tags` — no CSV round-trip needed.
 - **Editor** — add, rename, and remove things directly, no CSV editing
   required:
   - **Deck Info** — rename a deck (with an option to also update any
     `collection.location` rows that matched the old name, so "sleeved in
     this deck" tracking stays correct), edit commander/partner/colors/
-    bracket/interaction/description/combos/tutors, retire a deck (with an
-    optional successor link) or reactivate one, create a brand new deck
-    from scratch (sidebar), or **permanently delete a deck** — removes its
-    mainboard/maybeboard/tags/themes, clears any collection Locations that
-    matched its name, and detaches (rather than deletes) its rows in past
-    games so the rest of that game's history stays intact. Requires typing
-    the deck's exact name to confirm; cannot be undone.
-  - **Themes** — add/remove main/sub themes per deck.
+    bracket/interaction/description/combos/tutors, upload a custom PNG as
+    the deck's cover image, edit Win Conditions/Strengths/Weaknesses (up
+    to 3 ranked entries each), create a brand new deck from scratch
+    (sidebar), or **permanently delete a deck** — removes its
+    mainboard/maybeboard/card tags/themes, clears any collection Locations
+    that matched its name, and detaches (rather than deletes) its rows in
+    past games so the rest of that game's history stays intact. Requires
+    typing the deck's exact name to confirm; cannot be undone.
+  - **Themes** — add/remove main/sub themes per deck, picked from a
+    master theme dropdown you manage (add/remove entries in an expander;
+    removing one only changes what's offered, never touches existing
+    per-deck assignments).
+  - **Card Tags** — bulk-edit a whole deck's mainboard tags for any
+    tag_type in one table (create new tag types on the fly, e.g. Rule 0
+    categories). There's no deck-level tags feature — use the Deck Info
+    tab's description/combos/tutors fields for anything deck-wide instead.
   - **Mainboard** / **Maybeboard** — add a card (by name, or an exact set +
     collector number — resolves against your existing `cards` table first,
     falling back to a live Scryfall lookup only for a card the dashboard
     hasn't seen before), then bulk-edit quantities/review flags/notes or
-    remove cards in one table, same pattern as the Tag Editor.
+    remove cards in one table, same pattern as Card Tags.
   - **Collection** — add a new lot (same name/set/number resolution as
-    above, plus quantity/foil/location/price/date/source), then search and
+    above, plus quantity/foil/location/price/a real date picker for
+    Date Acquired, defaulting to today/source), then search and
     bulk-edit or remove existing lots.
+  - **Game Changers** — every card that's either Scryfall-flagged or
+    already carries one of your custom categories, across your whole
+    database (not just one deck), shown with card art. Edit categories
+    per card (picked from a master category dropdown you manage, same
+    pattern as Themes), and see at a glance how many copies you own and
+    how many of your decks currently run it.
   - **Card Data** — re-fetches every card already in your database by its
     permanent Scryfall ID and refreshes its Reserved List flag, Game
-    Changer flag, Commander legality, and price — without touching your
-    collection, decklists, tags, or anything else, and without the
-    wipe-and-rebuild `migrate.py` does. Same underlying logic (and same
+    Changer flag, Showcase/Borderless flags, Commander legality, and
+    price — without the wipe-and-rebuild `migrate.py` does. Afterward it
+    also automatically prunes the collection: any lot with no assigned
+    location, a quantity of 0/none, and not present in any deck's
+    mainboard or maybeboard is deleted. Same underlying logic (and same
     CLI-vs-dashboard sharing pattern) as Moxfield export — see
-    `scripts/refresh_card_data.py` / `dashboard_lib/refresh.py`.
+    `scripts/refresh_card_data.py` / `dashboard_lib/refresh.py`. Also
+    where EDHREC salt scores are hand-maintained per card — Scryfall's
+    API doesn't expose salt, so this is a manual field, never touched by
+    the refresh above.
+- **Commander Game Tracking** — log a game with up to 4 seats, each either
+  a tracked deck (dropdown) or free-text for an opponent's deck not in the
+  library, with an optional player name and win flag per seat, plus match
+  notes. Below that: an actual rendered game history (not a raw table),
+  a way to delete a mis-entered log, and win-rate comparisons by deck and
+  by player. Player name is new as of this feature — games logged before
+  it existed simply don't count toward the by-player summary.
 
 Not yet in the dashboard: the Proxy flag on the Turn 0 panel (see "Open
-items" below), and dedicated Game Changer/mana-tag pages across all decks
-at once — those remain later-phase work.
+items" below), a discovery view of the *full* official Game Changers list
+(owned vs. not-yet-owned — the Game Changers tab only shows cards already
+in your database), and print-to-PDF — those remain later-phase work.
 
 ### Migration is one-way: CSV → database, not the reverse
 
 `migrate.py` is meant for your **initial import only**. It always wipes
 and rebuilds `mtg_collection.db` from scratch from the CSVs — there's no
-attempt to preserve anything you've since edited in the dashboard (tags,
-deck metadata, mainboard/maybeboard, themes, collection lots). If you
-re-run it after you've started managing things in the dashboard, it will
-silently overwrite those edits back to whatever the CSVs say, and it'll
-print a one-line warning to that effect right before it does.
+attempt to preserve anything you've since edited in the dashboard (card
+tags, deck metadata, mainboard/maybeboard, themes, collection lots). If
+you re-run it after you've started managing things in the dashboard, it
+will silently overwrite those edits back to whatever the CSVs say, and
+it'll print a one-line warning to that effect right before it does.
 
 **The rule going forward: once you've moved your data over, don't run
-`migrate.py` again.** Manage decks, tags, mainboard/maybeboard, themes,
-and the collection directly in the dashboard's Editor and Tag Editor
-pages from then on — that's now the source of truth, and there's no CSV
-round-trip needed for any of it.
+`migrate.py` again.** Manage decks, card tags, mainboard/maybeboard,
+themes, and the collection directly in the dashboard's Editor page from
+then on — that's now the source of truth, and there's no CSV round-trip
+needed for any of it.
 
 ### Schema changes without re-migrating: additive upgrades on connect
 
 With `migrate.py` retired as a re-runnable tool, the schema still needs a
-way to grow occasionally (e.g. adding `cards.is_reserved` for this
-update) without wiping your database. `dashboard_lib/queries.get_connection()`
-— the one function everything else connects through — checks for a short
-list of expected columns/tables on every connect and applies a plain
-`ALTER TABLE` if one's missing, then moves on. It never touches existing
-rows, never drops anything, and is a no-op once a database is current, so
-it's safe to run on every launch. This is how `is_reserved` reached your
-existing database without needing a rebuild; any future schema addition
-would follow the same pattern (see `_SCHEMA_UPGRADES` in `queries.py`).
+way to grow occasionally without wiping your database.
+`dashboard_lib/queries.get_connection()` — the one function everything
+else connects through — checks for a short list of expected
+columns/tables/views on every connect and applies a plain `ALTER TABLE`
+or `CREATE TABLE`/`CREATE VIEW` if one's missing, then moves on. It never
+touches existing rows, never drops anything, and is a no-op once a
+database is current, so it's safe to run on every launch. This is how
+`is_reserved` reached your existing database without a rebuild (Prompt
+Pass 1), and how the Phase 2 additions below did the same:
+`cards.is_showcase`/`is_borderless`/`edhrec_salt`,
+`decks.cover_image_path`, `game_participants.player_name`, plus two new
+tables (`theme_catalog`, `game_changer_category_catalog`) that get
+seeded — once, the first time they're created on your database — from
+whatever's already in `deck_themes`/`game_changer_tags`, so your existing
+theme and category assignments show up as dropdown options immediately
+rather than starting from an empty list. Any future schema addition would
+follow the same pattern (see `_SCHEMA_UPGRADES` / `_SCHEMA_TABLE_UPGRADES`
+/ `_SCHEMA_VIEW_UPGRADES` in `queries.py`).
 
 I tested every menu path against a mocked environment: normal exit,
 blocked options before migration, invalid input, and the missing-package
@@ -288,8 +327,11 @@ I dry-ran the full migration logic against your real CSVs using a mocked
 Scryfall client (no live API calls, synthetic card data) to catch bugs
 before handing this off. Confirmed:
 - Raktres totals exactly 100 cards, matching your data
-- Retired deck linkage works (`Rakdos Showstopper → is_active=0`,
-  `successor_deck_id → Raktres`)
+- The two decks that predate `deck_mapping.csv` (Rakdos Showstopper,
+  Vorevold, Sac Master — see `FORMER_DECK_NAMES` in `migrate.py`) still
+  get registered as ordinary decks, so their entries in
+  `games_played.csv` link to a real `deck_id` instead of falling through
+  to the free-text "unmatched opponent" path
 - Strategy tag counts for Raktres match your PDF **exactly** (Card Adv 18,
   Pinger 12, Rakdos Target 10, Removal 6, Utility 6, Ramp 5, Interaction 5,
   Protection 4, Big Damage 4)
@@ -419,6 +461,18 @@ Computed dynamically, never stored — always reflects the live game log:
 SELECT * FROM deck_stats WHERE games_played > 0 ORDER BY win_rate DESC;
 ```
 
+By player (new in this update — only counts games logged since
+`player_name` existed):
+
+```sql
+SELECT * FROM player_stats ORDER BY win_rate DESC;
+```
+
+Both views back the **Commander Game Tracking** page, which also lets you
+log new games (existing tracked decks via dropdown, or free text for an
+opponent's deck) and browse an actual rendered game history rather than
+a raw table.
+
 ## Local image cache
 
 `cards.image_uri` stores the remote Scryfall URL, but the dashboard
@@ -452,11 +506,12 @@ since this sandbox has no network access.
 
 ## Custom fields & editable data: CSV for initial import, dashboard from then on
 
-Deck names/metadata, mainboard, maybeboard, themes, collection lots, and
-card/deck tags are all editable directly in the dashboard (Editor and Tag
-Editor pages) — no CSV round-trip needed for any of it. Game Changer
-categories and mana tags are still purely CSV-driven (`game_changers.csv`,
-`mana_tags.csv`) with no in-tool editor.
+Deck names/metadata, mainboard, maybeboard, themes, collection lots, card
+tags, Game Changer categories, and EDHREC salt scores are all editable
+directly in the dashboard (Editor page — there's no separate Tag Editor
+page anymore; it was folded into Editor) — no CSV round-trip needed for
+any of it. Mana tags remain purely CSV-driven (`mana_tags.csv`), with no
+in-tool editor yet.
 
 `migrate.py` wipes and rebuilds the whole database on every run, with no
 attempt to preserve dashboard edits — see "Migration is one-way" above.
@@ -467,6 +522,15 @@ dashboard from then on.
 
 - Proxy flag on the Turn 0 panel — still an open item, see below (needs
   the Location/Proxy convention confirmed first)
+- Rule 0 tags — no data source yet (open item, see below)
+- A discovery view of the *full* official Game Changers list (owned vs.
+  not-yet-owned) — the Editor's Game Changers tab only shows cards
+  already in your database (owned, or run in a deck), not the whole
+  official list
+- An in-tool editor for mana tags (currently CSV-only, unlike Game
+  Changer categories which got one in this update)
 - HTML/CSS print-to-PDF one-pager, styled after your existing deck
   summary PDFs
-- EDHREC comparison — on the backburner per your call
+- EDHREC comparison — on the backburner per your call (note: hand-entered
+  salt scores per card are now supported in the Editor, which is a
+  narrower thing than a full EDHREC comparison view)

@@ -35,11 +35,8 @@ from dashboard_lib import moxfield_export
 
 def list_decks(conn):
     print("Decks in database:")
-    for name, active in conn.execute(
-        "SELECT name, is_active FROM decks ORDER BY is_active DESC, name"
-    ):
-        tag = "" if active else "  [retired]"
-        print(f"  - {name}{tag}")
+    for (name,) in conn.execute("SELECT name FROM decks ORDER BY name"):
+        print(f"  - {name}")
 
 
 def export_deck(conn, deck_name, include_maybeboard=False):

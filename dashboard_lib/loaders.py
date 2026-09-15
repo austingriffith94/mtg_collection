@@ -1,7 +1,7 @@
 """
 Streamlit-cached loaders. Thin wrappers around dashboard_lib.queries that
 add st.cache_data + the shared derived columns (card_type / color_display /
-scryfall_url) so every page gets the same enriched shape for free.
+scryfall_url / is_land) so every page gets the same enriched shape for free.
 
 Leading-underscore `_conn` parameters are a Streamlit convention: it tells
 st.cache_data to key its cache on the OTHER arguments only, not on the
@@ -30,8 +30,8 @@ def load_dashboard_summary(_conn):
 
 
 @st.cache_data(show_spinner=False)
-def load_decks_df(_conn, include_retired=True):
-    return q.list_decks(_conn, include_retired=include_retired)
+def load_decks_df(_conn):
+    return q.list_decks(_conn)
 
 
 @st.cache_data(show_spinner="Loading decklist…")
@@ -104,14 +104,20 @@ def load_deck_mana_curve(_conn, deck_id):
     return q.deck_mana_curve(_conn, deck_id)
 
 
+# ------------------------------------------------------------------
+# Phase 3 additions
+# ------------------------------------------------------------------
+@st.cache_data(show_spinner=False)
+def load_cards_by_name(_conn, names):
+    """names must be passed as a tuple (hashable, so st.cache_data can key
+    on it) — converted to a list here since q.cards_by_name just needs to
+    iterate it for the SQL IN (...) clause."""
+    return q.cards_by_name(_conn, list(names))
+
+
 @st.cache_data(show_spinner=False)
 def load_tag_types(_conn):
     return w.list_tag_types(_conn)
-
-
-@st.cache_data(show_spinner=False)
-def load_deck_tags(_conn, deck_id):
-    return w.get_deck_tags(_conn, deck_id)
 
 
 @st.cache_data(show_spinner=False)
@@ -119,11 +125,80 @@ def load_card_tags_by_type(_conn, deck_id, tag_type):
     return w.get_card_tags_by_type(_conn, deck_id, tag_type)
 
 
+# ------------------------------------------------------------------
+# Phase 2 additions
+# ------------------------------------------------------------------
+@st.cache_data(show_spinner=False)
+def load_deck_price_top10(_conn, deck_id):
+    return q.deck_price_top10(_conn, deck_id)
+
+
+@st.cache_data(show_spinner=False)
+def load_deck_salt_top10(_conn, deck_id):
+    return q.deck_salt_top10(_conn, deck_id)
+
+
+@st.cache_data(show_spinner=False)
+def load_theme_catalog(_conn):
+    return w.list_theme_catalog(_conn)
+
+
+@st.cache_data(show_spinner=False)
+def load_game_changer_categories(_conn):
+    return w.list_game_changer_categories(_conn)
+
+
+@st.cache_data(show_spinner="Loading Game Changers…")
+def load_game_changers_overview(_conn):
+    return q.game_changers_overview(_conn)
+
+
+@st.cache_data(show_spinner="Loading game history…")
+def load_games_list(_conn):
+    return q.games_list(_conn)
+
+
+@st.cache_data(show_spinner=False)
+def load_deck_win_rates(_conn):
+    return q.deck_win_rates(_conn)
+
+
+@st.cache_data(show_spinner=False)
+def load_player_win_rates(_conn):
+    return q.player_win_rates(_conn)
+
+
+def invalidate_reference_caches():
+    """Clear caches for the name-keyed / global reference data touched by
+    the Editor's Themes and Game Changers management UI (catalogs,
+    category assignments, salt scores) — these aren't deck- or
+    collection-scoped, so they don't belong in the other two invalidate_*
+    functions."""
+    load_theme_catalog.clear()
+    load_game_changer_categories.clear()
+    load_game_changers_overview.clear()
+    load_collection_df.clear()  # salt score / GC category can show in Collection later
+    load_deck_cards_df.clear()
+    load_deck_library_df.clear()
+    load_deck_price_top10.clear()
+    load_deck_salt_top10.clear()
+    load_deck_game_changers.clear()
+
+
+def invalidate_game_tracking_caches():
+    """Clear caches after logging or deleting a Commander game."""
+    load_games_list.clear()
+    load_deck_win_rates.clear()
+    load_player_win_rates.clear()
+    load_deck_stats.clear()
+    load_dashboard_summary.clear()
+
+
 def invalidate_deck_caches(deck_id=None):
-    """Clear every cached read a deck-scoped write (tags, deck metadata,
-    mainboard, maybeboard, themes, retire/reactivate, create/rename) could
+    """Clear every cached read a deck-scoped write (card tags, deck
+    metadata, mainboard, maybeboard, themes, create/rename/delete) could
     have changed — including the deck list itself, since a rename/create/
-    retire changes what every page's deck picker shows. deck_id is
+    delete changes what every page's deck picker shows. deck_id is
     accepted for readability at call sites but unused: st.cache_data.clear()
     clears ALL cached calls of that function (every deck, every param
     combo) — there's no per-argument clear in the public API, and
@@ -141,10 +216,13 @@ def invalidate_deck_caches(deck_id=None):
     load_deck_rank_list.clear()
     load_deck_themes.clear()
     load_tag_types.clear()
-    load_deck_tags.clear()
     load_card_tags_by_type.clear()
     load_in_deck_sleeved_count.clear()
     load_dashboard_summary.clear()
+    load_deck_price_top10.clear()
+    load_deck_salt_top10.clear()
+    load_deck_win_rates.clear()
+    load_game_changers_overview.clear()
 
 
 def invalidate_collection_caches():
@@ -155,3 +233,4 @@ def invalidate_collection_caches():
     load_collection_summary.clear()
     load_in_deck_sleeved_count.clear()
     load_dashboard_summary.clear()
+    load_game_changers_overview.clear()  # "owned qty" there is collection-derived

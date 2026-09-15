@@ -1,8 +1,10 @@
 """
-Write layer for in-dashboard editing: tags (card_tags/deck_tags), deck
-metadata, deck_cards (mainboard), maybeboard, deck_themes, and the
-collection. Plain sqlite3, no Streamlit dependency, so it can be
-unit-tested directly against a scratch copy of mtg_collection.db.
+Write layer for in-dashboard editing: card_tags, deck metadata,
+deck_cards (mainboard), maybeboard, deck_themes, and the collection
+(including prune_collection, the automatic cleanup step run as part of
+the Editor page's Card Data "Refresh" action). Plain sqlite3, no
+Streamlit dependency, so it can be unit-tested directly against a
+scratch copy of mtg_collection.db.
 
 Migration is one-way, CSV -> DB: scripts/migrate.py wipes and rebuilds
 the whole database from the CSVs on every run, with no attempt to
@@ -38,6 +40,140 @@ def list_tags(conn, tag_type=None):
             "SELECT tag_id, tag_type, label FROM tags ORDER BY tag_type, label"
         ).fetchall()
     return [{"tag_id": r[0], "tag_type": r[1], "label": r[2]} for r in rows]
+
+
+# ------------------------------------------------------------------
+# Theme catalog (Phase 2) — the master list the Editor's Themes dropdown
+# is populated from. Separate from deck_themes (which is deck_id-scoped
+# and still holds the actual main/sub assignments); this table only
+# controls what shows up as an OPTION in the dropdown. Removing a theme
+# here does not touch any deck's existing deck_themes rows.
+# ------------------------------------------------------------------
+def list_theme_catalog(conn):
+    rows = conn.execute("SELECT theme FROM theme_catalog ORDER BY theme COLLATE NOCASE").fetchall()
+    return [r[0] for r in rows]
+
+
+def add_theme_to_catalog(conn, theme):
+    theme = (theme or "").strip()
+    if not theme:
+        return
+    conn.execute("INSERT OR IGNORE INTO theme_catalog (theme) VALUES (?)", (theme,))
+    conn.commit()
+
+
+def remove_theme_from_catalog(conn, theme):
+    conn.execute("DELETE FROM theme_catalog WHERE theme=?", (theme,))
+    conn.commit()
+
+
+# ------------------------------------------------------------------
+# Game Changer category catalog (Phase 2) — the master list the Editor's
+# Game Changers dropdown is populated from. Separate from
+# game_changer_tags (the actual per-card assignments); removing a
+# category here does not touch any card's existing assignments.
+# ------------------------------------------------------------------
+def list_game_changer_categories(conn):
+    rows = conn.execute(
+        "SELECT category FROM game_changer_category_catalog ORDER BY category COLLATE NOCASE"
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def add_game_changer_category(conn, category):
+    category = (category or "").strip()
+    if not category:
+        return
+    conn.execute("INSERT OR IGNORE INTO game_changer_category_catalog (category) VALUES (?)", (category,))
+    conn.commit()
+
+
+def remove_game_changer_category(conn, category):
+    conn.execute("DELETE FROM game_changer_category_catalog WHERE category=?", (category,))
+    conn.commit()
+
+
+# ------------------------------------------------------------------
+# Game Changer tag assignment — card_name-keyed (matches
+# game_changer_tags' own grain), NOT deck-scoped, unlike card_tags.
+# ------------------------------------------------------------------
+def get_game_changer_tags_map(conn):
+    """{card_name: [category, ...]} for every card currently carrying at
+    least one custom Game Changer category."""
+    rows = conn.execute("SELECT card_name, tag FROM game_changer_tags").fetchall()
+    result = {}
+    for card_name, tag in rows:
+        result.setdefault(card_name, []).append(tag)
+    return result
+
+
+def set_game_changer_tags(conn, card_name, categories):
+    """Replace ALL of one card's Game Changer categories with exactly
+    `categories` (list of strings; pass [] to clear). Also registers any
+    brand-new category in the master catalog, same as get_or_create_tag
+    does for card_tags, so a category typed here immediately shows up in
+    the dropdown too."""
+    conn.execute("DELETE FROM game_changer_tags WHERE card_name=?", (card_name,))
+    seen = set()
+    for raw in categories:
+        label = (raw or "").strip()
+        if not label or label.lower() in seen:
+            continue
+        seen.add(label.lower())
+        conn.execute(
+            "INSERT OR IGNORE INTO game_changer_tags (card_name, tag) VALUES (?,?)",
+            (card_name, label),
+        )
+        add_game_changer_category(conn, label)
+    conn.commit()
+
+
+def bulk_set_game_changer_tags(conn, edits):
+    """edits: {card_name: [category, ...]}. Returns count of cards whose
+    category set actually changed."""
+    before = get_game_changer_tags_map(conn)
+    changed = 0
+    for card_name, categories in edits.items():
+        new_set = {c.strip().lower() for c in categories if c and c.strip()}
+        old_set = {c.strip().lower() for c in before.get(card_name, [])}
+        if new_set != old_set:
+            set_game_changer_tags(conn, card_name, categories)
+            changed += 1
+    return changed
+
+
+# ------------------------------------------------------------------
+# EDHREC salt score (Phase 2) — hand-maintained per cards.scryfall_id.
+# NOT a Scryfall API field, so this is never touched by the Card Data
+# "Refresh" action; it only changes here or via a future EDHREC-backed
+# import if one is ever added.
+# ------------------------------------------------------------------
+def set_card_salt_score(conn, scryfall_id, salt_score):
+    conn.execute(
+        "UPDATE cards SET edhrec_salt=? WHERE scryfall_id=?",
+        (salt_score, scryfall_id),
+    )
+    conn.commit()
+
+
+def bulk_set_salt_scores(conn, updates):
+    """updates: {scryfall_id: salt_score_or_None}. Returns count changed."""
+    ids = list(updates.keys())
+    if not ids:
+        return 0
+    placeholders = ",".join("?" for _ in ids)
+    current = dict(
+        conn.execute(
+            f"SELECT scryfall_id, edhrec_salt FROM cards WHERE scryfall_id IN ({placeholders})",
+            ids,
+        ).fetchall()
+    )
+    changed = 0
+    for scryfall_id, value in updates.items():
+        if current.get(scryfall_id) != value:
+            set_card_salt_score(conn, scryfall_id, value)
+            changed += 1
+    return changed
 
 
 # ------------------------------------------------------------------
@@ -97,35 +233,6 @@ def bulk_set_card_tags(conn, deck_id, tag_type, labels_by_scryfall_id):
 
 
 # ------------------------------------------------------------------
-# Deck tags (deck_tags PK is deck_id+tag_id) — no CSV source today, so
-# no override tracking needed here; nothing else ever writes this table.
-# ------------------------------------------------------------------
-def get_deck_tags(conn, deck_id):
-    rows = conn.execute(
-        """SELECT dt.tag_id, t.tag_type, t.label, dt.notes
-           FROM deck_tags dt JOIN tags t ON t.tag_id = dt.tag_id
-           WHERE dt.deck_id=? ORDER BY t.tag_type, t.label""",
-        (deck_id,),
-    ).fetchall()
-    return [{"tag_id": r[0], "tag_type": r[1], "label": r[2], "notes": r[3]} for r in rows]
-
-
-def add_deck_tag(conn, deck_id, tag_type, label, notes=None):
-    tag_id = get_or_create_tag(conn, tag_type, label)
-    conn.execute(
-        "INSERT OR REPLACE INTO deck_tags (deck_id, tag_id, notes) VALUES (?,?,?)",
-        (deck_id, tag_id, notes),
-    )
-    conn.commit()
-    return tag_id
-
-
-def remove_deck_tag(conn, deck_id, tag_id):
-    conn.execute("DELETE FROM deck_tags WHERE deck_id=? AND tag_id=?", (deck_id, tag_id))
-    conn.commit()
-
-
-# ------------------------------------------------------------------
 # Deck metadata (name + everything else on the decks row)
 # ------------------------------------------------------------------
 DECK_META_FIELDS = [
@@ -166,6 +273,41 @@ def update_deck_meta(conn, deck_id, **fields):
     conn.commit()
 
 
+def set_deck_cover_image(conn, deck_id, relative_path):
+    """relative_path is expected to already be relative to the project's
+    BASE_DIR (e.g. 'image_cache/deck_covers/12.png'), matching how
+    cards.local_image_path is stored — pass None to clear/remove the
+    cover image."""
+    conn.execute("UPDATE decks SET cover_image_path=? WHERE deck_id=?", (relative_path, deck_id))
+    conn.commit()
+
+
+_RANK_TABLES = {"win_conditions", "strengths", "weaknesses"}
+
+
+def set_deck_rank_list(conn, deck_id, kind, items):
+    """Replace ALL of a deck's ranked list (Win Conditions / Strengths /
+    Weaknesses) with exactly `items` — a list of up to 3 dicts, each
+    {"label": str, "description": str_or_None}. Rank is assigned by
+    position (items[0] -> rank 1, etc). An item with a blank label is
+    skipped, so clearing a slot's text and saving removes that rank
+    entirely rather than leaving an empty row behind."""
+    if kind not in _RANK_TABLES:
+        raise ValueError(f"Unknown rank list kind: {kind!r}")
+    table = f"deck_{kind}"
+    conn.execute(f"DELETE FROM {table} WHERE deck_id=?", (deck_id,))
+    for rank, item in enumerate(items[:3], start=1):
+        label = (item.get("label") or "").strip()
+        if not label:
+            continue
+        description = (item.get("description") or "").strip() or None
+        conn.execute(
+            f"INSERT INTO {table} (deck_id, rank, label, description) VALUES (?,?,?,?)",
+            (deck_id, rank, label, description),
+        )
+    conn.commit()
+
+
 def rename_deck(conn, deck_id, new_name, update_collection_locations=True):
     """Returns (success, error). decks.name is UNIQUE and is matched as
     free text elsewhere (collection.location for "sleeved in this deck"
@@ -194,39 +336,27 @@ def rename_deck(conn, deck_id, new_name, update_collection_locations=True):
     return True, None
 
 
-def set_deck_active(conn, deck_id, is_active, successor_deck_id=None):
-    conn.execute(
-        "UPDATE decks SET is_active=?, successor_deck_id=? WHERE deck_id=?",
-        (1 if is_active else 0, successor_deck_id if not is_active else None, deck_id),
-    )
-    conn.commit()
-
-
 # Every table scoped to a single deck via a plain deck_id FK — deleted
 # outright when the deck is deleted. game_participants is handled
 # separately (detached, not deleted — see delete_deck) since a game
 # usually still has OTHER decks' results worth keeping.
 _DECK_SCOPED_TABLES = (
-    "deck_cards", "maybeboard", "deck_tags", "card_tags",
+    "deck_cards", "maybeboard", "card_tags",
     "deck_themes", "deck_win_conditions", "deck_strengths", "deck_weaknesses",
 )
 
 
 def delete_deck(conn, deck_id, clear_collection_locations=True):
     """Permanently removes a deck and everything scoped to it (mainboard,
-    maybeboard, card/deck tags, themes, win conditions/strengths/
-    weaknesses). Returns (deck_name, error) — error is None on success.
+    maybeboard, card tags, themes, win conditions/strengths/weaknesses).
+    Returns (deck_name, error) — error is None on success.
 
-    Two things are deliberately NOT deleted outright, to avoid corrupting
-    data that isn't really "this deck's":
-      - game_participants rows referencing this deck have their deck_id
-        set to NULL rather than being removed — the game (and any OTHER
-        decks' results in it) stays in the log, this deck's row just
-        reverts to a free-text-only record, the same shape an untracked
-        opponent's deck already has.
-      - Any OTHER deck whose successor_deck_id pointed at this one has
-        that link cleared (set to NULL) rather than being blocked or
-        cascaded further.
+    game_participants rows referencing this deck are deliberately NOT
+    deleted outright, to avoid corrupting data that isn't really "this
+    deck's": their deck_id is set to NULL instead — the game (and any
+    OTHER decks' results in it) stays in the log, this deck's row just
+    reverts to a free-text-only record, the same shape an untracked
+    opponent's deck already has.
 
     collection.location rows that exactly matched this deck's name are
     cleared to NULL by default (clear_collection_locations=True) so
@@ -238,7 +368,6 @@ def delete_deck(conn, deck_id, clear_collection_locations=True):
         return None, "Deck not found."
     deck_name = row[0]
 
-    conn.execute("UPDATE decks SET successor_deck_id=NULL WHERE successor_deck_id=?", (deck_id,))
     conn.execute("UPDATE game_participants SET deck_id=NULL WHERE deck_id=?", (deck_id,))
 
     for table in _DECK_SCOPED_TABLES:
@@ -396,6 +525,89 @@ def update_collection_lot(conn, collection_id, **fields):
 def remove_collection_lot(conn, collection_id):
     conn.execute("DELETE FROM collection WHERE collection_id=?", (collection_id,))
     conn.commit()
+
+
+def prune_collection(conn):
+    """Deletes any collection lot that meets ALL three conditions:
+      a) no assigned location (NULL or blank/whitespace-only)
+      b) a quantity of 0 or "none" (i.e. NULL)
+      c) not included in any existing deck list — checked against both
+         a deck's mainboard (deck_cards) and maybeboard, so a card still
+         under consideration for a deck isn't swept away just because it
+         isn't physically located anywhere yet.
+
+    Called automatically as part of the Editor page's Card Data "Refresh"
+    action (see dashboard_lib/refresh.py) so stale collection rows for
+    cards you no longer own and aren't running anywhere get cleaned up
+    without a separate manual step. Returns a list of
+    (collection_id, card_name) tuples for whatever was removed, so
+    callers can report it."""
+    rows = conn.execute(
+        """SELECT col.collection_id, c.name
+           FROM collection col
+           JOIN cards c ON c.scryfall_id = col.scryfall_id
+           WHERE (col.location IS NULL OR TRIM(col.location) = '')
+             AND (col.quantity IS NULL OR col.quantity = 0)
+             AND col.scryfall_id NOT IN (SELECT scryfall_id FROM deck_cards)
+             AND col.scryfall_id NOT IN (SELECT scryfall_id FROM maybeboard)
+           ORDER BY c.name COLLATE NOCASE"""
+    ).fetchall()
+    if not rows:
+        return []
+    ids = [r[0] for r in rows]
+    placeholders = ",".join("?" for _ in ids)
+    conn.execute(f"DELETE FROM collection WHERE collection_id IN ({placeholders})", ids)
+    conn.commit()
+    return [(r[0], r[1]) for r in rows]
+
+
+def create_game(conn, date, note, participants):
+    """Logs one Commander game. participants: ordered list of dicts,
+    each {"deck_name": str, "deck_id": int_or_None, "is_winner": bool,
+    "player_name": str_or_None} — seat number is assigned 1..N by list
+    position. deck_id is None for opponent decks not in your tracked
+    `decks` table (free-text entry); is_own_deck is derived as
+    deck_id is not None, matching migrate.py's original convention.
+    Returns (game_id, error) — error is a message if no usable
+    participants were given, else None."""
+    participants = [p for p in participants if (p.get("deck_name") or "").strip()]
+    if not participants:
+        return None, "Add at least one deck/participant before logging the game."
+
+    cur = conn.execute("INSERT INTO games (date, note) VALUES (?,?)", (date or None, note or None))
+    game_id = cur.lastrowid
+
+    for seat, p in enumerate(participants, start=1):
+        deck_id = p.get("deck_id")
+        conn.execute(
+            """INSERT INTO game_participants
+               (game_id, deck_name, deck_id, is_own_deck, is_winner, seat, player_name)
+               VALUES (?,?,?,?,?,?,?)""",
+            (
+                game_id,
+                p["deck_name"].strip(),
+                deck_id,
+                1 if deck_id is not None else 0,
+                1 if p.get("is_winner") else 0,
+                seat,
+                (p.get("player_name") or "").strip() or None,
+            ),
+        )
+    conn.commit()
+    return game_id, None
+
+
+def delete_game(conn, game_id):
+    """Removes a logged game and all of its participant rows — for
+    correcting a mis-entered log, not part of normal play. Returns
+    (deleted, error)."""
+    row = conn.execute("SELECT game_id FROM games WHERE game_id=?", (game_id,)).fetchone()
+    if not row:
+        return False, "Game not found."
+    conn.execute("DELETE FROM game_participants WHERE game_id=?", (game_id,))
+    conn.execute("DELETE FROM games WHERE game_id=?", (game_id,))
+    conn.commit()
+    return True, None
 
 
 def bulk_update_collection(conn, updates):

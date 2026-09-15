@@ -96,8 +96,6 @@ def main():
     print("SANITY CHECKS")
     print("=" * 60)
     print("decks:", one("SELECT COUNT(*) FROM decks"))
-    print("  active:", one("SELECT COUNT(*) FROM decks WHERE is_active=1"))
-    print("  retired:", one("SELECT COUNT(*) FROM decks WHERE is_active=0"))
     print("cards:", one("SELECT COUNT(*) FROM cards"))
     print("collection rows:", one("SELECT COUNT(*) FROM collection"))
     print("deck_cards rows:", one("SELECT COUNT(*) FROM deck_cards"))
@@ -119,14 +117,14 @@ def main():
     print(f"\nRaktres total card count (expect 100): {raktres_total}")
     assert raktres_total == 100, "Raktres card count mismatch!"
 
-    # retired deck linkage
+    # Rakdos Showstopper predates deck_mapping.csv (see FORMER_DECK_NAMES
+    # in migrate.py) but should still be registered as an ordinary deck,
+    # since the app no longer distinguishes retired/active decks.
     row = cur.execute(
-        "SELECT r.name, r.is_active, s.name FROM decks r "
-        "JOIN decks s ON s.deck_id = r.successor_deck_id "
-        "WHERE r.name = 'Rakdos Showstopper'"
+        "SELECT name FROM decks WHERE name = 'Rakdos Showstopper'"
     ).fetchone()
-    print(f"Retired deck link: {row} (expect Rakdos Showstopper -> Raktres, is_active=0)")
-    assert row == ("Rakdos Showstopper", 0, "Raktres, Lord of Discounts")
+    print(f"Formerly-unmapped deck registered: {row} (expect a row for Rakdos Showstopper)")
+    assert row == ("Rakdos Showstopper",)
 
     # win/loss view sanity
     print("\ndeck_stats view sample:")

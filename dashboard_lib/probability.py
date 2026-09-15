@@ -3,20 +3,27 @@ Hypergeometric draw-probability math for the Land Probability page.
 
 Pure Python (uses math.comb) for the core distribution functions — no
 Streamlit or pandas dependency required for those, so they can be unit-
-tested in isolation. count_color_sources() takes a pandas DataFrame (the
+tested in isolation. count_color_sources(), mana_source_category_counts(),
+and commander_cast_probability_by_turn() take a pandas DataFrame (the
 enriched deck-library dataframe from card_view.add_derived_columns) since
-it needs to inspect real card rows.
+they need to inspect real card rows (type_line/oracle_text/color_identity).
 
 Convention: turn 0 = opening hand (7 cards, no draws yet). Turn N (N>=1)
 is the start of that player's Nth turn, after that turn's draw step (if
 any). "On the play" skips the very first turn's draw, matching standard
 tabletop Magic rules regardless of pod size.
 """
+import re
 from math import comb
 
 from . import formatting as fmt
 
 OPENING_HAND_SIZE = 7
+
+# Phase 3 — the fixed category order for the weighted color-availability
+# graph's stacked bars: nonland ramp first, then land-based sources from
+# least to most specific.
+MANA_SOURCE_CATEGORIES = ["Rocks/Dorks", "Colorless", "Any Color", *fmt.WUBRG_ORDER]
 
 
 def cards_seen_by_turn(turn, on_the_play, opening_hand=OPENING_HAND_SIZE):
@@ -64,20 +71,142 @@ def distribution(population, successes, sample):
 
 
 def count_color_sources(library_df, color, lands_only=True):
-    """Total quantity of cards in the (already card_type/color_display-
-    enriched) library dataframe whose color_identity includes `color`.
+    """Total quantity of cards in the (already card_view.add_derived_
+    columns-enriched, so MDFC-aware 'is_land' + oracle_text-bearing)
+    library dataframe that can produce `color` mana, per the Phase 3
+    keyword/text rule parser (formatting.classify_mana_colors).
 
-    Restricted to Land-type cards by default — this matches Scryfall's
-    color_identity data accurately for basics and any land with an
-    explicit colored mana ability (duals, triomes, filter lands, etc.).
-    Setting lands_only=False extends the search to nonland cards too, but
-    this under-counts mana rocks/dorks whose color-fixing is described in
-    plain text rather than colored mana symbols (e.g. Sol Ring, Arcane
-    Signet, Birds of Paradise) — Scryfall's color_identity field doesn't
-    pick those up, so treat that mode as an approximation.
+    Restricted to land sources (is_land, MDFC-aware) by default.
+    Setting lands_only=False also counts nonland mana rocks/dorks whose
+    color-fixing is described in plain text (Sol Ring, Arcane Signet,
+    Birds of Paradise, etc.) via the same text-parsing rules, rather than
+    only trusting the color_identity field — this fixes cards like
+    Command Tower / City of Brass / Exotic Orchard, whose color_identity
+    is empty even though their text fixes for any color.
     """
-    pool = library_df[library_df["card_type"] == "Land"] if lands_only else library_df
+    pool = library_df[library_df["is_land"]] if lands_only else library_df
     if pool.empty:
         return 0
-    mask = pool["color_identity"].apply(lambda ci: color in fmt.split_multi_value(ci))
+
+    def matches(row):
+        info = fmt.classify_mana_colors(row.get("type_line"), row.get("oracle_text"), row.get("color_identity"))
+        return info["any"] or (color in info["colors"])
+
+    mask = pool.apply(matches, axis=1)
     return int(pool.loc[mask, "quantity"].sum())
+
+
+def mana_source_category_counts(library_df):
+    """Phase 3 — total quantity per mana-source category across the whole
+    library, for the weighted color-availability graph. Categories (see
+    MANA_SOURCE_CATEGORIES): 'Rocks/Dorks' (nonland mana-producing
+    permanents, lumped together regardless of color), 'Colorless' (lands
+    producing exclusively generic mana), 'Any Color' (Command Tower/City
+    of Brass/Exotic Orchard-style lands), and one bucket per WUBRG letter.
+    A dual/tri land contributes to every color it can produce, same
+    convention as count_color_sources — so these totals can add up to
+    more than the deck's actual land count when duals are present; that's
+    expected for a per-color composition chart, not a partition."""
+    totals = {cat: 0 for cat in MANA_SOURCE_CATEGORIES}
+    if library_df.empty:
+        return totals
+
+    for _, row in library_df.iterrows():
+        qty = int(row.get("quantity") or 0)
+        if qty <= 0:
+            continue
+        type_line = row.get("type_line")
+        oracle_text = row.get("oracle_text")
+        color_identity = row.get("color_identity")
+
+        if row.get("is_land"):
+            info = fmt.classify_mana_colors(type_line, oracle_text, color_identity)
+            if info["any"]:
+                totals["Any Color"] += qty
+            elif info["colorless"]:
+                totals["Colorless"] += qty
+            else:
+                for c in info["colors"]:
+                    totals[c] += qty
+        elif fmt.is_mana_rock_or_dork(type_line, oracle_text):
+            totals["Rocks/Dorks"] += qty
+
+    return totals
+
+
+def weighted_mana_expectation(library_size, category_counts, turn, on_the_play):
+    """Phase 3 — the probability-weighted EXPECTED number of sources from
+    each category seen by `turn` (opening hand seen at turn=0), using
+    linearity of expectation for the hypergeometric distribution:
+    E[sources seen] = category_total * (cards_seen / library_size). This
+    is an expected count, not a P(at least one) probability — it answers
+    'how many of this category do I expect to have access to by now',
+    which composes cleanly across categories in a stacked bar."""
+    if library_size <= 0:
+        return {cat: 0.0 for cat in category_counts}
+    seen = cards_seen_by_turn(turn, on_the_play)
+    seen = min(seen, library_size)
+    return {cat: total * seen / library_size for cat, total in category_counts.items()}
+
+
+_PIP_RE = re.compile(r"\{([^}]+)\}")
+
+
+def parse_colored_pips(mana_cost):
+    """Count of each PLAIN colored mana symbol in a mana_cost string, e.g.
+    '{2}{U}{U}{B}' -> {'U': 2, 'B': 1}. Used by the Commander Cast
+    Probability engine to find how many sources of each color the
+    commander actually requires.
+
+    Hybrid ('{U/B}') and Phyrexian ('{U/P}') pips are deliberately
+    skipped rather than counted toward every color they mention — they
+    can be paid by either color (or life, for Phyrexian), so folding them
+    into a strict 'must have a source of color X' requirement would
+    overstate how hard the commander actually is to cast. Generic numeric
+    and {C} symbols are ignored too, since only colored pips create a
+    color-specific mana-source requirement."""
+    if not mana_cost:
+        return {}
+    counts = {}
+    for symbol in _PIP_RE.findall(str(mana_cost)):
+        token = symbol.strip().upper()
+        if token in fmt.WUBRG_ORDER:
+            counts[token] = counts.get(token, 0) + 1
+    return counts
+
+
+def commander_cast_probability_by_turn(
+    library_size, land_count, source_counts, commander_cmc, colored_pips, on_the_play, max_turn=10
+):
+    """Phase 3 — Commander Cast Probability engine, turns 1..max_turn.
+
+    Compounds two independent factors per turn:
+      1) land_factor  — P(at least `commander_cmc` lands drawn by this
+         turn), i.e. the standard 1-land-per-turn, no-ramp land-drop math
+         already used elsewhere on this page.
+      2) color_factor — the PRODUCT, across every distinct colored pip in
+         the commander's cost, of P(at least `need` sources of that color
+         drawn by this turn) — using source_counts (see count_color_sources).
+
+    combined = land_factor * color_factor is reported as the estimated
+    probability of being ABLE to cast the commander on curve that turn.
+    Treating the two factors (and each color within factor 2) as
+    independent is a simplification — the same physical draw can only
+    satisfy one requirement at a time — so treat this as an optimistic
+    estimate, not an exact joint probability."""
+    needed_lands = max(0, int(round(commander_cmc or 0)))
+    rows = []
+    for turn in range(1, max_turn + 1):
+        seen = cards_seen_by_turn(turn, on_the_play)
+        land_factor = prob_at_least(library_size, land_count, seen, needed_lands)
+        color_factor = 1.0
+        for color, need in (colored_pips or {}).items():
+            color_factor *= prob_at_least(library_size, source_counts.get(color, 0), seen, need)
+        rows.append({
+            "turn": turn,
+            "cards_seen": seen,
+            "land_factor": land_factor,
+            "color_factor": color_factor,
+            "probability": land_factor * color_factor,
+        })
+    return rows

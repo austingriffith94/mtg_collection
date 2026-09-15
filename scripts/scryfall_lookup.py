@@ -130,6 +130,16 @@ def to_card_row(data):
 
     type_line = data.get("type_line", "") or ""
 
+    # Collection Variants (Phase 2): "showcase" lives in Scryfall's
+    # frame_effects array; "borderless" is a border_color value rather
+    # than a frame_effect. MDFCs can carry per-face frame_effects, so fall
+    # back to the front face's list if the top-level one is empty/absent.
+    frame_effects = data.get("frame_effects") or []
+    if not frame_effects and data.get("card_faces"):
+        frame_effects = data["card_faces"][0].get("frame_effects") or []
+    is_showcase = "showcase" in frame_effects
+    is_borderless = (data.get("border_color") == "borderless")
+
     return {
         "scryfall_id": data["id"],
         "oracle_id": data.get("oracle_id"),
@@ -151,6 +161,9 @@ def to_card_row(data):
         # Also pulled live from Scryfall's `reserved` field — no manual
         # list to maintain here either.
         "is_reserved": 1 if data.get("reserved") else 0,
+        # Collection Variants (Phase 2) — see note above to_card_row().
+        "is_showcase": 1 if is_showcase else 0,
+        "is_borderless": 1 if is_borderless else 0,
         "commander_legal": 1 if legalities.get("commander") == "legal" else 0,
         "current_price_usd": float(price) if price else None,
         "price_updated_at": None,  # set by caller to today's date

@@ -1,11 +1,14 @@
 """
 Refresh Scryfall-derived fields (Reserved List, Game Changer, Commander
 legality, price) for every card already in your database — WITHOUT
-wiping or rebuilding anything else, unlike migrate.py. Only touches
+wiping or rebuilding anything else, unlike migrate.py. Updates
 cards.is_reserved / is_game_changer / commander_legal / current_price_usd
 / price_updated_at / last_fetched_at, matched by each card's permanent
-scryfall_id. Doesn't touch your collection, decklists, tags, or anything
-else.
+scryfall_id. Doesn't touch your decklists or tags.
+
+It DOES also prune your collection afterward: any collection lot with no
+assigned location, a quantity of 0/none, and not present in any deck's
+mainboard or maybeboard is deleted (see dashboard_lib.writes.prune_collection).
 
 Safe to run anytime, as often as you like — this is a normal maintenance
 task, unlike migrate.py, which is one-way and meant for your initial CSV
@@ -60,6 +63,12 @@ def main():
     if summary["unresolved"]:
         print(f"\n⚠ {len(summary['unresolved'])} card(s) couldn't be refreshed:")
         for n in summary["unresolved"]:
+            print(f"  - {n}")
+
+    print(f"\nPruned {summary['pruned_count']} collection lot(s) with no location, "
+          f"no quantity, and not in any deck's mainboard/maybeboard.")
+    if summary["pruned_cards"]:
+        for n in summary["pruned_cards"]:
             print(f"  - {n}")
     print("=" * 60)
 

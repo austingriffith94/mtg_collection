@@ -1,0 +1,11 @@
+Please refine the calculation logic, data validation, and third-party API fallbacks in the application.
+
+1. Land & Probability Calculations:
+- Turn-by-Turn Card Probability: Update the "Check a Specific Card" section. Currently, it displays general draw probability (identical across singletons). Change this to calculate and display the turn-by-turn probability of playing that specific card on each turn, projected through Turn 8.
+- Expected Land Drops: In the land probability section, calculate and display the weighted expected number of lands drawn/seen for each turn.
+- Color Availability Check: Fix the mana source detection logic. Ensure the color availability toggle correctly parses true mana sources using the appropriate flag rather than counting non-mana-producing cards.
+
+2. EDHREC Salt Score Handling & API Fallback:
+- Check if the application can fetch the EDHREC salt score via a lightweight public API or endpoint.
+- If direct API fetching isn't viable, implement logic to pull or look up the `edhrecSaltiness` column from MTGJSON data (e.g., from `cards.csv` inside `https://mtgjson.com/api/v5/AllPrintingsCSVFiles.zip`).
+- Fail-safe: If no clean, low-overhead lookup exists, safely strip out all salt score functionality and associated UI elements from the dashboard.

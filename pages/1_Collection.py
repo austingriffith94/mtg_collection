@@ -7,8 +7,10 @@ Collection page — browse the full physical collection.
   URL fallback) where each card image itself links out to its Scryfall
   page.
 - Sidebar filters (search, color identity, type, rarity, set, location,
-  foil, basic land, game changer, price, mana value) all combine (AND
-  across facets, "any of" within a facet).
+  foil, basic land, game changer, Showcase, Borderless, price, mana
+  value) all combine (AND across facets, "any of" within a facet).
+  Showcase/Borderless are Scryfall frame-treatment flags (Phase 2),
+  populated by the Editor's Card Data refresh / any new card fetch.
 - "Group / breakout by" lets you layer multiple groupings (e.g. Type, then
   Rarity within each type) — each top-level group is a collapsible
   section.
@@ -62,6 +64,8 @@ filtered = cv.render_filter_panel(
         ("is_reserved", "Reserved List"),
         ("is_basic_land", "Basic Land"),
         ("foil", "Foil"),
+        ("is_showcase", "Showcase"),
+        ("is_borderless", "Borderless"),
     ],
 )
 
@@ -71,6 +75,8 @@ column_config.update(
         "quantity": st.column_config.NumberColumn("Qty", width="small"),
         "foil": st.column_config.CheckboxColumn("Foil", width="small"),
         "is_reserved": st.column_config.CheckboxColumn("Reserved", width="small"),
+        "is_showcase": st.column_config.CheckboxColumn("Showcase", width="small"),
+        "is_borderless": st.column_config.CheckboxColumn("Borderless", width="small"),
         "location": st.column_config.TextColumn("Location", width="small"),
         "date_acquired": st.column_config.TextColumn("Acquired", width="small"),
         "price_paid": st.column_config.NumberColumn("Paid", format="$%.2f", width="small"),
@@ -88,5 +94,8 @@ cv.render_browser(
         ("location", "Location"),
     ],
     column_config=column_config,
-    extra_table_cols=["quantity", "foil", "is_reserved", "location", "date_acquired", "price_paid"],
+    extra_table_cols=[
+        "quantity", "foil", "is_reserved", "is_showcase", "is_borderless",
+        "location", "date_acquired", "price_paid",
+    ],
 )

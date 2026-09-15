@@ -1,7 +1,7 @@
 """
 Decks & Maybeboard page.
 
-Pick a deck (active or retired) to see its "Turn 0" summary — commander/
+Pick a deck to see its "Turn 0" summary — commander/
 partner, colors, bracket, interaction, combos, tutors, description, when
 it was built, win/loss record, deck value, and how many of its cards are
 physically sleeved in it right now — followed by win conditions /
@@ -15,6 +15,12 @@ the Mainboard, Maybeboard, or both at once.
 Reserved List and Proxy flags are intentionally NOT shown here yet — per
 the project state doc, `cards.is_reserved` hasn't been added to the schema,
 and the Proxy convention in Location hasn't been confirmed with the user.
+
+Phase 2 additions: an optional custom cover-image thumbnail next to the
+deck header (set via the Editor's Deck Info tab), and Top 10 Most
+Expensive / Top 10 Saltiest card lists alongside the existing Game
+Changers and Reserved List panels. Saltiest is hand-maintained EDHREC
+data (Editor -> Card Data -> Salt Scores), not a Scryfall field.
 """
 import sys
 import os
@@ -38,17 +44,13 @@ st.title("🃏 Decks & Maybeboard")
 
 st.sidebar.header("Deck")
 db.refresh_data_button()
-include_retired = st.sidebar.toggle("Show retired decks", value=True, key="deckpage_include_retired")
 
-decks_df = loaders.load_decks_df(conn, include_retired=include_retired)
+decks_df = loaders.load_decks_df(conn)
 if decks_df.empty:
     st.info("No decks found.")
     st.stop()
 
-deck_labels = [
-    f"{row['name']}" + ("  (retired)" if not row["is_active"] else "")
-    for _, row in decks_df.iterrows()
-]
+deck_labels = [f"{row['name']}" for _, row in decks_df.iterrows()]
 label_to_id = dict(zip(deck_labels, decks_df["deck_id"]))
 chosen_label = st.sidebar.selectbox("Choose a deck", deck_labels, key="deckpage_deck_select")
 deck_id = int(label_to_id[chosen_label])
@@ -62,19 +64,14 @@ sleeved = loaders.load_in_deck_sleeved_count(conn, meta.get("name"))
 # Turn 0 panel
 # ------------------------------------------------------------------
 header_name = meta.get("representative") or meta.get("name") or "Deck"
-st.header(header_name)
 
-if not meta.get("is_active"):
-    successor_id = meta.get("successor_deck_id")
-    successor_name = None
-    if successor_id is not None:
-        successor_row = decks_df[decks_df["deck_id"] == successor_id]
-        if not successor_row.empty:
-            successor_name = successor_row["name"].iloc[0]
-    msg = "This deck is retired."
-    if successor_name:
-        msg += f" Succeeded by **{successor_name}** — historical games stay attributed to this name."
-    st.warning(msg)
+cover_path = fmt.resolve_local_image(meta.get("cover_image_path"))
+if cover_path:
+    hcol1, hcol2 = st.columns([1, 5])
+    hcol1.image(cover_path, width=120)
+    hcol2.header(header_name)
+else:
+    st.header(header_name)
 
 meta_col1, meta_col2, meta_col3, meta_col4 = st.columns(4)
 meta_col1.markdown(f"**Commander**\n\n{meta.get('commander') or '—'}")
@@ -172,12 +169,41 @@ with theme_col:
         st.caption("No mainboard cards loaded yet.")
 
 with curve_col:
-    st.markdown("**Mana curve** (non-land)")
-    curve = loaders.load_deck_mana_curve(conn, deck_id)
-    if not curve.empty:
-        st.bar_chart(curve.set_index("cmc")["count"])
+    st.markdown("**Mana curve** (non-land, MDFC-aware)")
+    st.caption(
+        "Cards with a land on either face (e.g. an MDFC land) are excluded here, same as "
+        "the rest of this dashboard's mana-curve and land-ratio math (Land Probability page)."
+    )
+    if not main_df_full.empty:
+        nonland_df = main_df_full[~main_df_full["is_land"]]
     else:
+        nonland_df = main_df_full
+    if nonland_df.empty:
         st.caption("No non-land cards to chart yet.")
+    else:
+        breakdown_by = st.radio(
+            "Stack by", ["Color", "Type"], horizontal=True, key=f"curve_stackby_{deck_id}"
+        )
+        group_col = "color_display" if breakdown_by == "Color" else "card_type"
+        pivot = (
+            nonland_df.groupby(["cmc", group_col])["quantity"]
+            .sum()
+            .unstack(group_col)
+            .fillna(0)
+            .sort_index()
+        )
+        if breakdown_by == "Color":
+            # Keep "Colorless" last; otherwise fall back to whatever order
+            # pandas discovered the color_display values in (e.g. "W",
+            # "B/R", "W/U/B") — good enough for a stacked bar's legend
+            # order without needing a full color-combo sort table.
+            ordered_cols = sorted(pivot.columns, key=lambda v: (v == "Colorless", v))
+            pivot = pivot[ordered_cols]
+        else:
+            ordered_cols = [c for c in fmt.ALL_CARD_TYPES if c in pivot.columns]
+            ordered_cols += [c for c in pivot.columns if c not in ordered_cols]
+            pivot = pivot[ordered_cols]
+        st.bar_chart(pivot)
 
     st.markdown("**Strategy tag breakdown**")
     tag_counts = loaders.load_deck_strategy_tag_counts(conn, deck_id)
@@ -220,6 +246,36 @@ with reserved_col:
         )
     else:
         st.caption("No Reserved List cards in this deck.")
+
+price_col, salt_col = st.columns(2)
+
+with price_col:
+    st.markdown("**Top 10 most expensive cards**", help="By cards.current_price_usd, refreshed via Editor -> Card Data.")
+    price_df = loaders.load_deck_price_top10(conn, deck_id)
+    if not price_df.empty:
+        st.dataframe(
+            price_df.rename(columns={"card_name": "Card", "quantity": "Qty", "price": "Price"}),
+            column_config={"Price": st.column_config.NumberColumn("Price", format="$%.2f")},
+            hide_index=True, use_container_width=True,
+        )
+    else:
+        st.caption("No priced cards in this deck yet.")
+
+with salt_col:
+    st.markdown(
+        "**Top 10 saltiest cards**",
+        help="Hand-maintained EDHREC salt scores (Editor -> Card Data -> Salt Scores) — "
+             "not a Scryfall field, so it's never auto-refreshed.",
+    )
+    salt_df = loaders.load_deck_salt_top10(conn, deck_id)
+    if not salt_df.empty:
+        st.dataframe(
+            salt_df.rename(columns={"card_name": "Card", "quantity": "Qty", "salt": "Salt"}),
+            column_config={"Salt": st.column_config.NumberColumn("Salt", format="%.2f")},
+            hide_index=True, use_container_width=True,
+        )
+    else:
+        st.caption("No salt scores recorded for any card in this deck yet.")
 
 st.divider()
 

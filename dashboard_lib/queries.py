@@ -15,8 +15,17 @@ CARD_COLUMNS = """
     c.mana_cost, c.cmc, c.color_identity, c.oracle_text, c.rarity, c.image_uri,
     c.local_image_path, c.is_basic_land, c.is_game_changer, c.is_reserved,
     c.is_showcase, c.is_borderless,
-    c.commander_legal, c.current_price_usd, c.edhrec_salt
+    c.commander_legal, c.current_price_usd
 """
+# cards.edhrec_salt is no longer selected here as of Prompt Pass 5 — the
+# EDHREC Salt Score feature was retired dashboard-wide (see
+# PROJECT_STATE.md): no lightweight public API exposes it, and the only
+# alternative data source (MTGJSON's edhrecSaltiness field) only ships
+# inside its full AllPrintings-scale exports, which are far too heavy an
+# ongoing dependency for one hand-sized field in a personal-scale tool.
+# The column itself is left in place on cards (additive schema policy —
+# see below), so anyone's previously hand-entered values aren't lost, it
+# just isn't read into the dashboard anymore.
 # oracle_text (Phase 3) feeds dashboard_lib.formatting's MDFC-aware land
 # detection and mana-source color classification (has_land_face(),
 # classify_mana_colors(), is_mana_rock_or_dork()) — it isn't rendered as
@@ -172,6 +181,33 @@ def deck_meta(conn, deck_id):
     return dict(row) if row else {}
 
 
+def list_decks_with_covers(conn):
+    """Same deck list as list_decks(), plus everything the home-page
+    landing grid (Prompt Pass 4) needs to pick a thumbnail per deck: the
+    user-set cover_image_path if any, and — as a fallback for decks
+    without one — the commander's own card art, resolved by matching
+    decks.commander against the deck's own deck_cards/cards rows (not a
+    global name lookup) so a commander owned across multiple printings
+    still resolves to the specific printing actually run in that deck.
+    MAX() is used purely to collapse the one-to-many deck_cards join
+    down to a single row per deck; every non-aggregated deck_cards row
+    besides the commander's own naturally has NULL for the two
+    commander_* columns being maxed, so this doesn't average or pick
+    among several candidates."""
+    return pd.read_sql_query(
+        """SELECT d.deck_id, d.name, d.representative, d.commander,
+                  d.cover_image_path,
+                  MAX(c.image_uri) AS commander_image_uri,
+                  MAX(c.local_image_path) AS commander_local_image_path
+           FROM decks d
+           LEFT JOIN deck_cards dc ON dc.deck_id = d.deck_id
+           LEFT JOIN cards c ON c.scryfall_id = dc.scryfall_id AND c.name = d.commander
+           GROUP BY d.deck_id
+           ORDER BY d.name COLLATE NOCASE""",
+        conn,
+    )
+
+
 def cards_by_name(conn, names):
     """Look up cards.* rows (mana_cost/cmc/color_identity/type_line/
     oracle_text) by exact, case-insensitive name — used by the Commander
@@ -191,6 +227,63 @@ def cards_by_name(conn, names):
         conn,
         params=names,
     )
+
+
+# ------------------------------------------------------------------
+# Card name autocomplete + printing lookup (Prompt Pass 6) — powers the
+# Editor's Collection tab "add a card" flow: search_card_names() drives
+# the type-ahead suggestion list, card_printings_by_name() drives the
+# second "choose a printing" selector once a name is picked. Both query
+# the local `cards` table only (the dashboard's own "master card
+# registry" — no network needed); card_resolver.fetch_additional_printings()
+# is the explicit, user-initiated way to extend that registry with
+# printings Scryfall knows about but this database doesn't yet.
+# ------------------------------------------------------------------
+def search_card_names(conn, query_text, limit=25):
+    """Distinct card names from `cards` matching `query_text` as a
+    case-insensitive substring, names that START WITH the query ranked
+    ahead of names that merely contain it, alphabetical within each
+    group. Returns [] for blank input rather than the whole table."""
+    query_text = (query_text or "").strip()
+    if not query_text:
+        return []
+    contains_pattern = f"%{query_text}%"
+    starts_pattern = f"{query_text}%"
+    rows = conn.execute(
+        """SELECT DISTINCT name FROM cards
+           WHERE name LIKE ? COLLATE NOCASE
+           ORDER BY CASE WHEN name LIKE ? COLLATE NOCASE THEN 0 ELSE 1 END,
+                    name COLLATE NOCASE
+           LIMIT ?""",
+        (contains_pattern, starts_pattern, limit),
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+_PRINTING_COLUMNS = [
+    "scryfall_id", "name", "set_code", "collector_number", "rarity",
+    "current_price_usd", "image_uri", "local_image_path",
+]
+
+
+def card_printings_by_name(conn, name):
+    """Every printing of `name` already known locally (one dict per
+    `cards` row: scryfall_id/set_code/collector_number/rarity/
+    current_price_usd/image_uri/local_image_path), exact case-insensitive
+    name match, ordered by set then collector number. Returns [] if the
+    name isn't in the local database under any printing yet. Builds dicts
+    from plain tuples (not sqlite3.Row) so this works regardless of the
+    caller's row_factory setting."""
+    name = (name or "").strip()
+    if not name:
+        return []
+    rows = conn.execute(
+        f"""SELECT {", ".join(_PRINTING_COLUMNS)}
+           FROM cards WHERE name = ? COLLATE NOCASE
+           ORDER BY set_code COLLATE NOCASE, collector_number COLLATE NOCASE""",
+        (name,),
+    ).fetchall()
+    return [dict(zip(_PRINTING_COLUMNS, r)) for r in rows]
 
 
 def deck_stats_row(conn, deck_id):
@@ -284,11 +377,21 @@ def deck_game_changers(conn, deck_id):
 
 
 def deck_price_top10(conn, deck_id):
-    """Top 10 most expensive mainboard cards (by current_price_usd),
-    priced cards only. Ties broken alphabetically for a stable order."""
+    """Top 10 most expensive mainboard cards (by current_price_usd,
+    single-copy unit pricing — quantity is intentionally not shown/used
+    here), priced cards only, ties broken alphabetically. Also surfaces
+    what was actually paid for this card (collection.price_paid, summed
+    across any lot(s) whose location matches this deck's name, i.e. the
+    copy(ies) actually sleeved in it) as `purchase_price` — NULL when
+    nothing's been logged as physically sleeved here."""
     return pd.read_sql_query(
-        """SELECT c.name AS card_name, dc.quantity, c.current_price_usd AS price
-           FROM deck_cards dc JOIN cards c ON c.scryfall_id = dc.scryfall_id
+        """SELECT c.name AS card_name, c.current_price_usd AS price,
+                  (SELECT SUM(col.price_paid) FROM collection col
+                    WHERE col.scryfall_id = c.scryfall_id AND col.location = d.name
+                  ) AS purchase_price
+           FROM deck_cards dc
+           JOIN cards c ON c.scryfall_id = dc.scryfall_id
+           JOIN decks d ON d.deck_id = dc.deck_id
            WHERE dc.deck_id = ? AND c.current_price_usd IS NOT NULL
            ORDER BY c.current_price_usd DESC, c.name COLLATE NOCASE
            LIMIT 10""",
@@ -297,27 +400,18 @@ def deck_price_top10(conn, deck_id):
     )
 
 
-def deck_salt_top10(conn, deck_id):
-    """Top 10 saltiest mainboard cards by cards.edhrec_salt — a hand-
-    maintained field (see Editor -> Card Data -> Salt Scores), since
-    Scryfall's API doesn't expose EDHREC salt scores. Cards with no salt
-    score recorded yet are excluded rather than shown as 0."""
-    return pd.read_sql_query(
-        """SELECT c.name AS card_name, dc.quantity, c.edhrec_salt AS salt
-           FROM deck_cards dc JOIN cards c ON c.scryfall_id = dc.scryfall_id
-           WHERE dc.deck_id = ? AND c.edhrec_salt IS NOT NULL
-           ORDER BY c.edhrec_salt DESC, c.name COLLATE NOCASE
-           LIMIT 10""",
-        conn,
-        params=(deck_id,),
-    )
+# deck_salt_top10() (Top 10 Saltiest cards) was removed in Prompt Pass 5
+# along with the rest of the EDHREC Salt Score feature — see the
+# CARD_COLUMNS comment above and PROJECT_STATE.md for why.
 
 
 def deck_reserved_list_cards(conn, deck_id):
     """Mainboard cards in this deck that are on Scryfall's live Reserved
-    List, with the quantity actually run."""
+    List, with the card's current price (rather than quantity run) —
+    what a Reserved List card is worth is usually more actionable at a
+    glance than how many copies are in a singleton Commander deck."""
     return pd.read_sql_query(
-        """SELECT c.name AS card_name, dc.quantity
+        """SELECT c.name AS card_name, c.current_price_usd AS price
            FROM deck_cards dc JOIN cards c ON c.scryfall_id = dc.scryfall_id
            WHERE dc.deck_id = ? AND c.is_reserved = 1
            ORDER BY c.name""",
@@ -406,11 +500,19 @@ def maybeboard_dataframe(conn, deck_id):
 def collection_dataframe(conn):
     """One row per collection LOT (collection_id) — i.e. the real schema
     grain, preserving per-lot location/price/date rather than silently
-    aggregating rows that may live in different boxes or decks."""
+    aggregating rows that may live in different boxes or decks.
+
+    `in_deck` (Prompt Pass 4) is 1 if this printing's scryfall_id is used
+    in ANY deck's mainboard (deck_cards), 0 otherwise — the same
+    "spoken for by a deck" test writes.prune_collection() already uses,
+    reused here to power the Collection page's deck-status filter."""
     return pd.read_sql_query(
         f"""SELECT col.collection_id, {CARD_COLUMNS},
                    col.quantity, col.foil, col.location, col.date_acquired,
-                   col.price_paid, col.source
+                   col.price_paid, col.source,
+                   CASE WHEN EXISTS (
+                       SELECT 1 FROM deck_cards dc WHERE dc.scryfall_id = col.scryfall_id
+                   ) THEN 1 ELSE 0 END AS in_deck
             FROM collection col
             JOIN cards c ON c.scryfall_id = col.scryfall_id
             ORDER BY c.name COLLATE NOCASE""",

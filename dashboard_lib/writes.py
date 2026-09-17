@@ -12,6 +12,7 @@ preserve anything written here. That's intentional — see migrate.py's
 module docstring and the README. Use the CSVs + migrate.py for your
 initial import, then manage things here from then on.
 """
+import datetime
 import sqlite3
 
 
@@ -142,38 +143,12 @@ def bulk_set_game_changer_tags(conn, edits):
     return changed
 
 
-# ------------------------------------------------------------------
-# EDHREC salt score (Phase 2) — hand-maintained per cards.scryfall_id.
-# NOT a Scryfall API field, so this is never touched by the Card Data
-# "Refresh" action; it only changes here or via a future EDHREC-backed
-# import if one is ever added.
-# ------------------------------------------------------------------
-def set_card_salt_score(conn, scryfall_id, salt_score):
-    conn.execute(
-        "UPDATE cards SET edhrec_salt=? WHERE scryfall_id=?",
-        (salt_score, scryfall_id),
-    )
-    conn.commit()
-
-
-def bulk_set_salt_scores(conn, updates):
-    """updates: {scryfall_id: salt_score_or_None}. Returns count changed."""
-    ids = list(updates.keys())
-    if not ids:
-        return 0
-    placeholders = ",".join("?" for _ in ids)
-    current = dict(
-        conn.execute(
-            f"SELECT scryfall_id, edhrec_salt FROM cards WHERE scryfall_id IN ({placeholders})",
-            ids,
-        ).fetchall()
-    )
-    changed = 0
-    for scryfall_id, value in updates.items():
-        if current.get(scryfall_id) != value:
-            set_card_salt_score(conn, scryfall_id, value)
-            changed += 1
-    return changed
+# set_card_salt_score() / bulk_set_salt_scores() (Phase 2) were removed
+# in Prompt Pass 5 along with the rest of the EDHREC Salt Score feature —
+# see dashboard_lib/queries.py's CARD_COLUMNS comment and PROJECT_STATE.md
+# for why. cards.edhrec_salt itself is left in the schema untouched
+# (additive policy), so any values entered before this pass aren't lost —
+# there just isn't an in-dashboard write path to it anymore.
 
 
 # ------------------------------------------------------------------
@@ -608,6 +583,52 @@ def delete_game(conn, game_id):
     conn.execute("DELETE FROM games WHERE game_id=?", (game_id,))
     conn.commit()
     return True, None
+
+
+# ------------------------------------------------------------------
+# Deck Building Auto-Add (Prompt Pass 6) — when a card added to a deck's
+# mainboard isn't tracked in the collection AT ALL yet, give it a starter
+# collection lot automatically instead of letting the deck and the
+# collection quietly drift apart. Only called from the Editor's Mainboard
+# "Add to mainboard" action (see pages/4_Editor.py) — NOT from the
+# Maybeboard add flow, since a maybeboard card is explicitly "under
+# consideration", not yet a real deck inclusion, so assuming ownership
+# there would overstate the collection.
+# ------------------------------------------------------------------
+def collection_has_card(conn, scryfall_id):
+    """True if at least one collection lot already exists for this exact
+    printing (scryfall_id) — the presence test auto_add_to_collection()
+    uses to decide whether a starter lot is needed."""
+    row = conn.execute(
+        "SELECT 1 FROM collection WHERE scryfall_id=? LIMIT 1", (scryfall_id,)
+    ).fetchone()
+    return row is not None
+
+
+def auto_add_to_collection(conn, scryfall_id, quantity=1, location=None):
+    """If `scryfall_id` has no collection lot at all yet, create one with
+    `quantity` (matching however many were just added to the deck),
+    `location` defaulted to the deck's name (the same "sleeved in this
+    deck" free-text convention collection.location already uses
+    everywhere else), no foil, today's date, and a distinct `source` tag
+    so these auto-created lots are easy to spot/audit later if you want
+    to fill in real acquisition details (price paid, actual foil status,
+    etc.).
+
+    Returns the new collection_id, or None if a lot already existed and
+    nothing was added — existing lots for this printing are never
+    touched, duplicated, or have their quantity bumped."""
+    if collection_has_card(conn, scryfall_id):
+        return None
+    return add_collection_lot(
+        conn, scryfall_id,
+        quantity=quantity,
+        foil=False,
+        location=location,
+        date_acquired=datetime.date.today().isoformat(),
+        price_paid=None,
+        source="Auto-added (deck build)",
+    )
 
 
 def bulk_update_collection(conn, updates):

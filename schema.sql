@@ -32,10 +32,12 @@ CREATE TABLE cards (
     current_price_usd REAL,
     price_updated_at  DATE,
     last_fetched_at   DATE,
-    edhrec_salt       REAL              -- EDHREC salt score; not a Scryfall field, so
-                                         -- this is maintained by hand in the dashboard
-                                         -- (Editor -> Card Data -> Salt Scores), never
-                                         -- touched by the Scryfall refresh action
+    edhrec_salt       REAL              -- EDHREC salt score. Feature retired in Prompt
+                                         -- Pass 5 (no clean, low-overhead data source was
+                                         -- found — see PROJECT_STATE.md); the column is
+                                         -- kept non-destructively per schema policy so any
+                                         -- values entered before that pass aren't lost, but
+                                         -- the app no longer reads or writes it
 );
 CREATE INDEX idx_cards_name ON cards(name);
 CREATE INDEX idx_cards_oracle ON cards(oracle_id);

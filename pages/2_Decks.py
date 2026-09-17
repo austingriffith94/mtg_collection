@@ -1,20 +1,23 @@
 """
-Decks & Maybeboard page.
+Decks page (renamed from "Decks & Maybeboard" in Prompt Pass 4 — the
+maybeboard is still browsable here via the Board toggle near the bottom,
+this is just the section's display name/URL now).
 
-Pick a deck to see its "Turn 0" summary — commander/
-partner, colors, bracket, interaction, combos, tutors, description, when
-it was built, win/loss record, deck value, and how many of its cards are
-physically sleeved in it right now — followed by win conditions /
-strengths / weaknesses, themes, mana curve, type breakdown, strategy tag
-breakdown, optimized-mana summary, and Game Changers (with drift vs.
-Scryfall's live flag highlighted).
+Pick a deck (or land here already-selected, via a `deck_id` query param
+set by the home page's deck-tile links) to see its "Turn 0" summary —
+commander/partner, colors, bracket, interaction, combos, tutors,
+description, when it was built, win/loss record, deck value, and how many
+of its cards are physically sleeved in it right now — followed by win
+conditions / strengths / weaknesses, then (Prompt Pass 4 reorder)
+optimized mana, Game Changers, and the Reserved List right underneath
+that, then themes, mana curve, type breakdown, and strategy tag
+breakdown, then Top 10 Most Expensive / Top 10 Saltiest.
 
 Below that: the same table/grid card browser as the Collection page, for
 the Mainboard, Maybeboard, or both at once.
 
-Reserved List and Proxy flags are intentionally NOT shown here yet — per
-the project state doc, `cards.is_reserved` hasn't been added to the schema,
-and the Proxy convention in Location hasn't been confirmed with the user.
+Proxy flags are intentionally NOT shown here yet — per the project state
+doc, the Proxy convention in Location hasn't been confirmed with the user.
 
 Phase 2 additions: an optional custom cover-image thumbnail next to the
 deck header (set via the Editor's Deck Info tab), and Top 10 Most
@@ -33,14 +36,14 @@ import streamlit as st
 from dashboard_lib import db, loaders, formatting as fmt, moxfield_export
 from dashboard_lib import card_view as cv
 
-st.set_page_config(page_title="Decks & Maybeboard · MTG Dashboard", page_icon="🃏", layout="wide")
+st.set_page_config(page_title="Decks · MTG Dashboard", page_icon="🃏", layout="wide")
 
 db.require_db()
 conn = db.get_connection()
 
 MOXFIELD_EXPORT_DIR = os.path.join(db.BASE_DIR, "moxfield_exports")
 
-st.title("🃏 Decks & Maybeboard")
+st.title("🃏 Decks")
 
 st.sidebar.header("Deck")
 db.refresh_data_button()
@@ -52,6 +55,28 @@ if decks_df.empty:
 
 deck_labels = [f"{row['name']}" for _, row in decks_df.iterrows()]
 label_to_id = dict(zip(deck_labels, decks_df["deck_id"]))
+
+# Honor a `?deck_id=<id>` query param (set by the home page's deck-tile
+# links, see dashboard_lib.card_view.render_deck_landing_grid) by
+# pre-selecting that deck in the sidebar picker below — but only by
+# pre-seeding session_state BEFORE the selectbox is created, since that's
+# the only point Streamlit allows setting a widget's value. The param is
+# consumed (deleted) immediately after reading so it doesn't keep
+# re-forcing this deck back into the picker on a later rerun after the
+# user manually picks something else (e.g. by toggling a sidebar filter).
+query_deck_id = st.query_params.get("deck_id")
+if query_deck_id is not None:
+    try:
+        target_deck_id = int(query_deck_id)
+    except (TypeError, ValueError):
+        target_deck_id = None
+    if target_deck_id is not None:
+        id_to_label = {v: k for k, v in label_to_id.items()}
+        target_label = id_to_label.get(target_deck_id)
+        if target_label:
+            st.session_state["deckpage_deck_select"] = target_label
+    del st.query_params["deck_id"]
+
 chosen_label = st.sidebar.selectbox("Choose a deck", deck_labels, key="deckpage_deck_select")
 deck_id = int(label_to_id[chosen_label])
 
@@ -147,10 +172,56 @@ _render_rank_list(wk, "Weaknesses", loaders.load_deck_rank_list(conn, deck_id, "
 st.divider()
 
 # ------------------------------------------------------------------
-# Themes / mana curve / type breakdown / strategy tags / optimized mana / game changers
+# Optimized mana / Game Changers / Reserved List (Prompt Pass 4: moved to
+# sit directly under Win Conditions/Strengths/Weaknesses, ahead of
+# Themes/Mana Curve below)
 # ------------------------------------------------------------------
 main_df_full = loaders.load_deck_cards_df(conn, deck_id)
 
+mana_tag_col, gc_col, reserved_col = st.columns(3)
+
+with mana_tag_col:
+    st.markdown("**Optimized mana**")
+    mana_summary = loaders.load_deck_mana_tag_summary(conn, deck_id)
+    if mana_summary:
+        st.dataframe(pd.DataFrame(mana_summary), hide_index=True, use_container_width=True)
+    else:
+        st.caption("No optimized-mana tags matched for this deck.")
+
+with gc_col:
+    st.markdown("**Game Changers**", help="Scryfall's live game_changer flag alongside your own category tag — mismatches are worth reviewing.")
+    gc_df = loaders.load_deck_game_changers(conn, deck_id)
+    if not gc_df.empty:
+        st.dataframe(
+            # scryfall_flag deliberately omitted (Prompt Pass 4): every
+            # row here is already Game-Changer-flagged or custom-tagged,
+            # so the raw Scryfall boolean only ever showed a static "1".
+            gc_df.rename(columns={"card_name": "Card", "custom_tag": "Your tag", "status": "Status"})[
+                ["Card", "Your tag", "Status"]
+            ],
+            hide_index=True, use_container_width=True,
+        )
+    else:
+        st.caption("No Game Changers in this deck.")
+
+with reserved_col:
+    st.markdown("**Reserved List**", help="Pulled live from Scryfall's `reserved` field.")
+    reserved_df = loaders.load_deck_reserved_list_cards(conn, deck_id)
+    if not reserved_df.empty:
+        # Prompt Pass 4: shows current price instead of quantity run.
+        st.dataframe(
+            reserved_df.rename(columns={"card_name": "Card", "price": "Price"}),
+            column_config={"Price": st.column_config.NumberColumn("Price", format="$%.2f")},
+            hide_index=True, use_container_width=True,
+        )
+    else:
+        st.caption("No Reserved List cards in this deck.")
+
+st.divider()
+
+# ------------------------------------------------------------------
+# Themes / mana curve / type breakdown / strategy tags
+# ------------------------------------------------------------------
 theme_col, curve_col = st.columns(2)
 
 with theme_col:
@@ -184,26 +255,41 @@ with curve_col:
         breakdown_by = st.radio(
             "Stack by", ["Color", "Type"], horizontal=True, key=f"curve_stackby_{deck_id}"
         )
-        group_col = "color_display" if breakdown_by == "Color" else "card_type"
-        pivot = (
-            nonland_df.groupby(["cmc", group_col])["quantity"]
-            .sum()
-            .unstack(group_col)
-            .fillna(0)
-            .sort_index()
-        )
+        chart_colors = None
         if breakdown_by == "Color":
-            # Keep "Colorless" last; otherwise fall back to whatever order
-            # pandas discovered the color_display values in (e.g. "W",
-            # "B/R", "W/U/B") — good enough for a stacked bar's legend
-            # order without needing a full color-combo sort table.
-            ordered_cols = sorted(pivot.columns, key=lambda v: (v == "Colorless", v))
+            # Prompt Pass 4: fixed W/U/B/R/G/Multi-color/Colorless
+            # grouping+order with custom mana-colored bars, instead of an
+            # alphabetical-with-Colorless-last fallback order.
+            bucketed = nonland_df.assign(
+                mana_color_bucket=nonland_df["color_display"].apply(fmt.mana_curve_color_bucket)
+            )
+            group_col = "mana_color_bucket"
+            pivot = (
+                bucketed.groupby(["cmc", group_col])["quantity"]
+                .sum()
+                .unstack(group_col)
+                .fillna(0)
+                .sort_index()
+            )
+            ordered_cols = [c for c in fmt.MANA_CURVE_COLOR_ORDER if c in pivot.columns]
             pivot = pivot[ordered_cols]
+            chart_colors = [fmt.MANA_CURVE_COLOR_HEX[c] for c in ordered_cols]
         else:
+            group_col = "card_type"
+            pivot = (
+                nonland_df.groupby(["cmc", group_col])["quantity"]
+                .sum()
+                .unstack(group_col)
+                .fillna(0)
+                .sort_index()
+            )
             ordered_cols = [c for c in fmt.ALL_CARD_TYPES if c in pivot.columns]
             ordered_cols += [c for c in pivot.columns if c not in ordered_cols]
             pivot = pivot[ordered_cols]
-        st.bar_chart(pivot)
+        if chart_colors:
+            st.bar_chart(pivot, color=chart_colors)
+        else:
+            st.bar_chart(pivot)
 
     st.markdown("**Strategy tag breakdown**")
     tag_counts = loaders.load_deck_strategy_tag_counts(conn, deck_id)
@@ -212,70 +298,34 @@ with curve_col:
     else:
         st.caption("No strategy tags recorded for this deck.")
 
-mana_tag_col, gc_col, reserved_col = st.columns(3)
+st.divider()
 
-with mana_tag_col:
-    st.markdown("**Optimized mana**")
-    mana_summary = loaders.load_deck_mana_tag_summary(conn, deck_id)
-    if mana_summary:
-        st.dataframe(pd.DataFrame(mana_summary), hide_index=True, use_container_width=True)
-    else:
-        st.caption("No optimized-mana tags matched for this deck.")
-
-with gc_col:
-    st.markdown("**Game Changers**", help="Scryfall's live game_changer flag alongside your own category tag — mismatches are worth reviewing.")
-    gc_df = loaders.load_deck_game_changers(conn, deck_id)
-    if not gc_df.empty:
-        st.dataframe(
-            gc_df.rename(columns={
-                "card_name": "Card", "scryfall_flag": "Scryfall flag",
-                "custom_tag": "Your tag", "status": "Status",
-            }),
-            hide_index=True, use_container_width=True,
-        )
-    else:
-        st.caption("No Game Changers in this deck.")
-
-with reserved_col:
-    st.markdown("**Reserved List**", help="Pulled live from Scryfall's `reserved` field.")
-    reserved_df = loaders.load_deck_reserved_list_cards(conn, deck_id)
-    if not reserved_df.empty:
-        st.dataframe(
-            reserved_df.rename(columns={"card_name": "Card", "quantity": "Qty"}),
-            hide_index=True, use_container_width=True,
-        )
-    else:
-        st.caption("No Reserved List cards in this deck.")
-
-price_col, salt_col = st.columns(2)
-
-with price_col:
-    st.markdown("**Top 10 most expensive cards**", help="By cards.current_price_usd, refreshed via Editor -> Card Data.")
-    price_df = loaders.load_deck_price_top10(conn, deck_id)
-    if not price_df.empty:
-        st.dataframe(
-            price_df.rename(columns={"card_name": "Card", "quantity": "Qty", "price": "Price"}),
-            column_config={"Price": st.column_config.NumberColumn("Price", format="$%.2f")},
-            hide_index=True, use_container_width=True,
-        )
-    else:
-        st.caption("No priced cards in this deck yet.")
-
-with salt_col:
-    st.markdown(
-        "**Top 10 saltiest cards**",
-        help="Hand-maintained EDHREC salt scores (Editor -> Card Data -> Salt Scores) — "
-             "not a Scryfall field, so it's never auto-refreshed.",
+# ------------------------------------------------------------------
+# Top 10 Most Expensive
+# (The Top 10 Saltiest panel that used to sit alongside this — hand-
+# maintained EDHREC salt scores — was removed dashboard-wide in Prompt
+# Pass 5; see PROJECT_STATE.md for why.)
+# ------------------------------------------------------------------
+st.markdown("**Top 10 most expensive cards**", help="By cards.current_price_usd, refreshed via Editor -> Card Data. Single-card (unit) pricing — quantity isn't shown here.")
+price_df = loaders.load_deck_price_top10(conn, deck_id)
+if not price_df.empty:
+    # Prompt Pass 4: quantity column hidden (unit pricing only); a
+    # "purchase price / cost paid" column added, sourced from
+    # collection.price_paid for the lot(s) sleeved in this deck.
+    st.dataframe(
+        price_df.rename(columns={
+            "card_name": "Card", "price": "Price", "purchase_price": "Purchase price / Cost paid",
+        }),
+        column_config={
+            "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
+            "Purchase price / Cost paid": st.column_config.NumberColumn(
+                "Purchase price / Cost paid", format="$%.2f",
+            ),
+        },
+        hide_index=True, use_container_width=True,
     )
-    salt_df = loaders.load_deck_salt_top10(conn, deck_id)
-    if not salt_df.empty:
-        st.dataframe(
-            salt_df.rename(columns={"card_name": "Card", "quantity": "Qty", "salt": "Salt"}),
-            column_config={"Salt": st.column_config.NumberColumn("Salt", format="%.2f")},
-            hide_index=True, use_container_width=True,
-        )
-    else:
-        st.caption("No salt scores recorded for any card in this deck yet.")
+else:
+    st.caption("No priced cards in this deck yet.")
 
 st.divider()
 

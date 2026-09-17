@@ -34,6 +34,11 @@ def load_decks_df(_conn):
     return q.list_decks(_conn)
 
 
+@st.cache_data(show_spinner="Loading deck list…")
+def load_decks_with_covers(_conn):
+    return q.list_decks_with_covers(_conn)
+
+
 @st.cache_data(show_spinner="Loading decklist…")
 def load_deck_cards_df(_conn, deck_id):
     return cv.add_derived_columns(q.deck_cards_dataframe(_conn, deck_id))
@@ -134,11 +139,6 @@ def load_deck_price_top10(_conn, deck_id):
 
 
 @st.cache_data(show_spinner=False)
-def load_deck_salt_top10(_conn, deck_id):
-    return q.deck_salt_top10(_conn, deck_id)
-
-
-@st.cache_data(show_spinner=False)
 def load_theme_catalog(_conn):
     return w.list_theme_catalog(_conn)
 
@@ -171,17 +171,15 @@ def load_player_win_rates(_conn):
 def invalidate_reference_caches():
     """Clear caches for the name-keyed / global reference data touched by
     the Editor's Themes and Game Changers management UI (catalogs,
-    category assignments, salt scores) — these aren't deck- or
-    collection-scoped, so they don't belong in the other two invalidate_*
-    functions."""
+    category assignments) — these aren't deck- or collection-scoped, so
+    they don't belong in the other two invalidate_* functions."""
     load_theme_catalog.clear()
     load_game_changer_categories.clear()
     load_game_changers_overview.clear()
-    load_collection_df.clear()  # salt score / GC category can show in Collection later
+    load_collection_df.clear()  # GC category can show in Collection later
     load_deck_cards_df.clear()
     load_deck_library_df.clear()
     load_deck_price_top10.clear()
-    load_deck_salt_top10.clear()
     load_deck_game_changers.clear()
 
 
@@ -205,6 +203,7 @@ def invalidate_deck_caches(deck_id=None):
     re-running the whole app is cheap enough for a personal-scale dataset
     that fully clearing is the simplest correct option."""
     load_decks_df.clear()
+    load_decks_with_covers.clear()
     load_deck_meta.clear()
     load_deck_cards_df.clear()
     load_deck_library_df.clear()
@@ -220,7 +219,6 @@ def invalidate_deck_caches(deck_id=None):
     load_in_deck_sleeved_count.clear()
     load_dashboard_summary.clear()
     load_deck_price_top10.clear()
-    load_deck_salt_top10.clear()
     load_deck_win_rates.clear()
     load_game_changers_overview.clear()
 

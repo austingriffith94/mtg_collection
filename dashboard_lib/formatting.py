@@ -226,6 +226,36 @@ def classify_mana_colors(type_line, oracle_text, color_identity):
     return {"any": False, "colors": set(), "colorless": True}
 
 
+# ------------------------------------------------------------------
+# Mana curve chart formatting (Prompt Pass 4) — fixed category order and
+# custom colors for the Decks page's "stack by Color" mana curve, so the
+# legend always reads W, U, B, R, G, Multi-color, Colorless regardless of
+# whatever order pandas happened to discover the color_display values in,
+# and each bucket gets a recognizable, consistent color across sessions.
+# ------------------------------------------------------------------
+MANA_CURVE_COLOR_ORDER = ["W", "U", "B", "R", "G", "Multi-color", "Colorless"]
+
+MANA_CURVE_COLOR_HEX = {
+    "W": "#F8E7B9",   # White
+    "U": "#0E68AB",   # Blue
+    "B": "#150B00",   # Black
+    "R": "#D3202A",   # Red
+    "G": "#00733E",   # Green
+    "Multi-color": "#B8860B",  # Dark yellow (goldenrod)
+    "Colorless": "#9E9E9E",    # Grey
+}
+
+
+def mana_curve_color_bucket(color_display):
+    """Collapse a card_view-derived `color_display` value ('W', 'B/R',
+    'W/U/B', 'Colorless', ...) into one of the seven fixed mana-curve
+    buckets: a single WUBRG letter, 'Multi-color' for anything with more
+    than one color, or 'Colorless'."""
+    if not color_display or color_display == COLORLESS_LABEL:
+        return COLORLESS_LABEL
+    return "Multi-color" if "/" in str(color_display) else str(color_display)
+
+
 def is_mana_rock_or_dork(type_line, oracle_text):
     """True for a NONLAND Artifact or Creature with a mana ability of its
     own — the 'Mana Rocks / Mana Dorks' bucket in the Phase 3 weighted
@@ -249,15 +279,28 @@ def scryfall_card_url(set_code, collector_number):
     slug needed) and redirects to the fully-slugged URL, so this is stable
     without needing to store scryfall_uri separately in the DB.
     """
-    if not set_code or collector_number in (None, ""):
+    if not isinstance(set_code, str) or not set_code.strip():
         return None
-    return f"https://scryfall.com/card/{str(set_code).strip().lower()}/{str(collector_number).strip()}"
+    if collector_number is None or not str(collector_number).strip() or str(collector_number).strip().lower() == "nan":
+        return None
+    return f"https://scryfall.com/card/{set_code.strip().lower()}/{str(collector_number).strip()}"
 
 
 def resolve_local_image(local_image_path):
     """Return an absolute path if the cached image file actually exists on
-    disk, else None (so callers can fall back to the remote image_uri)."""
-    if not local_image_path:
+    disk, else None (so callers can fall back to the remote image_uri).
+
+    Guards against a pandas quirk: when a whole column loaded via
+    pd.read_sql_query is NULL for every row (e.g. no deck has a custom
+    cover image yet), pandas types that column as float64 and represents
+    each missing value as NaN — a float, not None. `bool(float('nan'))`
+    is True in Python, so a plain `if not local_image_path:` check does
+    NOT catch it, and the NaN would reach os.path.join() below and raise
+    a TypeError. Requiring an actual non-blank str here (same style as
+    split_multi_value()'s NaN handling above) catches NaN, None, and any
+    other unexpected type in one place, since every caller routes
+    through this function."""
+    if not isinstance(local_image_path, str) or not local_image_path.strip():
         return None
     abs_path = os.path.join(BASE_DIR, local_image_path)
     return abs_path if os.path.isfile(abs_path) else None

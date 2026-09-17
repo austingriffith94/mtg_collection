@@ -3,11 +3,13 @@ Land Probability page.
 
 For a chosen deck: probability of lands (or any specific card) appearing
 in the opening 7, an estimate of hitting your land drop each of the first
-5 turns, the probability of having a mana source for each color in the
-commander's color identity at the opening hand and each of the first 5
-turns, a Phase 3 weighted mana-source-availability graph (turn-by-turn
-expected source counts by category), and a Phase 3 Commander Cast
-Probability engine (turns 1-10).
+5 turns (plus, Prompt Pass 5, the weighted EXPECTED land count by each of
+those turns), the probability of having a mana source for each color in
+the commander's color identity at the opening hand and each of the first
+5 turns, a Phase 3 weighted mana-source-availability graph (turn-by-turn
+expected source counts by category), a Phase 3 Commander Cast Probability
+engine (turns 1-10), and (Prompt Pass 5) a per-card Cast Probability tool
+covering turns 1-8 for any chosen mainboard card.
 
 All of this is hypergeometric draw math (dashboard_lib/probability.py)
 applied to the deck's actual mainboard, MINUS the commander/partner (they
@@ -34,7 +36,9 @@ caption:
     card types (mana rocks/dorks) as an approximation.
   - The Commander Cast Probability engine (Section D) compounds the
     land-drop and color-source factors as if independent — see its own
-    caption for the caveat this introduces.
+    caption for the caveat this introduces. The per-card tool (Section E,
+    Prompt Pass 5) adds a third factor (actually having drawn the card)
+    on top of the same two, with the same independence caveat.
 """
 import sys
 import os
@@ -115,7 +119,11 @@ st.divider()
 st.markdown("### Hitting your land drops")
 st.caption(
     "Probability of having drawn **at least N lands by turn N** — i.e. enough to have "
-    "played a land every turn so far, assuming no mulligans or extra draw."
+    "played a land every turn so far, assuming no mulligans or extra draw. **Expected lands "
+    "seen** answers a different question: the probability-weighted EXPECTED total land count "
+    "by that point (same linearity-of-expectation math as the weighted mana-source graph "
+    "further down) — this can be a fraction, and it's 'how many lands do I expect to have by "
+    "now' rather than 'what's the chance I've hit every drop so far'."
 )
 
 rows = []
@@ -124,11 +132,13 @@ for turn in range(0, 6):
     needed = 1 if turn == 0 else turn
     label = "Opening hand" if turn == 0 else f"Turn {turn}"
     p = prob.prob_at_least(library_size, land_count, seen, needed)
+    expected_lands = prob.expected_count_by_turn(library_size, land_count, turn, on_the_play)
     rows.append({
         "When": label,
         "Cards seen": seen,
         "Lands needed": needed,
         "Probability": f"{p * 100:.1f}%",
+        "Expected lands seen": round(expected_lands, 2),
     })
 land_drop_table = pd.DataFrame(rows).set_index("When")
 st.dataframe(land_drop_table, use_container_width=True)
@@ -157,9 +167,12 @@ else:
         key=f"landprob_{deck_id}_nonland_sources",
         help=(
             "Off (default): only Land-type cards count (MDFC lands included). On: also "
-            "counts nonland mana rocks/dorks, using the same text-based color parser as "
-            "lands — this correctly picks up cards like Birds of Paradise ('add one mana "
-            "of any color') and Sol Ring ('add {C}{C}'), not just plain colored costs."
+            "counts nonland mana rocks/dorks — cards with a verified mana ability of their "
+            "own (formatting.is_mana_rock_or_dork), using the same text-based color parser "
+            "as lands. This correctly picks up cards like Birds of Paradise ('add one mana "
+            "of any color') and Sol Ring ('add {C}{C}'); a same-colored nonland card with no "
+            "mana ability of its own (e.g. a plain red creature) never counts just because "
+            "it shares a color."
         ),
     )
 
@@ -321,7 +334,11 @@ st.markdown("### Check a specific card")
 st.caption(
     "Pure lands (basics and other cards whose type line is only Land) are excluded here — "
     "they're already covered by the land-drop math above. MDFC cards with a land face are "
-    "still included, since their other, non-land face is still a real card to check for."
+    "still included, since their other, non-land face is still a real card to check for. "
+    "**Prompt Pass 5:** this now shows the turn-by-turn probability of actually **playing** "
+    "the chosen card on curve (drawn it, AND had enough lands, AND had the right colored "
+    "sources by that turn), projected through Turn 8 — rather than the old plain draw-"
+    "probability, which looked identical for every singleton regardless of its own mana cost."
 )
 checkable_df = library_df[~library_df["type_line"].fillna("").apply(fmt.is_pure_land)]
 card_names = sorted(checkable_df["name"].unique())
@@ -333,16 +350,46 @@ else:
         "Pick a card from this deck's mainboard", card_names, key=f"landprob_{deck_id}_card_pick"
     )
     card_qty = int(library_df.loc[library_df["name"] == chosen_card, "quantity"].sum())
-    st.caption(f"{card_qty} cop{'y' if card_qty == 1 else 'ies'} of **{chosen_card}** in the {library_size}-card library.")
+    card_row = library_df.loc[library_df["name"] == chosen_card].iloc[0]
+    card_cmc = card_row.get("cmc") or 0
+    card_pips = prob.parse_colored_pips(card_row.get("mana_cost"))
+    pip_desc = ", ".join(f"{c}×{n}" for c, n in card_pips.items()) or "no colored pips"
+    st.caption(
+        f"{card_qty} cop{'y' if card_qty == 1 else 'ies'} of **{chosen_card}** in the "
+        f"{library_size}-card library — mana value {card_cmc:.0f}, cost "
+        f"`{card_row.get('mana_cost') or '—'}` ({pip_desc})."
+    )
 
-    card_rows = []
-    for turn in range(0, 6):
-        seen = prob.cards_seen_by_turn(turn, on_the_play)
-        p = prob.prob_at_least(library_size, card_qty, seen, 1)
-        card_rows.append({
-            "When": "Opening hand" if turn == 0 else f"Turn {turn}",
-            "Cards seen": seen,
-            f"P(≥1 copy)": f"{p * 100:.1f}%",
-        })
-    st.dataframe(pd.DataFrame(card_rows).set_index("When"), use_container_width=True)
+    card_cast_rows = prob.card_cast_probability_by_turn(
+        library_size=library_size,
+        land_count=land_count,
+        source_counts=land_only_source_counts,
+        card_qty=card_qty,
+        card_cmc=card_cmc,
+        colored_pips=card_pips,
+        on_the_play=on_the_play,
+        max_turn=8,
+    )
+    card_cast_df = pd.DataFrame(card_cast_rows)
+    card_cast_df["When"] = card_cast_df["turn"].apply(lambda t: "Opening hand" if t == 0 else f"Turn {t}")
+
+    summary_df = card_cast_df.copy()
+    summary_df["P(playable on curve)"] = (summary_df["probability"] * 100).round(1).astype(str) + "%"
+    st.dataframe(
+        summary_df.set_index("When")[["cards_seen", "P(playable on curve)"]]
+        .rename(columns={"cards_seen": "Cards seen"}),
+        use_container_width=True,
+    )
+
+    with st.expander("Show factor breakdown"):
+        breakdown_df = card_cast_df.copy()
+        breakdown_df["Drawn"] = (breakdown_df["draw_factor"] * 100).round(1).astype(str) + "%"
+        breakdown_df["Land factor"] = (breakdown_df["land_factor"] * 100).round(1).astype(str) + "%"
+        breakdown_df["Color factor"] = (breakdown_df["color_factor"] * 100).round(1).astype(str) + "%"
+        breakdown_df["Combined"] = (breakdown_df["probability"] * 100).round(1).astype(str) + "%"
+        st.dataframe(
+            breakdown_df.set_index("When")[["cards_seen", "Drawn", "Land factor", "Color factor", "Combined"]]
+            .rename(columns={"cards_seen": "Cards seen"}),
+            use_container_width=True,
+        )
 

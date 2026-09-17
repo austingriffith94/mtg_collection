@@ -83,8 +83,27 @@ def count_color_sources(library_df, color, lands_only=True):
     only trusting the color_identity field — this fixes cards like
     Command Tower / City of Brass / Exotic Orchard, whose color_identity
     is empty even though their text fixes for any color.
+
+    Prompt Pass 5 fix: the lands_only=False branch used to classify
+    EVERY nonland card in the pool, not just actual mana sources.
+    classify_mana_colors()'s color_identity fallback (its last resort,
+    for text this regex parser can't read) would then misidentify a
+    plain nonland card — e.g. a vanilla red creature with no mana
+    ability at all — as an "R mana source" purely because its color
+    identity happens to be R, even though it never taps for mana. The
+    nonland side of the pool is now restricted to cards
+    formatting.is_mana_rock_or_dork() actually flags as having a mana
+    ability of their own — the same gate mana_source_category_counts()
+    below already used, so the two stay consistent with each other.
     """
-    pool = library_df[library_df["is_land"]] if lands_only else library_df
+    if lands_only:
+        pool = library_df[library_df["is_land"]]
+    else:
+        is_source = library_df["is_land"] | library_df.apply(
+            lambda r: fmt.is_mana_rock_or_dork(r.get("type_line"), r.get("oracle_text")),
+            axis=1,
+        )
+        pool = library_df[is_source]
     if pool.empty:
         return 0
 
@@ -134,19 +153,35 @@ def mana_source_category_counts(library_df):
     return totals
 
 
+def expected_count_by_turn(library_size, count, turn, on_the_play):
+    """The probability-weighted EXPECTED number of a `count`-total group
+    seen by `turn` (opening hand seen at turn=0), using linearity of
+    expectation for the hypergeometric distribution: E[seen] = count *
+    (cards_seen / library_size). This is an expected COUNT, not a P(at
+    least one) probability — it answers 'how many of this do I expect to
+    have access to by now'. Originally the per-category math inside
+    weighted_mana_expectation() below (Phase 3); pulled out as its own
+    single-count helper in Prompt Pass 5 so the Land Probability page's
+    plain "expected lands seen by turn N" figure can reuse it directly
+    without building a whole category dict for one number."""
+    if library_size <= 0:
+        return 0.0
+    seen = min(cards_seen_by_turn(turn, on_the_play), library_size)
+    return count * seen / library_size
+
+
 def weighted_mana_expectation(library_size, category_counts, turn, on_the_play):
     """Phase 3 — the probability-weighted EXPECTED number of sources from
-    each category seen by `turn` (opening hand seen at turn=0), using
-    linearity of expectation for the hypergeometric distribution:
-    E[sources seen] = category_total * (cards_seen / library_size). This
-    is an expected count, not a P(at least one) probability — it answers
+    each category seen by `turn` (opening hand seen at turn=0). This is
+    an expected count, not a P(at least one) probability — it answers
     'how many of this category do I expect to have access to by now',
-    which composes cleanly across categories in a stacked bar."""
-    if library_size <= 0:
-        return {cat: 0.0 for cat in category_counts}
-    seen = cards_seen_by_turn(turn, on_the_play)
-    seen = min(seen, library_size)
-    return {cat: total * seen / library_size for cat, total in category_counts.items()}
+    which composes cleanly across categories in a stacked bar. Thin
+    wrapper around expected_count_by_turn() (Prompt Pass 5) applied to
+    every category in the dict."""
+    return {
+        cat: expected_count_by_turn(library_size, total, turn, on_the_play)
+        for cat, total in category_counts.items()
+    }
 
 
 _PIP_RE = re.compile(r"\{([^}]+)\}")
@@ -208,5 +243,56 @@ def commander_cast_probability_by_turn(
             "land_factor": land_factor,
             "color_factor": color_factor,
             "probability": land_factor * color_factor,
+        })
+    return rows
+
+
+def card_cast_probability_by_turn(
+    library_size, land_count, source_counts, card_qty, card_cmc, colored_pips, on_the_play, max_turn=8
+):
+    """Prompt Pass 5 — per-card version of commander_cast_probability_by_
+    turn() above, powering the Land Probability page's "Check a specific
+    card" tool. Unlike the commander (which always sits in the command
+    zone, never shuffled into the library), an ordinary library card
+    also has to actually be DRAWN before it can be cast, so this adds a
+    third independent factor on top of the commander engine's two:
+
+      1) draw_factor  — P(at least 1 copy of the card drawn by this
+         turn), using the card's own quantity in the shuffled library —
+         this is what makes the result differ card-to-card even though
+         every nonland card here is a 1-of; the old version of this tool
+         only ever showed this factor alone, which is why every
+         singleton looked identical.
+      2) land_factor  — P(at least `card_cmc` lands drawn by this turn),
+         same land-drop math used elsewhere on this page.
+      3) color_factor — the PRODUCT, across every distinct colored pip in
+         the card's own cost, of P(at least `need` sources of that color
+         drawn by this turn) — using source_counts (see
+         count_color_sources()).
+
+    combined = draw_factor * land_factor * color_factor is reported as
+    the estimated probability of having BOTH drawn this specific card AND
+    had the mana to cast it, by that turn. As with the commander engine,
+    treating these three factors as independent is an optimistic
+    simplification — the same physical draw can't satisfy two of these
+    requirements at once — so read this as an estimate, not an exact
+    joint probability. turn=0 is the opening hand, matching the rest of
+    this page's convention; max_turn defaults to 8 per spec."""
+    needed_lands = max(0, int(round(card_cmc or 0)))
+    rows = []
+    for turn in range(0, max_turn + 1):
+        seen = cards_seen_by_turn(turn, on_the_play)
+        draw_factor = prob_at_least(library_size, card_qty, seen, 1)
+        land_factor = prob_at_least(library_size, land_count, seen, needed_lands)
+        color_factor = 1.0
+        for color, need in (colored_pips or {}).items():
+            color_factor *= prob_at_least(library_size, source_counts.get(color, 0), seen, need)
+        rows.append({
+            "turn": turn,
+            "cards_seen": seen,
+            "draw_factor": draw_factor,
+            "land_factor": land_factor,
+            "color_factor": color_factor,
+            "probability": draw_factor * land_factor * color_factor,
         })
     return rows

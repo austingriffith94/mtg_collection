@@ -11,6 +11,9 @@ Collection page — browse the full physical collection.
   value) all combine (AND across facets, "any of" within a facet).
   Showcase/Borderless are Scryfall frame-treatment flags (Phase 2),
   populated by the Editor's Card Data refresh / any new card fetch.
+- Deck-status toggle (Prompt Pass 4): All / In a deck / Not in a deck /
+  Not in a deck OR another location — see the comment above that control
+  below for exactly what each option means.
 - "Group / breakout by" lets you layer multiple groupings (e.g. Type, then
   Rarity within each type) — each top-level group is a collapsible
   section.
@@ -22,13 +25,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
 
-from dashboard_lib import db, loaders, formatting as fmt
+from dashboard_lib import db, loaders, formatting as fmt, moxfield_export
 from dashboard_lib import card_view as cv
 
 st.set_page_config(page_title="Collection · MTG Dashboard", page_icon="📦", layout="wide")
 
 db.require_db()
 conn = db.get_connection()
+
+MOXFIELD_EXPORT_DIR = os.path.join(db.BASE_DIR, "moxfield_exports")
 
 st.title("📦 Collection")
 
@@ -47,6 +52,38 @@ st.caption(
     "Tracked figures exclude untracked bulk lots (e.g. basics with no counted "
     "quantity) — those are in the collection but not summed above."
 )
+
+with st.expander("📋 Export to Moxfield (Collection CSV)"):
+    st.caption(
+        "Moxfield-compatible collection CSV — one row per printing + foil combination "
+        "(quantities summed across any collection lots sharing that exact printing). "
+        "'Owned NOT in a deck' only includes printings with zero copies used in any "
+        "deck's mainboard; Tradelist Count is 0 for anything run in a deck either way."
+    )
+    export_scope = st.radio(
+        "Which cards?", ["Full Collection", "Owned NOT in a deck"],
+        key="collection_moxfield_scope", horizontal=True,
+    )
+    export_not_in_deck = export_scope == "Owned NOT in a deck"
+    export_rows = moxfield_export.collection_export_rows(conn, only_not_in_deck=export_not_in_deck)
+    if not export_rows:
+        st.caption("Nothing to export for this scope yet.")
+    else:
+        st.caption(f"{len(export_rows)} printing/foil row(s) ready to export.")
+        export_csv_text = moxfield_export.export_collection_csv_text(conn, only_not_in_deck=export_not_in_deck)
+        scope_suffix = "not_in_deck" if export_not_in_deck else "full"
+        dl_col, save_col = st.columns(2)
+        dl_col.download_button(
+            "⬇️ Download CSV", data=export_csv_text,
+            file_name=f"moxfield_collection_{scope_suffix}.csv", mime="text/csv",
+            key=f"collection_moxfield_dl_{scope_suffix}",
+        )
+        if save_col.button("💾 Save to file", key=f"collection_moxfield_save_{scope_suffix}"):
+            os.makedirs(MOXFIELD_EXPORT_DIR, exist_ok=True)
+            out_path = os.path.join(MOXFIELD_EXPORT_DIR, f"moxfield_collection_{scope_suffix}.csv")
+            with open(out_path, "w", encoding="utf-8", newline="") as f:
+                f.write(export_csv_text)
+            st.success(f"Saved to `{os.path.relpath(out_path, db.BASE_DIR)}`")
 
 filtered = cv.render_filter_panel(
     full_df,
@@ -68,6 +105,37 @@ filtered = cv.render_filter_panel(
         ("is_borderless", "Borderless"),
     ],
 )
+
+# Deck-status toggle (Prompt Pass 4). "in_deck" comes straight from
+# queries.collection_dataframe() — 1 if this printing's scryfall_id is
+# used in ANY deck's mainboard (deck_cards), the same "spoken for by a
+# deck" test writes.prune_collection() uses. "Not in a deck OR another
+# location" narrows further to cards that are unaccounted for on BOTH
+# fronts at once — not run in any deck AND no location recorded either
+# (blank/NULL) — rather than the broader "not in a deck, or has some
+# other location" reading, since that's the bucket most useful for
+# spotting cards that genuinely have no home yet.
+deck_status_key = "collection_deck_status"
+cv.register_filter_key(deck_status_key)
+deck_status = st.sidebar.selectbox(
+    "Deck status",
+    ["All", "In a deck", "Not in a deck", "Not in a deck OR another location"],
+    key=deck_status_key,
+    help=(
+        "In a deck: this printing is used in at least one deck's mainboard. "
+        "Not in a deck OR another location: not run in any deck AND has no "
+        "Location recorded either — i.e. truly unassigned."
+    ),
+)
+if deck_status == "In a deck":
+    filtered = filtered[filtered["in_deck"] == 1]
+elif deck_status == "Not in a deck":
+    filtered = filtered[filtered["in_deck"] == 0]
+elif deck_status == "Not in a deck OR another location":
+    filtered = filtered[
+        (filtered["in_deck"] == 0)
+        & (filtered["location"].isna() | (filtered["location"].astype(str).str.strip() == ""))
+    ]
 
 column_config = cv.base_column_config()
 column_config.update(

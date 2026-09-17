@@ -56,6 +56,28 @@ def find_local_card(conn, name=None, set_code=None, collector_number=None):
     return None
 
 
+def _insert_card_row(conn, row):
+    """Shared INSERT OR IGNORE for a normalized scryfall_lookup.to_card_row()
+    dict — used by both resolve_or_fetch_card() (a single new printing) and
+    fetch_additional_printings() (Prompt Pass 6, potentially several at
+    once), so the column list only lives in one place. Does NOT commit —
+    callers batch their own commit()."""
+    conn.execute(
+        """INSERT OR IGNORE INTO cards (
+            scryfall_id, oracle_id, name, set_code, collector_number, type_line,
+            mana_cost, cmc, color_identity, oracle_text, rarity, image_uri,
+            is_basic_land, is_game_changer, is_reserved, is_showcase, is_borderless,
+            commander_legal, current_price_usd,
+            price_updated_at, last_fetched_at
+        ) VALUES (:scryfall_id, :oracle_id, :name, :set_code, :collector_number, :type_line,
+                  :mana_cost, :cmc, :color_identity, :oracle_text, :rarity, :image_uri,
+                  :is_basic_land, :is_game_changer, :is_reserved, :is_showcase, :is_borderless,
+                  :commander_legal, :current_price_usd,
+                  :price_updated_at, :last_fetched_at)""",
+        row,
+    )
+
+
 def resolve_or_fetch_card(conn, name=None, set_code=None, collector_number=None):
     """Returns (scryfall_id, was_newly_fetched, error). error is None on
     success. Checks locally first (no network needed); falls back to a
@@ -99,19 +121,57 @@ def resolve_or_fetch_card(conn, name=None, set_code=None, collector_number=None)
     row["price_updated_at"] = today
     row["last_fetched_at"] = today
 
-    conn.execute(
-        """INSERT OR IGNORE INTO cards (
-            scryfall_id, oracle_id, name, set_code, collector_number, type_line,
-            mana_cost, cmc, color_identity, oracle_text, rarity, image_uri,
-            is_basic_land, is_game_changer, is_reserved, is_showcase, is_borderless,
-            commander_legal, current_price_usd,
-            price_updated_at, last_fetched_at
-        ) VALUES (:scryfall_id, :oracle_id, :name, :set_code, :collector_number, :type_line,
-                  :mana_cost, :cmc, :color_identity, :oracle_text, :rarity, :image_uri,
-                  :is_basic_land, :is_game_changer, :is_reserved, :is_showcase, :is_borderless,
-                  :commander_legal, :current_price_usd,
-                  :price_updated_at, :last_fetched_at)""",
-        row,
-    )
+    _insert_card_row(conn, row)
     conn.commit()
     return row["scryfall_id"], True, None
+
+
+def fetch_additional_printings(conn, name):
+    """Prompt Pass 6 — powers the Collection tab's "look up more
+    printings" button: queries Scryfall for EVERY printing of `name`
+    (via ScryfallClient.get_all_printings(), unique=prints) and inserts
+    any not already in the local `cards` table (existing rows are left
+    untouched — INSERT OR IGNORE via _insert_card_row()). This is the one
+    place in the dashboard that deliberately fetches more than "whatever's
+    actually referenced" (scryfall_lookup.py's module docstring) — it's an
+    explicit, user-initiated action for a card the user already confirmed
+    they own/want, not a background bulk sync.
+
+    Returns (added_count, error) — error is a message on failure (missing
+    `requests`, or nothing found on Scryfall for this name), else None.
+    added_count is 0 (not an error) if Scryfall has the card but every
+    printing it returned was already known locally."""
+    name = (name or "").strip()
+    if not name:
+        return 0, "Enter a card name first."
+
+    try:
+        scryfall_lookup = _load_scryfall_module()
+    except ImportError:
+        return 0, (
+            "The `requests` package isn't installed, so a live Scryfall lookup "
+            "isn't possible. Run `pip install requests` to enable this."
+        )
+
+    client = scryfall_lookup.ScryfallClient(verbose=False)
+    results = client.get_all_printings(name)
+    if not results:
+        return 0, f"No printings found on Scryfall for '{name}'."
+
+    today = datetime.date.today().isoformat()
+    added = 0
+    for data in results:
+        row = scryfall_lookup.to_card_row(data)
+        if not row:
+            continue
+        already_known = conn.execute(
+            "SELECT 1 FROM cards WHERE scryfall_id=?", (row["scryfall_id"],)
+        ).fetchone()
+        if already_known:
+            continue
+        row["price_updated_at"] = today
+        row["last_fetched_at"] = today
+        _insert_card_row(conn, row)
+        added += 1
+    conn.commit()
+    return added, None

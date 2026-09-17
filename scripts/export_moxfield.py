@@ -10,7 +10,7 @@ falling back to a default Scryfall printing only for cards you don't
 own yet). That's what makes the pasted-in art match what you actually
 have.
 
-This is also available directly in the dashboard now (Decks & Maybeboard
+This is also available directly in the dashboard now (Decks
 page — copy to clipboard or save to moxfield_exports/), which shares the
 exact same formatting logic via dashboard_lib/moxfield_export.py so the
 two never drift apart. This CLI script remains useful for scripting/

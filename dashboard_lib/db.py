@@ -6,6 +6,7 @@ import os
 import streamlit as st
 
 from . import queries as q
+from . import card_view as cv
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "mtg_collection.db")
@@ -39,9 +40,18 @@ def refresh_data_button(container=None):
     """Sidebar button to drop cached query results (and the cached
     connection) after re-running migrate.py while the app is already
     running — otherwise a rebuilt mtg_collection.db can be masked by a
-    stale open file handle / cached data."""
+    stale open file handle / cached data. Also resets every active
+    sidebar filter (search text, facet selections, bool toggles,
+    price/CMC range, and any bespoke filter a page registered) back to
+    its default, on every page, so a refresh always starts from a clean
+    slate rather than re-applying selections that may no longer match
+    the rebuilt data."""
     c = container or st.sidebar
-    if c.button("🔄 Refresh data", help="Click after re-running the migration so the dashboard picks up the rebuilt database."):
+    if c.button(
+        "🔄 Refresh data",
+        help="Click after re-running the migration so the dashboard picks up the rebuilt database. Also resets all active sidebar filters.",
+    ):
+        cv.reset_filters()
         st.cache_data.clear()
         get_connection.clear()
         st.rerun()

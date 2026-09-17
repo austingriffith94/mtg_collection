@@ -96,6 +96,40 @@ class ScryfallClient:
         self._miss_log.append((name, "not found by exact or fuzzy name"))
         return None
 
+    def get_all_printings(self, name):
+        """ALL printings of a card by exact name, via Scryfall's search
+        endpoint (`unique=prints`) — used by the dashboard's Collection
+        tab "look up more printings" button (Prompt Pass 6) so a card
+        already known under one printing can offer every other printing
+        too, not just the one(s) already fetched. Unlike get_by_name()
+        (which returns Scryfall's single "default" printing as a
+        placeholder), this deliberately fetches the full print run for a
+        card the user has explicitly asked to see more printings of.
+        Tries the full name first, then the MDFC front face if that
+        misses. Returns a list of card JSON objects (possibly empty; NOT
+        None on a miss, so callers can treat "nothing found" uniformly
+        without a None-check)."""
+        name = name.strip()
+        front_face = name.split(" // ")[0].strip()
+
+        data = self._get(
+            f"{SCRYFALL_API}/cards/search",
+            params={"q": f'!"{name}"', "unique": "prints", "order": "released", "dir": "desc"},
+        )
+        if data and data.get("data"):
+            return data["data"]
+
+        if front_face != name:
+            data = self._get(
+                f"{SCRYFALL_API}/cards/search",
+                params={"q": f'!"{front_face}"', "unique": "prints", "order": "released", "dir": "desc"},
+            )
+            if data and data.get("data"):
+                return data["data"]
+
+        self._miss_log.append((name, "no printings found by exact-name search"))
+        return []
+
     def print_misses(self):
         if not self._miss_log:
             print("  (no Scryfall lookup misses)")

@@ -4,8 +4,13 @@ MTG Collection Dashboard — main entry point.
 Launch via run.py ("2) Launch dashboard"), or directly with:
     streamlit run dashboard.py
 
-This file is the Streamlit "home" page. The Collection and Decks &
-Maybeboard pages live under pages/ and appear automatically in the
+This file is the Streamlit "home" page — a landing page of image-backed
+deck tiles (Prompt Pass 4). Clicking a tile navigates straight to that
+deck's page on the Decks page (pages/2_Decks.py), which reads the
+`deck_id` query param the tile's link carries to pre-select it.
+
+The Collection, Decks, Land & Color Probability, Editor, and Commander
+Game Tracking pages live under pages/ and appear automatically in the
 sidebar nav (Streamlit's native multipage-app convention).
 """
 import sys
@@ -16,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import streamlit as st
 
 from dashboard_lib import db, loaders
+from dashboard_lib import card_view as cv
 
 st.set_page_config(page_title="MTG Collection Dashboard", page_icon="🃏", layout="wide")
 
@@ -37,6 +43,17 @@ c4.metric("Games logged", summary["games_logged"])
 
 st.divider()
 
+st.subheader("Your decks")
+st.caption("Click a deck to jump straight to its page.")
+
+decks_with_covers = loaders.load_decks_with_covers(conn)
+cv.render_deck_landing_grid(decks_with_covers)
+
+if summary["maybeboard_rows"]:
+    st.caption(f"{summary['maybeboard_rows']} maybeboard rows across all decks.")
+
+st.divider()
+
 st.markdown(
     """
 Use the sidebar to jump to:
@@ -45,11 +62,13 @@ Use the sidebar to jump to:
   image-grid view (48 cards per page by default), with layered filters and
   breakouts (color, type, rarity, set, location, Showcase/Borderless, and
   more), plus a one-click link out to each card's Scryfall page.
-- **🃏 Decks & Maybeboard** — pick a deck to see its "Turn 0" summary (colors,
-  bracket, combos/tutors, win conditions/strengths/weaknesses, themes,
-  mana curve, optimized mana, Game Changers, Top 10 Most Expensive / Top 10
-  Saltiest cards, and an optional custom cover image), then browse its
-  mainboard and/or maybeboard the same way as the Collection page.
+- **🃏 Decks** — pick a deck (or click its tile above) to see its "Turn 0"
+  summary (colors, bracket, combos/tutors), win conditions/strengths/
+  weaknesses, optimized mana, Game Changers, and Reserved List right
+  underneath, then themes, mana curve, type breakdown, strategy tags,
+  Top 10 Most Expensive / Top 10 Saltiest cards, and an optional custom
+  cover image, before browsing its mainboard and/or maybeboard the same
+  way as the Collection page.
 - **🎲 Land & Color Probability** — for any deck: probability of drawing
   lands (or any specific card) in your opening 7, an estimate of hitting
   your land drop each of the first 5 turns, and the probability of having
@@ -71,6 +90,3 @@ Use the sidebar to jump to:
   game history, and compare win rates by deck and by player.
 """
 )
-
-if summary["maybeboard_rows"]:
-    st.caption(f"{summary['maybeboard_rows']} maybeboard rows across all decks.")

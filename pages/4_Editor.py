@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pandas as pd
 import streamlit as st
 
-from dashboard_lib import db, loaders, writes, card_resolver, refresh, formatting as fmt
+from dashboard_lib import db, loaders, writes, card_resolver, refresh, formatting as fmt, queries as q
 
 DECK_COVER_DIR = os.path.join(db.BASE_DIR, "image_cache", "deck_covers")
 
@@ -167,7 +167,7 @@ with tab_info:
 
         st.divider()
         st.markdown("#### Cover image")
-        st.caption("A custom PNG shown as this deck's thumbnail on the Decks & Maybeboard page.")
+        st.caption("A custom PNG shown as this deck's thumbnail on the Decks page and the home page's deck tiles.")
         current_cover = fmt.resolve_local_image(meta.get("cover_image_path"))
         cov_col1, cov_col2 = st.columns([1, 3])
         if current_cover:
@@ -434,9 +434,27 @@ with tab_main:
                     st.error(err)
                 else:
                     writes.add_deck_card(conn, deck_id, sid, quantity=int(main_add_qty))
+                    # Deck Building Auto-Add (Prompt Pass 6): if this exact
+                    # printing has no collection lot at all yet, give it a
+                    # starter one (quantity matching what was just added,
+                    # Location defaulted to this deck's name) rather than
+                    # letting the deck and the collection quietly drift
+                    # apart. A no-op if a lot for this printing already
+                    # exists. Deliberately NOT done for maybeboard adds
+                    # (see writes.auto_add_to_collection's docstring).
+                    deck_name = loaders.load_deck_meta(conn, deck_id).get("name")
+                    auto_added_id = writes.auto_add_to_collection(
+                        conn, sid, quantity=int(main_add_qty), location=deck_name,
+                    )
                     loaders.invalidate_deck_caches()
+                    if auto_added_id:
+                        loaders.invalidate_collection_caches()
                     note = " (fetched fresh from Scryfall)" if was_new else ""
-                    st.success(f"Added {main_add_qty}x {main_add_name.strip() or sid}{note}.")
+                    auto_note = (
+                        " Also added a starter collection lot for it (wasn't tracked yet)."
+                        if auto_added_id else ""
+                    )
+                    st.success(f"Added {main_add_qty}x {main_add_name.strip() or sid}{note}.{auto_note}")
                     st.rerun()
 
         st.divider()
@@ -553,11 +571,72 @@ with tab_maybe:
 # ------------------------------------------------------------------
 with tab_coll:
     st.markdown("**Add a card to your collection**")
-    st.caption("Set code + collector number picks an exact printing; leave them blank to match by name.")
-    cc1, cc2, cc3 = st.columns(3)
-    coll_add_name = cc1.text_input("Card name", key="editor_coll_add_name")
-    coll_add_set = cc2.text_input("Set code", key="editor_coll_add_set")
-    coll_add_num = cc3.text_input("Collector number", key="editor_coll_add_num")
+    st.caption(
+        "Start typing a card name — matches already in your database appear as "
+        "suggestions below (refreshes once you finish typing or press Enter, since "
+        "that's as close to live autocomplete as plain Streamlit widgets get). Pick "
+        "one to choose the exact printing you own, or leave it on \"use exactly what "
+        "I typed\" / fill in Set + Collector Number directly for a brand-new card "
+        "(resolved via a live Scryfall lookup when you click Add)."
+    )
+    coll_add_name = st.text_input("Card name", key="editor_coll_add_name")
+
+    # Prompt Pass 6 — auto-complete dropdown: search the local `cards`
+    # table (the dashboard's own "master card registry") for name
+    # matches as the user types, then a second selector for the exact
+    # printing once a card name is settled on.
+    NO_NAME_MATCH = "— Use exactly what I typed above —"
+    selected_card_name = coll_add_name.strip() or None
+    if coll_add_name.strip():
+        name_matches = q.search_card_names(conn, coll_add_name.strip())
+        if name_matches:
+            match_choice = st.selectbox(
+                "Matching cards in your database", name_matches + [NO_NAME_MATCH],
+                key="editor_coll_add_match_pick",
+            )
+            if match_choice != NO_NAME_MATCH:
+                selected_card_name = match_choice
+
+    selected_printing = None
+    if selected_card_name:
+        printings = q.card_printings_by_name(conn, selected_card_name)
+        if printings:
+            def _printing_label(p):
+                return (
+                    f"{(p['set_code'] or '?').upper()} #{p['collector_number']} "
+                    f"— {fmt.format_money(p['current_price_usd'])}"
+                )
+            printing_labels = [_printing_label(p) for p in printings]
+            printing_choice = st.selectbox(
+                "Printing", printing_labels,
+                key=f"editor_coll_add_printing_pick_{selected_card_name}",
+            )
+            selected_printing = printings[printing_labels.index(printing_choice)]
+        else:
+            st.caption(f"'{selected_card_name}' isn't in your local database under any printing yet.")
+
+        if card_resolver.scryfall_available():
+            if st.button("🔍 Check Scryfall for other printings", key="editor_coll_add_more_printings_btn"):
+                added, err = card_resolver.fetch_additional_printings(conn, selected_card_name)
+                if err:
+                    st.error(err)
+                elif added:
+                    st.success(f"Found {added} new printing(s) for '{selected_card_name}'.")
+                    st.rerun()
+                else:
+                    st.info("No additional printings found beyond what's already in your database.")
+
+    if selected_printing:
+        st.caption(
+            f"Selected printing: **{selected_printing['set_code'].upper()} "
+            f"#{selected_printing['collector_number']}**"
+        )
+        coll_add_set = ""
+        coll_add_num = ""
+    else:
+        set_col, num_col = st.columns(2)
+        coll_add_set = set_col.text_input("Set code (optional — pins an exact printing)", key="editor_coll_add_set")
+        coll_add_num = num_col.text_input("Collector number", key="editor_coll_add_num")
 
     cc4, cc5, cc6, cc7 = st.columns(4)
     coll_add_qty = cc4.number_input("Quantity", min_value=0, value=1, step=1, key="editor_coll_add_qty")
@@ -573,29 +652,38 @@ with tab_coll:
     coll_add_source = cc9.text_input("Source (optional)", key="editor_coll_add_source")
 
     if st.button("➕ Add to collection", key="editor_coll_add_btn"):
-        if not coll_add_name.strip() and not (coll_add_set.strip() and coll_add_num.strip()):
+        # Prompt Pass 6: a printing chosen from the autocomplete/printing
+        # selectors above is used directly (already a known scryfall_id,
+        # no need to re-resolve it) — otherwise fall back to the
+        # existing name/set/number resolution (local match, else a live
+        # Scryfall lookup) exactly as before.
+        if selected_printing:
+            sid, was_new, err = selected_printing["scryfall_id"], False, None
+        elif not selected_card_name and not (coll_add_set.strip() and coll_add_num.strip()):
             st.warning("Enter a card name, or a set code + collector number.")
+            sid, was_new, err = None, False, None
         else:
             sid, was_new, err = card_resolver.resolve_or_fetch_card(
-                conn, name=coll_add_name.strip() or None,
+                conn, name=selected_card_name,
                 set_code=coll_add_set.strip() or None, collector_number=coll_add_num.strip() or None,
             )
-            if err:
-                st.error(err)
-            else:
-                writes.add_collection_lot(
-                    conn, sid,
-                    quantity=int(coll_add_qty) if coll_add_qty else None,
-                    foil=coll_add_foil,
-                    location=coll_add_location.strip() or None,
-                    date_acquired=coll_add_date.isoformat() if coll_add_date else None,
-                    price_paid=float(coll_add_price) if coll_add_price else None,
-                    source=coll_add_source.strip() or None,
-                )
-                loaders.invalidate_collection_caches()
-                note = " (fetched fresh from Scryfall)" if was_new else ""
-                st.success(f"Added to collection{note}.")
-                st.rerun()
+
+        if err:
+            st.error(err)
+        elif sid:
+            writes.add_collection_lot(
+                conn, sid,
+                quantity=int(coll_add_qty) if coll_add_qty else None,
+                foil=coll_add_foil,
+                location=coll_add_location.strip() or None,
+                date_acquired=coll_add_date.isoformat() if coll_add_date else None,
+                price_paid=float(coll_add_price) if coll_add_price else None,
+                source=coll_add_source.strip() or None,
+            )
+            loaders.invalidate_collection_caches()
+            note = " (fetched fresh from Scryfall)" if was_new else ""
+            st.success(f"Added to collection{note}.")
+            st.rerun()
 
     st.divider()
     st.markdown("**Edit / remove collection lots**")
@@ -765,8 +853,7 @@ with tab_carddata:
         "to run anytime, as often as you like. Needs network access and the `requests` "
         "package. Afterward, it also automatically prunes your collection: any lot with no "
         "assigned location, a quantity of 0/none, and not present in any deck's mainboard or "
-        "maybeboard is deleted. Note: it does NOT touch Salt Scores below — EDHREC salt isn't "
-        "a Scryfall field, so that stays hand-maintained."
+        "maybeboard is deleted."
     )
     total_cards = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
     st.caption(f"{total_cards} card(s) in your database.")
@@ -802,45 +889,13 @@ with tab_carddata:
         else:
             st.caption("Nothing to prune from the collection this time.")
 
-    st.divider()
-    st.markdown("**Salt Scores (EDHREC)**")
-    st.caption(
-        "EDHREC salt scores aren't exposed by the Scryfall API, so they're maintained by hand "
-        "here rather than fetched automatically — used by the Decks & Maybeboard page's "
-        "'Top 10 saltiest cards' panel. Leave a card blank to exclude it from that panel."
-    )
-    salt_search = st.text_input("Search by card name", key="editor_salt_search")
-    salt_rows_query = conn.execute(
-        "SELECT scryfall_id, name, set_code, edhrec_salt FROM cards ORDER BY name COLLATE NOCASE"
-    ).fetchall()
-    salt_df_full = pd.DataFrame(salt_rows_query, columns=["scryfall_id", "Card", "Set", "Salt"])
-    salt_scoped = (
-        salt_df_full[salt_df_full["Card"].str.contains(salt_search, case=False, na=False, regex=False)]
-        if salt_search else salt_df_full
-    )
-    if salt_search and salt_scoped.empty:
-        st.caption("No matching cards.")
-    elif not salt_search:
-        st.caption("Type a card name above to find and edit its salt score.")
-    else:
-        salt_edited = st.data_editor(
-            salt_scoped,
-            column_config={
-                "scryfall_id": None,
-                "Card": st.column_config.TextColumn("Card", disabled=True),
-                "Set": st.column_config.TextColumn("Set", disabled=True),
-                "Salt": st.column_config.NumberColumn("Salt score", min_value=0.0, max_value=5.0, step=0.01, format="%.2f"),
-            },
-            column_order=["Card", "Set", "Salt"],
-            hide_index=True, use_container_width=True,
-            key=f"editor_salt_editor_{salt_search}",
-        )
-        if st.button("💾 Save salt scores", key="editor_salt_save"):
-            salt_updates = {
-                row["scryfall_id"]: (float(row["Salt"]) if pd.notna(row["Salt"]) else None)
-                for _, row in salt_edited.iterrows()
-            }
-            changed = writes.bulk_set_salt_scores(conn, salt_updates)
-            loaders.invalidate_reference_caches()
-            st.success(f"Updated salt scores on {changed} card(s).")
-            st.rerun()
+    # The "Salt Scores (EDHREC)" sub-editor that used to live here was
+    # removed dashboard-wide in Prompt Pass 5: no lightweight public API
+    # exposes EDHREC salt scores, and the only alternative data source
+    # (MTGJSON's edhrecSaltiness field) only ships inside its full
+    # AllPrintings-scale exports — far too heavy an ongoing dependency
+    # for one hand-sized field in a personal-scale tool. See
+    # PROJECT_STATE.md for the full writeup. cards.edhrec_salt itself is
+    # left in the schema untouched (additive policy), so any values
+    # entered before this pass aren't lost, there's just no editor for it
+    # anymore.

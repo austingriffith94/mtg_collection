@@ -20,7 +20,7 @@ mtg_dashboard/
 ├── dashboard.py                      # Streamlit entry point (home page)
 ├── pages/                             # Streamlit auto-discovers these as nav tabs
 │   ├── 1_Collection.py
-│   ├── 2_Decks_and_Maybeboard.py
+│   ├── 2_Decks.py
 │   ├── 3_Land_Probability.py
 │   ├── 4_Editor.py
 │   └── 5_Commander_Game_Tracking.py
@@ -52,6 +52,7 @@ mtg_dashboard/
     │                                  # reused directly by dashboard_lib/card_resolver.py
     ├── migrate.py                    # main migration script — one-way, CSV -> DB, run once
     ├── export_moxfield.py            # deck → Moxfield paste format (CLI; dashboard has this too)
+    ├── export_moxfield_collection.py  # collection → Moxfield CSV import format (CLI; dashboard has this too)
     ├── refresh_card_data.py          # refresh Scryfall fields for existing cards (CLI; dashboard has this too)
     ├── sync_images.py                 # local image cache: download + prune
     └── _test_migrate_offline.py      # dev-only: validates logic with fake
@@ -92,12 +93,13 @@ tightly:
 | `migrate.py` | ✅ | ✅ (via `scryfall_lookup.py`) | — |
 | `sync_images.py` | — | ✅ | — |
 | `export_moxfield.py` | — | — | — |
+| `export_moxfield_collection.py` | — | — | — |
 | `refresh_card_data.py` | — | ✅ (via `scryfall_lookup.py`) | — |
 | `dashboard.py` + `pages/*.py` | ✅ | optional* | ✅ |
 
 `pandas` is used by migration and the dashboard, but not image sync or
-Moxfield export. `streamlit` is dashboard-only. Moxfield export is pure
-stdlib — no install needed at all for that one.
+either Moxfield export. `streamlit` is dashboard-only. Both Moxfield
+exports are pure stdlib — no install needed at all for those two.
 
 \* `requests` is only needed by the Editor page's "add a card" forms
 (Mainboard/Maybeboard/Collection tabs) and the "Card Data" tab's refresh
@@ -152,32 +154,54 @@ everything under `pages/`) — make sure `streamlit` is installed (see
 "Setup" above), then run the migration first if you haven't already.
 
 The dashboard currently covers:
+- **Home** — a landing page of image-backed deck tiles (cover image if
+  you've set one, else the commander's own card art); clicking a tile
+  jumps straight to that deck on the Decks page below.
 - **Collection** — table or image-grid view (48 cards per page by default)
   of your full physical collection, with layered filters (color, type,
   rarity, set, location, foil, basic land, Game Changer, Reserved List,
-  Showcase, Borderless, price, mana value) and multi-level
-  "group by" breakouts. Every card links out to its Scryfall page from
-  both views.
-- **Decks & Maybeboard** — pick any deck for a "Turn 0"
-  summary: commander/partner, colors, bracket, interaction, combos,
-  tutors, win/loss record, deck value, and how many of its cards are
-  physically sleeved in it; an optional custom cover-image thumbnail;
-  win conditions/strengths/weaknesses; themes;
-  mana curve; type breakdown; strategy tag breakdown; optimized-mana
-  summary; a Game Changers table showing Scryfall's live flag next to
-  your own category tag (drift highlighted); a Reserved List table;
-  Top 10 Most Expensive and Top 10 Saltiest card lists (salt is
-  hand-maintained EDHREC data, not a Scryfall field); and
-  an in-panel Moxfield export (copy-to-clipboard code box, or save a
-  `.txt` file, mainboard-only or with maybeboard). Below that, the same
-  table/grid browser as Collection, scoped to Mainboard, Maybeboard, or
-  both at once.
+  Showcase, Borderless, price, mana value), a deck-status toggle (In a
+  deck / Not in a deck / Not in a deck OR another location), and
+  multi-level "group by" breakouts. Every card links out to its Scryfall
+  page from both views. A "📋 Export to Moxfield (Collection CSV)" panel
+  generates a Moxfield-compatible collection import CSV — Full Collection
+  or Owned NOT in a deck — downloadable or saved to `moxfield_exports/`
+  (see "Moxfield export" below).
+- **Decks** (still covers the maybeboard, via the Board toggle near the
+  bottom) — pick any deck (or arrive pre-selected from a home-page tile)
+  for a "Turn 0" summary: commander/partner, colors, bracket, interaction,
+  combos, tutors, win/loss record, deck value, and how many of its cards
+  are physically sleeved in it; an optional custom cover-image thumbnail;
+  win conditions/strengths/weaknesses; directly under that, optimized-mana
+  summary, a Game Changers table showing your own category tag (drift vs.
+  Scryfall highlighted), and a Reserved List table showing each card's
+  current price; then themes, mana curve (grouped/colored W, U, B, R, G,
+  Multi-color, Colorless), type breakdown, strategy tag breakdown; then
+  Top 10 Most Expensive (unit price plus what you actually paid for your
+  copy, if logged) list (the Top 10 Saltiest card list that used to sit
+  alongside it, backed by hand-maintained EDHREC salt data, was removed —
+  see "EDHREC Salt Score" below); and an in-panel Moxfield export
+  (copy-to-clipboard code box, or save a `.txt` file, mainboard-only or
+  with maybeboard). Below that, the same table/grid browser as Collection,
+  scoped to Mainboard, Maybeboard, or both at once.
 - **Land & Color Probability** — per-deck hypergeometric draw math: the
-  probability of lands (or any specific card) showing up in your opening
-  7, an estimate of hitting your land drop each of the first 5 turns, and
-  the probability of having a mana source for each color in the
+  probability of lands showing up in your opening 7, an estimate of
+  hitting your land drop each of the first 5 turns (plus the
+  probability-weighted EXPECTED number of lands seen by each of those
+  turns), the probability of having a mana source for each color in the
   commander's color identity at your opening hand and each of the first 5
-  turns. Library size and land count auto-detect from the decklist
+  turns (own text-based parser, so "any color" lands like Command Tower
+  count correctly even though their color identity is blank; optionally
+  also counts nonland mana rocks/dorks that have a verified mana ability
+  of their own — a same-colored nonland card with no mana ability never
+  counts), a weighted mana-source-availability graph (expected source
+  counts by category, turn-by-turn), a Commander Cast Probability engine
+  (turns 1–10, compounding land-drop and color-source odds for your
+  commander), and a per-card Cast Probability tool for any chosen
+  mainboard card (opening hand through turn 8) that factors in that
+  card's own mana value and colored pips — so two singletons with
+  different costs show different curves, not an identical draw-odds line.
+  Library size and land count auto-detect from the decklist
   (commander/partner excluded, since they live in the command zone, not
   the shuffled deck) but are editable if you want to test a hypothetical.
 - **Editor** — add, rename, and remove things directly, no CSV editing
@@ -205,11 +229,24 @@ The dashboard currently covers:
     collector number — resolves against your existing `cards` table first,
     falling back to a live Scryfall lookup only for a card the dashboard
     hasn't seen before), then bulk-edit quantities/review flags/notes or
-    remove cards in one table, same pattern as Card Tags.
-  - **Collection** — add a new lot (same name/set/number resolution as
-    above, plus quantity/foil/location/price/a real date picker for
-    Date Acquired, defaulting to today/source), then search and
-    bulk-edit or remove existing lots.
+    remove cards in one table, same pattern as Card Tags. Adding a card to
+    the **Mainboard** that isn't tracked in your collection under that
+    exact printing yet automatically creates a starter collection lot for
+    it (quantity matching what you just added, Location set to the deck's
+    name) — Deck Building Auto-Add, so the collection can't silently drift
+    out of sync with what your decks actually run. Maybeboard adds don't
+    trigger this (a maybeboard card is still just under consideration).
+  - **Collection** — type a card name for a suggestion list drawn from
+    cards already in your database (refreshes once you finish typing or
+    press Enter); pick one to get a second dropdown of every printing you
+    already know about (set, collector number, price), or a "🔍 Check
+    Scryfall for other printings" button to pull in printings you don't
+    have locally yet. Add the exact printing along with
+    quantity/foil/location/price/a real date picker for Date Acquired
+    (defaulting to today)/source, or skip the suggestions entirely and
+    enter a Set Code + Collector Number directly for a brand-new card
+    (live Scryfall lookup, same fallback as Mainboard/Maybeboard above).
+    Then search and bulk-edit or remove existing lots.
   - **Game Changers** — every card that's either Scryfall-flagged or
     already carries one of your custom categories, across your whole
     database (not just one deck), shown with card art. Edit categories
@@ -224,10 +261,7 @@ The dashboard currently covers:
     location, a quantity of 0/none, and not present in any deck's
     mainboard or maybeboard is deleted. Same underlying logic (and same
     CLI-vs-dashboard sharing pattern) as Moxfield export — see
-    `scripts/refresh_card_data.py` / `dashboard_lib/refresh.py`. Also
-    where EDHREC salt scores are hand-maintained per card — Scryfall's
-    API doesn't expose salt, so this is a manual field, never touched by
-    the refresh above.
+    `scripts/refresh_card_data.py` / `dashboard_lib/refresh.py`.
 - **Commander Game Tracking** — log a game with up to 4 seats, each either
   a tracked deck (dropdown) or free-text for an opponent's deck not in the
   library, with an optional player name and win flag per seat, plus match
@@ -426,7 +460,15 @@ WHERE c.commander_legal = 0;
 
 ## Moxfield export
 
-**In the dashboard** (Decks & Maybeboard page → "📋 Export to Moxfield"
+There are two, separate Moxfield export features: a **deck** paste-format
+export (one deck's list at a time) and a **collection** CSV export (your
+whole collection, or a subset, as an importable .csv). Both share the
+same CLI-vs-dashboard pattern via `dashboard_lib/moxfield_export.py`, so
+neither can drift from the other.
+
+### Deck export
+
+**In the dashboard** (Decks page → "📋 Export to Moxfield"
 expander, under the deck value line): shows the formatted list in a code
 box with a one-click copy-to-clipboard icon (hover the box, click the
 icon in the corner), plus a checkbox to include the maybeboard as a
@@ -435,9 +477,7 @@ into `moxfield_exports/` in the project folder (named after the deck,
 with " (with maybeboard)" appended when that box is checked, so the two
 variants never overwrite each other).
 
-**From the command line**, same output, same underlying formatting logic
-(`dashboard_lib/moxfield_export.py` — shared by both, so they can't drift
-apart):
+**From the command line**, same output, same underlying formatting logic:
 
 ```bash
 python export_moxfield.py --list                              # see all deck names
@@ -452,6 +492,38 @@ Output format:
 ```
 
 Uses the exact printing you own wherever possible (see step 4 above).
+
+### Collection CSV export
+
+**In the dashboard** (Collection page → "📋 Export to Moxfield (Collection
+CSV)" expander): pick **Full Collection** or **Owned NOT in a deck**, then
+either "⬇️ Download CSV" (browser download) or "💾 Save to file" (writes
+into `moxfield_exports/`, e.g. `moxfield_collection_full.csv` /
+`moxfield_collection_not_in_deck.csv`).
+
+**From the command line**, same output:
+
+```bash
+python export_moxfield_collection.py                     # full collection -> stdout
+python export_moxfield_collection.py --not-in-deck        # owned, not run in any deck
+python export_moxfield_collection.py -o collection.csv
+```
+
+One row per printing + foil status you own — quantities and purchase
+prices are summed across any collection lots sharing that exact printing
+(separate lots exist elsewhere for price/date history, but Moxfield's
+own CSV format expects one row per printing/foil, not one row per lot).
+Untracked bulk lots (no counted quantity — e.g. a pile of unsorted
+basics) are excluded, same as everywhere else "tracked" totals are shown
+in this app. Column mapping: `count`/`tradelist count` (0 if that exact
+printing is run in any deck)/`name`/`edition` (lowercased set
+code)/`condition` (always "Near Mint")/`language` (always
+"English")/`foil`/`tags` (always blank)/`last modified` (current
+timestamp — there's no per-lot last-modified data to draw from)/
+`collector number`/`alter` (always FALSE)/`Proxy` (always FALSE, since
+there's no Proxy tracking convention in this dashboard yet — see "Known
+open items" in `PROJECT_STATE.md`)/`purchase price` (summed cost paid,
+blank if never recorded).
 
 ## Win/loss stats
 
@@ -507,11 +579,12 @@ since this sandbox has no network access.
 ## Custom fields & editable data: CSV for initial import, dashboard from then on
 
 Deck names/metadata, mainboard, maybeboard, themes, collection lots, card
-tags, Game Changer categories, and EDHREC salt scores are all editable
-directly in the dashboard (Editor page — there's no separate Tag Editor
-page anymore; it was folded into Editor) — no CSV round-trip needed for
-any of it. Mana tags remain purely CSV-driven (`mana_tags.csv`), with no
-in-tool editor yet.
+tags, and Game Changer categories are all editable directly in the
+dashboard (Editor page — there's no separate Tag Editor page anymore; it
+was folded into Editor) — no CSV round-trip needed for any of it. Mana
+tags remain purely CSV-driven (`mana_tags.csv`), with no in-tool editor
+yet. (EDHREC salt scores used to be hand-editable here too; that feature
+was retired dashboard-wide — see "EDHREC Salt Score" below.)
 
 `migrate.py` wipes and rebuilds the whole database on every run, with no
 attempt to preserve dashboard edits — see "Migration is one-way" above.
@@ -531,6 +604,24 @@ dashboard from then on.
   Changer categories which got one in this update)
 - HTML/CSS print-to-PDF one-pager, styled after your existing deck
   summary PDFs
-- EDHREC comparison — on the backburner per your call (note: hand-entered
-  salt scores per card are now supported in the Editor, which is a
-  narrower thing than a full EDHREC comparison view)
+- EDHREC comparison — on the backburner per your call. The narrower
+  hand-entered salt-score field that used to live in the Editor as a
+  stand-in for this was itself retired — see "EDHREC Salt Score" below —
+  so there's currently no EDHREC-sourced data anywhere in the dashboard.
+
+## EDHREC Salt Score (retired)
+
+A prior pass added a hand-maintained `cards.edhrec_salt` field, since
+EDHREC salt scores aren't exposed by the Scryfall API. This was later
+audited for a proper data source: EDHREC has no lightweight public API
+for salt scores, and while MTGJSON does carry an `edhrecSaltiness` field,
+it only ships inside MTGJSON's full-size exports (`AllPrintings` /
+`AllIdentifiers` / `AtomicCards`, each hundreds of MB or more) — too
+heavy an ongoing dependency to sync just for one hand-sized number in a
+personal-scale, mostly-offline tool. The whole feature was removed as a
+result: the Editor's Salt Scores sub-editor, the Decks page's Top 10
+Saltiest panel, and every supporting query/write/loader function are
+gone. `cards.edhrec_salt` itself is still physically declared in
+`schema.sql`, per this project's rule of never dropping a column from a
+live database, so any values entered before this change aren't lost —
+there's just no read or write path to them left in the dashboard.

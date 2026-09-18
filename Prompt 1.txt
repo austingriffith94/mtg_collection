@@ -1,0 +1,17 @@
+Act as a software engineer. Inspect the codebase to locate the database schemas, UI components, and backend routes for the Commander Game Tracking module, then implement the following updates:
+
+1. GAME LOG EDITING & DATA HANDLING
+- Edit Functionality: Add the ability to edit existing game log entries (in addition to existing deletion).
+- Remove Explicit Game #: Remove tracking and display of "Game #" in the database and deletion log dropdowns. Sort entries by timestamp or record ID instead, as out-of-order logs make explicit game numbers irrelevant.
+- Dynamic Input / Autofill: Add dynamic autofill suggestions or dynamic dropdown lists for the "Player" and "Opponents Deck" fields based on existing log entries or allowable lists. Choose whichever approach best fits the existing architecture.
+
+2. DATA INTEGRITY & FORM VALIDATION
+- Tracked Deck Deletion: Audit deck removal logic so deleting a tracked deck does not break historical game log references.
+- Form Submission Rules: Enforce validation to prevent submitting a log entry unless a winner and all player decks are selected.
+
+3. UI & NAVIGATION IMPROVEMENTS
+- Tabbed Layout: Move the stats tracking section into a dedicated tab within the Commander Game Tracking page so users do not have to scroll to the bottom of long lists to view metrics.
+
+4. PLAYER METRICS & HEAD-TO-HEAD ANALYTICS
+- Win Rates & ELO Tracking: Implement player metrics or visualizations (e.g., ELO variant or head-to-head win-rate matrix) comparing player performance.
+- Commander Context Adjustments: Tailor the metric calculations for 4-player Commander games where the primary user is in almost every game alongside a consistent playgroup.

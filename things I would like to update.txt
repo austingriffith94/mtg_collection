@@ -1,58 +1,12 @@
-the "dashboard" tab can be changed to a landing page that has links to the decks, utilizing their image if they have one, that will take you to their the deck page.
+for the game logs:
+the ability to edit existing game entries (so far I can delete, but if I want to make a small change is it possible to edit an entry?)
 
-rename deck and maybeboard section to just be "Decks"
+right now it is tracking games by number in the database and in the delete log dropdown. there is no need to track the game # outright, since if I enter them out of order played then the number means nothing.
 
-on decks and maybeboard section -> game changers table: can you not show the "scryfall flag" field, since that will just be a "1"
-on decks and maybeboard section -> reserved list table: can you not show the "Qty" field, since that will just show the number in the deck which doesn't help. instead can you show the price of the card.
-on decks and maybeboard section -> left side there's the "refresh data" button: can you also have that reset the filters on the left side
+for the logs, is there a way to have the opponents deck field and player field show recommended autofill if the typed in text is resembling an already existing entry? Or would it be easier to add to a list of allowable fields in the dropdown by entering new players and deck names somewhere to populate a dropdown? whichever makes the most sense from a page construction standpoint, no issue with either option to me.
 
-for the land probability section:
-for the check a specific card section, this is just showing the probability I see that card, which is just the same probability for every card given it's a singleton format. The purpose of what this is meant to show is the probability I can play that card on each of the turns shown, going out to turn 8.
-for the hitting land drops section, can you also given the weighted probability number of lands I expect to see on each turn.
-I think color availability might be incorrectly showing a lot of cards as mana sources that aren't mana sources. can you have the toggle actually look for a flag that appropriately checks either 
+can you use the records to get something like an ELO of players vs each other? some sort of metrics/visualization of how each person plays against each other. this might be limited since most games I am in, so 1 of the 4 will always be me, and it's typically a similar group for each game, something to keep in mind.
 
-when in the editor adding to the collection list, I'd like to have an dropdown as I'm typing giving me matches based on what I'm typing to the full list of cards available, and if I click on one or hit enter, it gives a full list of printings that I choose from.
+also if I remove a tracked deck, will that break the logic of the log page? is that situation accounted for? if I try to enter a log without a winner or all decks entered, will the tool allow me to do that or will it stop me?
 
-in the collection tab, adding a simple toggle for cards in a deck vs not in a deck vs not in deck OR another location
-
-when building a deck, if a card is not in the collection, then you can add it to the collection automatically (if that functionality doesn't already exist).
-
-allowing for multiple selections in the filters on the left side of the page would be great.
-
-when formatting the mana curve chart:
-when doing it by color, can you organize by WUBRG colors, multiple colors, and colorless. for the WUBRG (see below), can you make sure they appear as their respective color in the graph
-W -> white
-U -> blue
-B -> black
-R -> red
-G -> green
-for colorless, you can make grey, and multiple colors you can make Dark yellow
-
-in the top 10 most expensive cards in the deck, you don't need to show the quantity, just use a sample of one card and that one cards price even if there are multiple. in that table can you also show the cost/price I paid for that card.
-
-put the optimized mana, game changers and reserved list parts under the win conditions/strenths/weaknesses section.
-
-it looks like scryfall api doesn't have an edhrec salt score. can you check if there is any other location online to easily query this information, such as an edhrec api, or here https://mtgjson.com/api/v5/AllPrintingsCSVFiles.zip which is a large ~200mb file link for a full database worth of info (open zip -> cards.csv -> column "edhrecSaltiness"). If there is no way to easily get this information, then you can remove any functionality related to the salt score in the dashboard.
-
-moxfield samples (in moxfield_samples folder):
-making sure that based off the moxfield sample files you can export these easily from the tool. for the decks, I need to have the format as shown in the copy and paste functionality, and for the collection feature in moxfield I need to have the tool autosave down a csv of the full list of cards I own into csv. I want to create one that is the full collection, and another that is just the cards that I own that are not in a deck
-file for collection: 
-count -> number of that card held
-tradelist count -> count for cards that are owned but not in a deck (0 if card is owned but in a deck)
-name -> card name
-edition -> set in lower case
-condition -> always "Near Mint"
-language -> always English
-foil -> lower case "foil" when applicable
-tags -> blank
-last modified -> default to current moment, if this is built as a persistent file then you can tweak the modified date based on what is in the database if that's available
-collector number -> collector number of card
-alter -> always FALSE
-Proxy -> always FALSE
-purchase price -> my purchased price if available
-
-the deck copy list, as you see in the file, should be for each line:
-count
-card name
-(set)
-collector number
+the layout of hte page is a little awkward, since the stats tracking is at the bottom, once the list starts to get long it's a pain to scroll all the way to the bottom just to see it. it might be worth having the stats on a different tab within the Commander Game Tracking so it's easier to see.

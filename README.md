@@ -138,18 +138,30 @@ your environment is activated first. Double-click:
 Opens straight into a menu:
 
 ```
-1) Run / refresh database migration (rebuilds from CSVs in data/)
-2) Launch dashboard
-3) Export a deck to Moxfield format
+1) Launch dashboard
+2) Export a deck to Moxfield format
+3) Export collection to Moxfield CSV
 4) Sync image cache (download new + prune unused)
-5) Exit
+5) Refresh Scryfall card data (Reserved List/Game Changer/legality/price)
+6) Exit
+
+Rarely needed once you're up and running — type the word, not a number:
+  migrate) Rebuild the database from CSVs in data/ (⚠ discards any dashboard-made edits since your last migration)
 ```
+
+The one-time/rare CSV migration is deliberately **not** a numbered option —
+`migrate.py` wipes and rebuilds `mtg_collection.db` from scratch every
+run (see "Migration is one-way" below), so it's tucked behind typing the
+word `migrate` instead of a digit, and asks you to type `REBUILD` to
+confirm before it actually touches anything. The first time you run
+`run.py` with no `mtg_collection.db` yet, it'll tell you to type
+`migrate` to get started.
 
 If `requirements.txt` ever changes again, you'll need to install the new
 package yourself into your active environment — the launcher won't do it
 for you, in keeping with staying out of your environment management.
 
-Option 2 launches the real Streamlit dashboard (`dashboard.py`, plus
+Option 1 launches the real Streamlit dashboard (`dashboard.py`, plus
 everything under `pages/`) — make sure `streamlit` is installed (see
 "Setup" above), then run the migration first if you haven't already.
 

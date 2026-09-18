@@ -165,7 +165,6 @@ with wr_col1:
 
 with wr_col2:
     st.markdown("**By player**")
-    st.caption("Only reflects games logged since player names were added — older entries aren't counted here.")
     player_wr = loaders.load_player_win_rates(conn)
     if player_wr.empty:
         st.caption("No games with a player name recorded yet.")

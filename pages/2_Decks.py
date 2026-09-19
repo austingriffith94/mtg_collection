@@ -4,14 +4,16 @@ maybeboard is still browsable here via the Board toggle near the bottom,
 this is just the section's display name/URL now).
 
 Pick a deck (or land here already-selected, via a `deck_id` query param
-set by the home page's deck-tile links) to see its "Turn 0" summary —
-commander/partner, colors, bracket, interaction, combos, tutors,
-description, when it was built, win/loss record, deck value, and how many
-of its cards are physically sleeved in it right now — followed by win
-conditions / strengths / weaknesses, then (Prompt Pass 4 reorder)
-optimized mana, Game Changers, and the Reserved List right underneath
-that, then themes, mana curve, type breakdown, and strategy tag
-breakdown, then Top 10 Most Expensive / Top 10 Saltiest.
+set by the home page's deck-tile links) to see a branded header (Prompt
+Pass 10 — the deck's own Name, its resolved thumbnail, its short
+descriptive tagline, and its color-identity mana symbols; see below),
+then its "Turn 0" stat grid — commander/partner, colors, bracket,
+interaction, combos, tutors, when it was built, win/loss record, deck
+value, and how many of its cards are physically sleeved in it right now
+— followed by win conditions / strengths / weaknesses, then (Prompt Pass
+4 reorder) optimized mana, Game Changers, and the Reserved List right
+underneath that, then themes, mana curve, type breakdown, and strategy
+tag breakdown, then Top 10 Most Expensive / Top 10 Saltiest.
 
 Below that: the same table/grid card browser as the Collection page, for
 the Mainboard, Maybeboard, or both at once.
@@ -23,7 +25,28 @@ Phase 2 additions: an optional custom cover-image thumbnail next to the
 deck header (set via the Editor's Deck Info tab), and Top 10 Most
 Expensive / Top 10 Saltiest card lists alongside the existing Game
 Changers and Reserved List panels. Saltiest is hand-maintained EDHREC
-data (Editor -> Card Data -> Salt Scores), not a Scryfall field.
+data (Editor -> Card Data -> Salt Scores), not a Scryfall field — this
+panel itself was removed dashboard-wide in Prompt Pass 5, see below.
+
+Prompt Pass 10 (prompt3.txt — branding/layout/color-identity/tag-list
+pass) changes: the old generic "🃏 Decks" page title is gone — the page's
+title is now the deck's own header block (card_view.render_deck_header())
+built from decks.name (not the separate, user-editable "representative"
+field the old per-deck header preferred), its resolved thumbnail (cover
+image if set, else the commander's own card art via the now-public
+card_view.deck_image_src(), "if available" rather than a placeholder),
+its short descriptive tagline (decks.description — moved here from its
+old spot below the Commander/Partner/.../Built stat grid), and a row of
+the deck's own official Scryfall mana-symbol badges for its color
+identity. A page-wide accent CSS pass (card_view.inject_deck_accent_css())
+recolors this page's dividers/expander/sidebar edge with the deck's own
+color-identity gradient/hex (dashboard_lib.formatting.deck_accent_gradient()/
+deck_accent_hex()) so the page isn't flat black-and-white. The Game
+Changers table's "Status" column (Scryfall-flag-vs-your-tag mismatch
+indicator) is gone too — Card and Your tag only, per that prompt's
+instruction 4; queries.deck_game_changers() itself still computes
+`status` (a harmless, additive, page-content-only change — nothing else
+in the codebase reads that column).
 """
 import sys
 import os
@@ -37,13 +60,16 @@ from dashboard_lib import db, loaders, formatting as fmt, moxfield_export
 from dashboard_lib import card_view as cv
 
 st.set_page_config(page_title="Decks · MTG Dashboard", page_icon="🃏", layout="wide")
+cv.inject_nav_caps_css()
 
 db.require_db()
 conn = db.get_connection()
 
 MOXFIELD_EXPORT_DIR = os.path.join(db.BASE_DIR, "moxfield_exports")
 
-st.title("🃏 Decks")
+# Prompt Pass 10: the old generic "🃏 Decks" st.title() is gone — the
+# deck's own branded header (rendered further down, once a deck is
+# chosen) is this page's title now. See card_view.render_deck_header().
 
 st.sidebar.header("Deck")
 db.refresh_data_button()
@@ -86,18 +112,27 @@ value = loaders.load_deck_value(conn, deck_id)
 sleeved = loaders.load_in_deck_sleeved_count(conn, meta.get("name"))
 
 # ------------------------------------------------------------------
-# Turn 0 panel
+# Deck header + page-wide themed accents (Prompt Pass 10 / prompt3.txt)
 # ------------------------------------------------------------------
-header_name = meta.get("representative") or meta.get("name") or "Deck"
+deck_name = meta.get("name") or "Deck"
+color_identity_raw = meta.get("color_identity")
 
-cover_path = fmt.resolve_local_image(meta.get("cover_image_path"))
-if cover_path:
-    hcol1, hcol2 = st.columns([1, 5])
-    hcol1.image(cover_path, width=120)
-    hcol2.header(header_name)
-else:
-    st.header(header_name)
+# Reuse the exact same cover-image/commander-art row shape and fallback
+# chain the home page's deck tiles already use (Prompt Pass 4), via the
+# cached load_decks_with_covers() query, rather than resolving the
+# thumbnail a third different way.
+covers_df = loaders.load_decks_with_covers(conn)
+cover_rows = covers_df[covers_df["deck_id"] == deck_id]
+header_img_src = cv.deck_image_src(cover_rows.iloc[0]) if not cover_rows.empty else None
 
+cv.inject_deck_accent_css(
+    fmt.deck_accent_gradient(color_identity_raw), fmt.deck_accent_hex(color_identity_raw)
+)
+cv.render_deck_header(deck_name, meta.get("description"), header_img_src, color_identity_raw)
+
+# ------------------------------------------------------------------
+# Turn 0 stat grid
+# ------------------------------------------------------------------
 meta_col1, meta_col2, meta_col3, meta_col4 = st.columns(4)
 meta_col1.markdown(f"**Commander**\n\n{meta.get('commander') or '—'}")
 meta_col2.markdown(f"**Partner**\n\n{meta.get('partner') or '—'}")
@@ -109,9 +144,8 @@ meta_col5.markdown(f"**Interaction**\n\n{meta.get('interaction') if meta.get('in
 meta_col6.markdown(f"**Combos**\n\n{meta.get('combos') or '—'}")
 meta_col7.markdown(f"**Tutors**\n\n{meta.get('tutors') or '—'}")
 meta_col8.markdown(f"**Built**\n\n{meta.get('initially_built') or '—'}")
-
-if meta.get("description"):
-    st.caption(meta["description"])
+# (decks.description now renders as the tagline directly beneath the
+# deck name in the header above — Prompt Pass 10 relocated it from here.)
 
 st.divider()
 
@@ -189,16 +223,20 @@ with mana_tag_col:
         st.caption("No optimized-mana tags matched for this deck.")
 
 with gc_col:
-    st.markdown("**Game Changers**", help="Scryfall's live game_changer flag alongside your own category tag — mismatches are worth reviewing.")
+    st.markdown("**Game Changers**", help="Cards flagged as Game Changers in this deck, with your own category tag.")
     gc_df = loaders.load_deck_game_changers(conn, deck_id)
     if not gc_df.empty:
         st.dataframe(
-            # scryfall_flag deliberately omitted (Prompt Pass 4): every
-            # row here is already Game-Changer-flagged or custom-tagged,
-            # so the raw Scryfall boolean only ever showed a static "1".
-            gc_df.rename(columns={"card_name": "Card", "custom_tag": "Your tag", "status": "Status"})[
-                ["Card", "Your tag", "Status"]
-            ],
+            # scryfall_flag was already omitted from display in Prompt
+            # Pass 4 (every row here is already Game-Changer-flagged or
+            # custom-tagged, so the raw Scryfall boolean only ever showed
+            # a static "1"); Prompt Pass 10 (prompt3.txt instruction 4)
+            # drops the derived "Status" column too, per that prompt's
+            # "only display the Card Name and its associated Tag" —
+            # queries.deck_game_changers() itself still computes status
+            # (a harmless additive column nothing else reads), only this
+            # page's own display was simplified.
+            gc_df.rename(columns={"card_name": "Card", "custom_tag": "Your tag"})[["Card", "Your tag"]],
             hide_index=True, use_container_width=True,
         )
     else:

@@ -86,6 +86,38 @@ def deck_color_identity_display(ci_str):
     return _order_colors(deck_color_identity_letters(ci_str))
 
 
+def mana_symbol_svg_url(letter):
+    """Scryfall's own official mana-symbol SVG for one WUBRG letter (or
+    'C' for colorless) — Prompt Pass 10 / prompt3.txt's "official MTG
+    mana symbols" ask, the actual symbol set shown across Scryfall/
+    Gatherer mana costs, not a custom recreation (colored dots/emoji).
+    Hotlinked directly from Scryfall's public svgs.scryfall.io CDN, the
+    same "just link to Scryfall's own asset, don't reinvent it" pattern
+    this app already uses for card art itself (cards.image_uri renders
+    as a live <img> hotlink whenever no local cache exists — see
+    card_view._image_src()/_deck_image_src()). Unlike card art, there is
+    no local-cache path for these symbols at all (no
+    local_image_path-style column, no sync step) — rendering one always
+    needs a live network connection; a missing connection just shows a
+    broken-image icon in the browser, the same graceful-non-crash
+    fallback already accepted for card art. Returns None for anything
+    that isn't a WUBRG letter or 'C'."""
+    letter = str(letter or "").strip().upper()
+    if letter not in WUBRG_ORDER and letter != "C":
+        return None
+    return f"https://svgs.scryfall.io/card-symbols/{letter}.svg"
+
+
+def deck_color_identity_symbol_urls(ci_str):
+    """Official Scryfall mana-symbol SVG URLs for a DECK-level
+    color_identity string, in WUBRG order (Prompt Pass 10 / prompt3.txt).
+    A colorless deck (no WUBRG letters found in ci_str) still gets one
+    URL back — the Colorless ({C}) symbol — rather than an empty list,
+    so the deck header always has at least one badge to show."""
+    letters = deck_color_identity_letters(ci_str) or ["C"]
+    return [u for u in (mana_symbol_svg_url(l) for l in letters) if u]
+
+
 # ------------------------------------------------------------------
 # Phase 3 — MDFC-aware land detection & mana-source color classification.
 #
@@ -256,6 +288,43 @@ def mana_curve_color_bucket(color_display):
     return "Multi-color" if "/" in str(color_display) else str(color_display)
 
 
+# ------------------------------------------------------------------
+# Deck-page themed color accents (Prompt Pass 10 / prompt3.txt) — reuses
+# the exact same WUBRG hex values as the mana curve chart
+# (MANA_CURVE_COLOR_HEX above) so a deck's accent color always matches
+# its own mana-curve bars elsewhere on the same page, rather than
+# inventing a second, different color mapping.
+# ------------------------------------------------------------------
+def deck_accent_hex(ci_str):
+    """A single representative hex color for a deck's color identity —
+    its first color in WUBRG order, or MANA_CURVE_COLOR_HEX['Colorless']
+    if colorless. For accents that need one flat color (e.g. a solid CSS
+    border) as opposed to deck_accent_gradient() below."""
+    letters = deck_color_identity_letters(ci_str)
+    return MANA_CURVE_COLOR_HEX[letters[0]] if letters else MANA_CURVE_COLOR_HEX["Colorless"]
+
+
+def deck_accent_gradient(ci_str):
+    """A CSS linear-gradient() string spanning a deck's own actual
+    color-identity colors, for page-wide "themed highlights/borders"
+    (Prompt Pass 10 / prompt3.txt) — e.g. a Rakdos (B/R) deck gets an
+    actual black-to-red gradient, not the flat 'Multi-color' goldenrod
+    the mana curve chart uses for ITS legend (that flattening exists
+    there only to keep an unbounded number of color *combinations* from
+    exploding into one bar color per combo in a chart legend — a page
+    accent stripe has no such constraint, so showing the deck's REAL
+    colors is strictly more informative, hence not reusing that bucket
+    color here). A mono-color or colorless deck's single hex is repeated
+    as two identical stops so the returned string is always a valid
+    multi-stop gradient — callers never need to special-case a flat
+    color separately from an actual multi-color gradient."""
+    letters = deck_color_identity_letters(ci_str)
+    hexes = [MANA_CURVE_COLOR_HEX[l] for l in letters] if letters else [MANA_CURVE_COLOR_HEX["Colorless"]]
+    if len(hexes) == 1:
+        hexes = hexes * 2
+    return f"linear-gradient(90deg, {', '.join(hexes)})"
+
+
 def is_mana_rock_or_dork(type_line, oracle_text):
     """True for a NONLAND Artifact or Creature with a mana ability of its
     own — the 'Mana Rocks / Mana Dorks' bucket in the Phase 3 weighted
@@ -323,6 +392,77 @@ def split_multi_value(cell):
     if not text or text.lower() == "nan":
         return []
     return [p.strip() for p in text.split(",") if p.strip()]
+
+
+# ------------------------------------------------------------------
+# Win-rate conditional-formatting scale (Prompt Pass 9 / prompt2.txt) —
+# used by the Commander Game Tracking page's Win-by-Deck summary,
+# Win-by-Player summary, and Head-to-Head matrix. A straight 50/50 split
+# doesn't fit a 4-player free-for-all pod (see player_elo_ratings()'s own
+# docstring in queries.py, which makes the same point for ELO) — with 4
+# equally-matched seats, a "fair" win rate is 1 in 4, so that's the
+# neutral anchor for this diverging scale instead of the usual 50%.
+# Below the anchor shades toward red (underperforming that baseline);
+# above shades toward blue (overperforming it); intensity scales with
+# distance from the anchor, reaching full color at the 0%/100% extremes.
+# Applied identically (same anchor, same two colors) to all three tables
+# per the prompt's "color logic applies consistently" instruction — see
+# PROJECT_STATE.md for the note on the Head-to-Head table specifically,
+# where a pure 1-on-1 reading might otherwise suggest a 50% anchor.
+# ------------------------------------------------------------------
+WIN_RATE_BASELINE = 0.25  # "fair" win rate for a 4-player Commander pod
+WIN_RATE_NEUTRAL_HEX = "#FFFFFF"
+WIN_RATE_RED_HEX = "#C0392B"    # full-intensity "below baseline" color
+WIN_RATE_BLUE_HEX = "#2E86C1"   # full-intensity "above baseline" color
+
+
+def _blend_hex(hex_a, hex_b, t):
+    """Linear-interpolate two '#RRGGBB' colors; t=0.0 -> hex_a, t=1.0 ->
+    hex_b, clamped to [0, 1] for any t outside that range."""
+    t = max(0.0, min(1.0, t))
+    a = [int(hex_a[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(hex_b[i:i + 2], 16) for i in (1, 3, 5)]
+    blended = [round(a[i] + (b[i] - a[i]) * t) for i in range(3)]
+    return "#{:02X}{:02X}{:02X}".format(*blended)
+
+
+def win_rate_background_color(value, baseline=WIN_RATE_BASELINE):
+    """Diverging red/white/blue background color for a win-rate `value`
+    (0.0-1.0), anchored at `baseline`. Below the anchor blends from white
+    toward WIN_RATE_RED_HEX (0% win rate = full red); above blends from
+    white toward WIN_RATE_BLUE_HEX (100% = full blue); exactly at the
+    anchor is neutral white. `value` is clamped into [0, 1] first, so an
+    out-of-range float still resolves to some point on the scale rather
+    than being rejected. Returns None (meaning: leave the cell unstyled)
+    for None, NaN, or anything that can't be read as a float — callers
+    treat a None return as a no-op style."""
+    if value is None:
+        return None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if value != value:  # NaN != NaN is the standard no-import NaN check
+        return None
+    value = max(0.0, min(1.0, value))
+    if value < baseline:
+        t = (baseline - value) / baseline if baseline else 0.0
+        return _blend_hex(WIN_RATE_NEUTRAL_HEX, WIN_RATE_RED_HEX, t)
+    if value > baseline:
+        span = 1.0 - baseline
+        t = (value - baseline) / span if span else 0.0
+        return _blend_hex(WIN_RATE_NEUTRAL_HEX, WIN_RATE_BLUE_HEX, t)
+    return WIN_RATE_NEUTRAL_HEX
+
+
+def win_rate_cell_style(value, baseline=WIN_RATE_BASELINE):
+    """CSS `background-color: #RRGGBB` declaration for `value` (see
+    win_rate_background_color()), or '' for a value that should stay
+    unstyled — '' rather than None specifically because this is meant to
+    be handed straight to a pandas Styler, which expects an empty string
+    (not None) for a no-op cell style."""
+    color = win_rate_background_color(value, baseline)
+    return f"background-color: {color}" if color else ""
 
 
 def safe_filename(name, max_length=150):

@@ -49,8 +49,10 @@ import pandas as pd
 import streamlit as st
 
 from dashboard_lib import db, loaders, formatting as fmt, probability as prob
+from dashboard_lib import card_view as cv
 
 st.set_page_config(page_title="Land Probability · MTG Dashboard", page_icon="🎲", layout="wide")
+cv.inject_nav_caps_css()
 
 db.require_db()
 conn = db.get_connection()
@@ -335,10 +337,9 @@ st.caption(
     "Pure lands (basics and other cards whose type line is only Land) are excluded here — "
     "they're already covered by the land-drop math above. MDFC cards with a land face are "
     "still included, since their other, non-land face is still a real card to check for. "
-    "**Prompt Pass 5:** this now shows the turn-by-turn probability of actually **playing** "
-    "the chosen card on curve (drawn it, AND had enough lands, AND had the right colored "
-    "sources by that turn), projected through Turn 8 — rather than the old plain draw-"
-    "probability, which looked identical for every singleton regardless of its own mana cost."
+    "This shows the turn-by-turn probability of actually **playing** the chosen card on "
+    "curve (drawn it, AND had enough lands, AND had the right colored sources by that turn), "
+    "projected through Turn 8."
 )
 checkable_df = library_df[~library_df["type_line"].fillna("").apply(fmt.is_pure_land)]
 card_names = sorted(checkable_df["name"].unique())

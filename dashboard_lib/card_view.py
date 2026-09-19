@@ -36,6 +36,38 @@ SORT_FIELDS = {
 }
 
 # ------------------------------------------------------------------
+# Sidebar nav-label styling (Prompt Pass 8) — every page calls this
+# once, right after st.set_page_config(), so Streamlit's own
+# auto-generated sidebar page links (the pages/ directory nav this app
+# doesn't build itself) render in ALL CAPS. Pure CSS (text-transform),
+# so it's display-only: page filenames, URLs/query params, and every
+# hardcoded route string elsewhere in this codebase (e.g.
+# render_deck_landing_grid()'s deck_page_path default below) are
+# untouched. Streamlit doesn't expose a supported way to relabel the
+# auto-generated nav items themselves (only the separate, newer
+# st.navigation() API does, which this app doesn't use), so this
+# targets the nav's internal data-testid hooks directly — those aren't
+# a stable public API and have changed across Streamlit versions
+# before, so if a future Streamlit upgrade ever stops showing caps
+# here, this selector list is the first place to check.
+# ------------------------------------------------------------------
+def inject_nav_caps_css():
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebarNav"] a,
+        [data-testid="stSidebarNav"] a *,
+        [data-testid="stSidebarNavItems"] a,
+        [data-testid="stSidebarNavItems"] a * {
+            text-transform: uppercase !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ------------------------------------------------------------------
 # Sidebar filter reset (Prompt Pass 4) — every widget key created by
 # render_filter_panel() (and any bespoke filter control a page adds
 # outside it, via register_filter_key()) is tracked here so
@@ -406,12 +438,21 @@ def render_grid(df, key_prefix, columns_per_row=5):
 # Home-page deck landing grid (Prompt Pass 4) — image-backed tiles that
 # navigate straight to the Decks page with a deck pre-selected.
 # ------------------------------------------------------------------
-def _deck_image_src(row):
-    """Resolve the best available thumbnail for a deck landing-page
-    tile: a user-set cover image first (Editor -> Deck Info -> Cover
-    image), then the commander's own card art (local cache, else
-    Scryfall's remote URL), else None so the caller renders a
-    placeholder."""
+def deck_image_src(row):
+    """Resolve the best available thumbnail for a deck: a user-set cover
+    image first (Editor -> Deck Info -> Cover image), then the
+    commander's own card art (local cache, else Scryfall's remote URL),
+    else None so the caller renders a placeholder (or, on the Decks
+    page's header as of Prompt Pass 10, simply omits the image entirely
+    — "if available" per that prompt, not a placeholder box). Public
+    (no leading underscore) since Prompt Pass 10 made this a second
+    caller alongside render_deck_landing_grid() below: the Decks page's
+    own header now reuses this exact fallback chain instead of
+    duplicating it a third time — was previously private/single-caller.
+    `row` needs the same shape queries.list_decks_with_covers() returns
+    (cover_image_path, commander_local_image_path,
+    commander_image_uri) — a dict or a single pandas Series row both
+    work, since both support .get()."""
     cover = fmt.resolve_local_image(row.get("cover_image_path"))
     if cover:
         try:
@@ -456,7 +497,7 @@ def render_deck_landing_grid(decks_df, deck_page_path="Decks", columns_per_row=4
         name = html.escape(str(row.get("name") or "Deck"))
         deck_id = row.get("deck_id")
         href = f"{deck_page_path}?deck_id={deck_id}"
-        src = _deck_image_src(row)
+        src = deck_image_src(row)
 
         if src:
             img_html = (
@@ -479,3 +520,134 @@ def render_deck_landing_grid(decks_df, deck_page_path="Decks", columns_per_row=4
         )
         with cols[i % columns_per_row]:
             st.markdown(tile, unsafe_allow_html=True)
+
+
+# ------------------------------------------------------------------
+# Deck page header + themed accents (Prompt Pass 10 / prompt3.txt) —
+# replaces the Decks page's old generic "🃏 Decks" page title and its
+# separate st.header(representative)/st.caption(description) blocks
+# with one branded header, plus page-wide color-identity CSS accents.
+# ------------------------------------------------------------------
+def render_deck_header(deck_name, tagline, image_src, color_identity_str):
+    """The Decks page's branded header (Prompt Pass 10): the deck's own
+    NAME (decks.name) as the actual page title — not the separate,
+    user-editable "representative" field the old header showed instead
+    — next to its resolved thumbnail (image_src — see deck_image_src()
+    above; "if available" per the prompt, so no image at all rather than
+    a placeholder box when nothing resolves, unlike the home-page grid
+    which always needs SOME tile art to keep its layout from looking
+    broken), the deck's short descriptive tagline directly beneath the
+    name (moved here in this pass from its old spot below the
+    Commander/Partner/.../Built stat grid), and a row of the deck's own
+    official Scryfall mana-symbol badges for its color identity."""
+    name_html = html.escape(str(deck_name or "Deck"))
+    tagline_html = (
+        f'<div style="opacity:0.75;font-size:1.05rem;margin-top:2px;">{html.escape(str(tagline))}</div>'
+        if tagline else ""
+    )
+    symbol_urls = fmt.deck_color_identity_symbol_urls(color_identity_str)
+    symbols_html = "".join(
+        f'<img src="{u}" width="26" height="26" style="margin-right:4px;vertical-align:middle;" '
+        f'alt="mana symbol"/>'
+        for u in symbol_urls
+    )
+    symbols_row = f'<div style="margin-top:8px;">{symbols_html}</div>' if symbols_html else ""
+
+    name_block = (
+        f'<div style="font-size:2.1rem;font-weight:700;line-height:1.2;">{name_html}</div>'
+        f"{tagline_html}{symbols_row}"
+    )
+
+    if image_src:
+        img_html = (
+            f'<img src="{image_src}" style="width:96px;border-radius:10px;display:block;'
+            f'box-shadow:0 1px 4px rgba(0,0,0,0.35);" alt="{name_html}"/>'
+        )
+        block = (
+            '<div style="display:flex;align-items:center;gap:18px;">'
+            f"{img_html}<div>{name_block}</div>"
+            "</div>"
+        )
+    else:
+        block = name_block
+
+    st.markdown(block, unsafe_allow_html=True)
+
+
+def inject_deck_accent_css(gradient_css, accent_hex):
+    """Subtle per-deck themed accents (Prompt Pass 10 / prompt3.txt) so
+    the Decks page isn't flat black-and-white: recolors this page's
+    st.divider() rules (plain <hr> elements) with the deck's own
+    color-identity gradient (fmt.deck_accent_gradient()), and gives this
+    page's expander (the Moxfield-export panel) and the sidebar a
+    colored accent edge in the deck's dominant color
+    (fmt.deck_accent_hex()). Call once per page render, AFTER the
+    current deck (and therefore its accent colors) is known — unlike
+    inject_nav_caps_css() (Prompt Pass 8), which is identical on every
+    page and safe to call before anything else, this one is deck-
+    specific and must be (re-)called every rerun once the deck picker
+    has settled, so switching decks in the sidebar re-themes the page.
+    Same caveat as inject_nav_caps_css(): `hr`/stExpander/stSidebar are
+    Streamlit's own rendered/internal DOM structure, not all guaranteed
+    stable public API across versions — this hasn't been checked against
+    a real running Streamlit (no live Streamlit in this project's build
+    sandbox, per every prior phase's own testing caveat), so a future
+    Streamlit upgrade is the first place to check if these accents ever
+    stop appearing."""
+    st.markdown(
+        f"""
+        <style>
+        hr {{
+            height: 4px;
+            border: none;
+            border-radius: 2px;
+            background: {gradient_css};
+            opacity: 0.9;
+        }}
+        div[data-testid="stExpander"] details {{
+            border-left: 4px solid {accent_hex};
+            border-radius: 4px;
+        }}
+        section[data-testid="stSidebar"] {{
+            border-right: 3px solid {accent_hex};
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ------------------------------------------------------------------
+# Win-rate conditional formatting (Prompt Pass 9 / prompt2.txt) — shared
+# by the Commander Game Tracking page's Win-by-Deck summary, Win-by-
+# Player summary, and Head-to-Head matrix, so all three read the same
+# color scale off one function rather than three separate st.dataframe
+# call sites each rolling their own. This is the one spot in the app
+# that hands st.dataframe() a pandas Styler instead of a plain
+# DataFrame — everywhere else (render_table(), the two summary/matrix
+# call sites before this pass) just passes a DataFrame straight through.
+# ------------------------------------------------------------------
+def style_win_rate_percentages(df, columns=None, baseline=fmt.WIN_RATE_BASELINE, na_rep="\u2014"):
+    """Build a pandas Styler over `df` that renders each cell in
+    `columns` (win-rate floats, 0.0-1.0) as a whole-percent string and
+    colors its background on fmt.win_rate_background_color()'s diverging
+    red/white/blue scale, anchored at `baseline`. `columns=None` (the
+    default) styles every column — the Head-to-Head matrix, where every
+    cell is itself a win rate; pass an explicit list (e.g. ["Win %"]) for
+    a table like the Win-by-Deck/Win-by-Player summaries, which also
+    carry non-win-rate columns (deck/player name, games played, ...)
+    that must pass through untouched. NaN cells (e.g. the Head-to-Head
+    diagonal, or a deck/player with no recorded result) render as
+    `na_rep` and stay unstyled, same as fmt.win_rate_background_color()
+    returning None for them.
+
+    Pandas 2.1 renamed Styler.applymap() to Styler.map() and pandas 3.0
+    removed applymap() outright; this project's floor is pandas>=2.0
+    (which only has applymap()), so this picks whichever the installed
+    pandas actually offers rather than hardcoding one."""
+    cols = list(columns) if columns is not None else list(df.columns)
+    styler = df.style.format(
+        lambda v: f"{v * 100:.0f}%" if pd.notna(v) else na_rep, subset=cols
+    )
+    elementwise = styler.map if hasattr(styler, "map") else styler.applymap
+    return elementwise(lambda v: fmt.win_rate_cell_style(v, baseline), subset=cols)

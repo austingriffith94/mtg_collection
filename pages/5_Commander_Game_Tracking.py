@@ -1,6 +1,6 @@
 """
 Commander Game Tracking page (Phase 2; edit/autofill/tabs/ELO added in
-Prompt Pass 7).
+Prompt Pass 7; Win % conditional red/blue shading added in Prompt Pass 9).
 
 Log Commander games — up to 4 seats per game, each either a tracked deck
 (picked from a dropdown) or an opponent's deck that isn't in the library
@@ -15,7 +15,11 @@ Two tabs:
   - "Player & deck stats" — win-rate-by-deck/by-player tables, plus a
     Prompt-Pass-7 ELO rating table and head-to-head win-rate matrix —
     moved into its own tab so long game logs don't push these metrics
-    off the bottom of the page.
+    off the bottom of the page. As of Prompt Pass 9, every Win %
+    cell across the by-deck/by-player summaries and the head-to-head
+    matrix is background-shaded on a shared red/white/blue scale
+    anchored at 25% (a 4-player pod's fair/expected win rate) — see
+    dashboard_lib.card_view.style_win_rate_percentages().
 
 Player name is a field as of Phase 2 (game_participants.player_name).
 Games logged before this existed won't have one, so they're simply
@@ -41,8 +45,10 @@ import pandas as pd
 import streamlit as st
 
 from dashboard_lib import db, loaders, writes, queries as q, game_form as gf
+from dashboard_lib import card_view as cv
 
 st.set_page_config(page_title="Commander Game Tracking · MTG Dashboard", page_icon="🏆", layout="wide")
+cv.inject_nav_caps_css()
 
 db.require_db()
 conn = db.get_connection()
@@ -236,6 +242,11 @@ with tab_log:
 # ------------------------------------------------------------------
 with tab_stats:
     st.subheader("Win rate comparisons")
+    st.caption(
+        "Win % is shaded against a 25% baseline \u2014 the fair/expected win rate in a "
+        "4-player Commander pod where every seat is equally likely to win. Below 25% shades "
+        "red (underperforming); above 25% shades blue (overperforming); exactly 25% is neutral."
+    )
 
     wr_col1, wr_col2 = st.columns(2)
 
@@ -245,12 +256,14 @@ with tab_stats:
         if deck_wr.empty:
             st.caption("No games logged for any tracked deck yet.")
         else:
-            deck_wr = deck_wr.copy()
-            deck_wr["Win %"] = deck_wr["win_rate"].apply(lambda v: f"{v * 100:.0f}%" if pd.notna(v) else "—")
+            display_deck_wr = deck_wr.rename(
+                columns={
+                    "name": "Deck", "games_played": "Played", "wins": "Wins",
+                    "losses": "Losses", "win_rate": "Win %",
+                }
+            )[["Deck", "Played", "Wins", "Losses", "Win %"]]
             st.dataframe(
-                deck_wr.rename(
-                    columns={"name": "Deck", "games_played": "Played", "wins": "Wins", "losses": "Losses"}
-                )[["Deck", "Played", "Wins", "Losses", "Win %"]],
+                cv.style_win_rate_percentages(display_deck_wr, columns=["Win %"]),
                 hide_index=True, use_container_width=True,
             )
 
@@ -260,12 +273,14 @@ with tab_stats:
         if player_wr.empty:
             st.caption("No games with a player name recorded yet.")
         else:
-            player_wr = player_wr.copy()
-            player_wr["Win %"] = player_wr["win_rate"].apply(lambda v: f"{v * 100:.0f}%" if pd.notna(v) else "—")
+            display_player_wr = player_wr.rename(
+                columns={
+                    "player_name": "Player", "games_played": "Played", "wins": "Wins",
+                    "losses": "Losses", "win_rate": "Win %",
+                }
+            )[["Player", "Played", "Wins", "Losses", "Win %"]]
             st.dataframe(
-                player_wr.rename(
-                    columns={"player_name": "Player", "games_played": "Played", "wins": "Wins", "losses": "Losses"}
-                )[["Player", "Played", "Wins", "Losses", "Win %"]],
+                cv.style_win_rate_percentages(display_player_wr, columns=["Win %"]),
                 hide_index=True, use_container_width=True,
             )
 
@@ -294,13 +309,10 @@ with tab_stats:
     st.caption(
         "Row player's win rate against column player, counting only games the two of them "
         "shared (with anyone else also at the table). \u2014 means they've never shared a "
-        "logged game."
+        "logged game. Shaded on the same 25% red/blue baseline as the summaries above."
     )
     h2h_df = loaders.load_player_head_to_head(conn)
     if h2h_df.empty:
         st.caption("Not enough shared games with recorded player names yet.")
     else:
-        display_h2h = h2h_df.copy()
-        for col in display_h2h.columns:
-            display_h2h[col] = display_h2h[col].apply(lambda v: f"{v * 100:.0f}%" if pd.notna(v) else "—")
-        st.dataframe(display_h2h, use_container_width=True)
+        st.dataframe(cv.style_win_rate_percentages(h2h_df), use_container_width=True)

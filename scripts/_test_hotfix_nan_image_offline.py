@@ -4,8 +4,13 @@ Regression test for a crash reported after Prompt Pass 6 delivery:
     TypeError: join() argument must be str, bytes, or os.PathLike
     object, not 'float'
     ... dashboard.py -> card_view.render_deck_landing_grid ->
-        _deck_image_src -> fmt.resolve_local_image ->
+        deck_image_src -> fmt.resolve_local_image ->
         os.path.join(BASE_DIR, local_image_path)
+
+(deck_image_src() was renamed from the private _deck_image_src() in
+Prompt Pass 10, when the Decks page's new header started calling it too
+— see PROJECT_STATE.md. The references below were updated to match; the
+underlying bug/fix this test guards is unchanged.)
 
 Root cause: when a whole column loaded via pandas.read_sql_query is NULL
 for EVERY row (e.g. no deck has a custom cover image yet, or none of a
@@ -93,7 +98,7 @@ def main():
     #    depend on a version-specific quirk reproducing in THIS sandbox,
     #    build the DataFrame by hand with the exact failure signature —
     #    a float64 NaN column — and feed it through the real
-    #    card_view.render_deck_landing_grid()/_deck_image_src() call
+    #    card_view.render_deck_landing_grid()/deck_image_src() call
     #    path, unmodified, the same one that crashed.
     # ------------------------------------------------------------------
     decks_df = pd.DataFrame(
@@ -114,8 +119,8 @@ def main():
 
     # This is the exact call that crashed before the fix.
     for _, row in decks_df.iterrows():
-        src = cv._deck_image_src(row)
-        check(f"_deck_image_src for deck {row['name']!r} returns None (no crash, falls back to placeholder)", src is None)
+        src = cv.deck_image_src(row)
+        check(f"deck_image_src for deck {row['name']!r} returns None (no crash, falls back to placeholder)", src is None)
 
     # render_deck_landing_grid() itself must run start-to-finish without
     # raising (st.columns/st.markdown are stubbed no-ops here since

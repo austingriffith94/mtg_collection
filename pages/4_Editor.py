@@ -24,6 +24,7 @@ import pandas as pd
 import streamlit as st
 
 from dashboard_lib import db, loaders, writes, card_resolver, refresh, formatting as fmt, queries as q
+from dashboard_lib import card_view as cv
 
 DECK_COVER_DIR = os.path.join(db.BASE_DIR, "image_cache", "deck_covers")
 
@@ -42,6 +43,7 @@ def _parse_iso_date(value):
         return None
 
 st.set_page_config(page_title="Editor · MTG Dashboard", page_icon="✏️", layout="wide")
+cv.inject_nav_caps_css()
 
 db.require_db()
 conn = db.get_connection()

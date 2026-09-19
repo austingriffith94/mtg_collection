@@ -1,0 +1,10 @@
+Task: Clean up internal text artifacts and update navigation label capitalization.
+
+Instructions:
+1. Navigation Bar / Sidebar:
+   - Convert all left-side navigation labels (e.g., "dashboard", "decks", "game logs") to ALL CAPS.
+
+2. UI Description Cleaning:
+   - Search across all UI components, tooltips, and page text for development artifacts, internal prompt leakage, or legacy commentary.
+   - Target and remove strings like "Prompt Pass [X]:", "rather than the old plain draw probability", or any similar text referencing past iterations or LLM prompts.
+   - Ensure the surrounding text flows naturally as clean, professional documentation.

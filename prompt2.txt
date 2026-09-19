@@ -1,0 +1,9 @@
+Task: Apply conditional win-rate formatting across Game Logs.
+
+Instructions:
+1. Locate the Head-to-Head Win Tables, Win by Deck summary, and Win by Person summary.
+2. Implement conditional formatting for all Win % metrics using a 4-player game baseline:
+   - Neutral Anchor: 25% (fair win rate for 4 players).
+   - < 25%: Red gradient/color scale (below expected performance).
+   - > 25%: Blue gradient/color scale (above expected performance).
+3. Ensure the color logic applies consistently to table cells and summary cards at the top of the page.

@@ -1,2 +1,5 @@
 # Locally cached card images
 /image_cache/
+
+# Python bytecode caches
+__pycache__/

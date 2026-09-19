@@ -28,10 +28,11 @@ mtg_dashboard/
 │   ├── formatting.py                 # card-type/color/URL/filename helpers (no Streamlit dep)
 │   ├── queries.py                    # read-only sqlite3+pandas queries (no Streamlit dep)
 │   ├── probability.py                # hypergeometric draw math (no Streamlit dep)
-│   ├── writes.py                     # card tags/deck/decklist/maybeboard/collection write layer (no Streamlit dep)
+│   ├── writes.py                     # card tags/deck/decklist/maybeboard/collection/game write layer (no Streamlit dep)
 │   ├── card_resolver.py              # find-or-fetch a card for "add a new card" flows (no Streamlit dep)
 │   ├── moxfield_export.py            # Moxfield format — shared by the CLI script and the dashboard (no Streamlit dep)
 │   ├── refresh.py                    # refresh Reserved List/Game Changer/legality/price by ID, then prune the collection (no Streamlit dep)
+│   ├── game_form.py                  # Commander Game Tracking form resolution/validation (no Streamlit dep, Prompt Pass 7)
 │   ├── db.py                         # cached connection + "no DB yet" guard
 │   ├── loaders.py                    # st.cache_data-wrapped versions of queries.py
 │   └── card_view.py                  # shared table/grid browser + filter UI
@@ -275,12 +276,21 @@ The dashboard currently covers:
     CLI-vs-dashboard sharing pattern) as Moxfield export — see
     `scripts/refresh_card_data.py` / `dashboard_lib/refresh.py`.
 - **Commander Game Tracking** — log a game with up to 4 seats, each either
-  a tracked deck (dropdown) or free-text for an opponent's deck not in the
-  library, with an optional player name and win flag per seat, plus match
-  notes. Below that: an actual rendered game history (not a raw table),
-  a way to delete a mis-entered log, and win-rate comparisons by deck and
-  by player. Player name is new as of this feature — games logged before
-  it existed simply don't count toward the by-player summary.
+  a tracked deck (dropdown), a known opponent deck, or free text for a new
+  one — Player works the same dropdown-or-free-text way — plus a win flag
+  per seat and match notes; autofill for Player and Opponent's Deck is
+  sourced from prior log entries (Prompt Pass 7). A logged game can also be
+  edited in place, not just deleted and re-entered. Submitting is blocked
+  unless exactly one winner is picked and every seat with any info at all
+  has a resolvable deck. Two tabs: "Log & manage games" (the form, an
+  actual rendered game history — not a raw table — and Edit/Delete
+  pickers) and "Player & deck stats" (win-rate comparisons by deck and by
+  player, a multiplayer ELO rating per player, and a head-to-head
+  win-rate matrix). No "Game #" is tracked or shown anywhere — entries are
+  always ordered by date, then game_id as a same-day tiebreaker. Player
+  name is new as of Phase 2 — games logged before it existed simply don't
+  count toward anything scoped to player (by-player win rate, ELO,
+  head-to-head).
 
 Not yet in the dashboard: the Proxy flag on the Turn 0 panel (see "Open
 items" below), a discovery view of the *full* official Game Changers list
@@ -545,17 +555,32 @@ Computed dynamically, never stored — always reflects the live game log:
 SELECT * FROM deck_stats WHERE games_played > 0 ORDER BY win_rate DESC;
 ```
 
-By player (new in this update — only counts games logged since
-`player_name` existed):
+By player (only counts games logged since `player_name` existed, i.e.
+Phase 2 onward):
 
 ```sql
 SELECT * FROM player_stats ORDER BY win_rate DESC;
 ```
 
-Both views back the **Commander Game Tracking** page, which also lets you
-log new games (existing tracked decks via dropdown, or free text for an
-opponent's deck) and browse an actual rendered game history rather than
-a raw table.
+Two more player-scoped metrics were added in Prompt Pass 7, both computed
+in Python rather than plain SQL (an ELO-style rating needs to process
+games in order, one at a time, which a single aggregate query can't
+express) — `dashboard_lib/queries.py`'s `player_elo_ratings(conn)` and
+`player_head_to_head_matrix(conn)`. The ELO variant scores a game's
+winner a win against every other seated player and every pair of
+non-winners a draw against each other (a straight 1v1 ELO's 50/50
+baseline doesn't fit a 4-player pod), with all pairwise deltas for one
+game computed from a ratings snapshot taken at that game's start and
+applied together, so results don't depend on the arbitrary order players
+happen to be listed in. The head-to-head matrix is a simpler literal
+win-rate crosstab between every pair of players who've shared a game.
+
+All four views/functions back the **Commander Game Tracking** page's
+"Player & deck stats" tab, which also lets you log, edit, or delete
+games — existing tracked decks via dropdown, or a known/free-text
+opponent deck and player name with autofill from past entries — and
+browse an actual rendered game history rather than a raw table, on its
+"Log & manage games" tab.
 
 ## Local image cache
 

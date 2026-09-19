@@ -1,0 +1,10 @@
+Task: Update mana-source color mapping and add management for the optimized mana flags table.
+
+Instructions:
+1. Weighted Mana-Source Availability Graph:
+   - Align the graph's color palette with the existing color-mapping schema used on the Decks page for WUBRG colors.
+   - Introduce a new, dedicated color for non-land mana sources (mana rocks and mana dorks) that does not overlap with White, Blue, Black, Red, or Green.
+
+2. Optimized Mana Flags Management (Editor):
+   - Check if an interface currently exists to view and edit the "optimized mana flags" table in the Editor section.
+   - If missing, create an editor UI view/component (or expose editable fields) allowing users to directly review, update, and persist these flags.

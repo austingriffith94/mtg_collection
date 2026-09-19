@@ -1,0 +1,11 @@
+Task: Correct the Commander Cast Probability methodology and Sleeved Card Count logic.
+
+Instructions:
+1. Commander Cast Probability Calculator:
+   - Audit the land-probability logic assuming a baseline of 1 land played per turn.
+   - Fix the turn-by-turn math so that a Commander requiring X total mana (e.g., Mana Value 4) returns a 0% cast probability on turns where T < X (e.g., Turn 3), unless fast mana or ramp inputs are specifically accounted for in the calculation.
+
+2. Sleeved Card Count Logic:
+   - Update the "Sleeved in Deck" calculator on the Deck page.
+   - Basic lands are not individually recorded in the collection database, but they are physically sleeved in every deck.
+   - Modify the calculation so basic land quantities in the deck list are automatically included in the sleeved count even without an explicit collection database entry.

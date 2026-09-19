@@ -66,8 +66,8 @@ Use the sidebar to jump to:
   summary (colors, bracket, combos/tutors), win conditions/strengths/
   weaknesses, optimized mana, Game Changers, and Reserved List right
   underneath, then themes, mana curve, type breakdown, strategy tags,
-  Top 10 Most Expensive / Top 10 Saltiest cards, and an optional custom
-  cover image, before browsing its mainboard and/or maybeboard the same
+  a Top 10 Most Expensive cards panel, and an optional custom cover
+  image, before browsing its mainboard and/or maybeboard the same
   way as the Collection page.
 - **🎲 Land & Color Probability** — for any deck: probability of drawing
   lands (or any specific card) in your opening 7, an estimate of hitting
@@ -82,11 +82,12 @@ Use the sidebar to jump to:
   mainboard and maybeboard cards (including brand-new cards via a live
   Scryfall lookup when needed), collection lots (with a real date picker
   for Date Acquired), Game Changer categories with art and owned/in-deck
-  counters, hand-maintained EDHREC salt scores, and a "Card Data" refresh
-  that also prunes stale collection rows. No CSV editing required for any
-  of it.
-- **🏆 Commander Game Tracking** — log games (existing tracked decks via
-  dropdown, or free-text for opponents' decks), see an actual rendered
-  game history, and compare win rates by deck and by player.
+  counters, and a "Card Data" refresh that also prunes stale collection
+  rows. No CSV editing required for any of it.
+- **🏆 Commander Game Tracking** — log, edit, or delete games (tracked
+  decks via dropdown, or a known/free-text opponent deck and player
+  name with autofill from past entries), across a Log tab (rendered
+  game history included) and a Stats tab (win rate by deck/by player,
+  a multiplayer ELO rating, and a head-to-head win-rate matrix).
 """
 )

@@ -168,6 +168,31 @@ def load_player_win_rates(_conn):
     return q.player_win_rates(_conn)
 
 
+# ------------------------------------------------------------------
+# Prompt Pass 7 additions (Commander Game Tracking: edit, autofill,
+# ELO/head-to-head). Note game_detail() is NOT wrapped here — see its
+# own docstring in queries.py for why; the edit form calls it directly.
+# ------------------------------------------------------------------
+@st.cache_data(show_spinner=False)
+def load_known_player_names(_conn):
+    return q.distinct_player_names(_conn)
+
+
+@st.cache_data(show_spinner=False)
+def load_known_untracked_deck_names(_conn):
+    return q.distinct_untracked_deck_names(_conn)
+
+
+@st.cache_data(show_spinner=False)
+def load_player_elo_ratings(_conn):
+    return q.player_elo_ratings(_conn)
+
+
+@st.cache_data(show_spinner=False)
+def load_player_head_to_head(_conn):
+    return q.player_head_to_head_matrix(_conn)
+
+
 def invalidate_reference_caches():
     """Clear caches for the name-keyed / global reference data touched by
     the Editor's Themes and Game Changers management UI (catalogs,
@@ -184,12 +209,18 @@ def invalidate_reference_caches():
 
 
 def invalidate_game_tracking_caches():
-    """Clear caches after logging or deleting a Commander game."""
+    """Clear caches after logging, editing, or deleting a Commander
+    game (Prompt Pass 7 added edit, plus the ELO/head-to-head/autofill
+    caches, all of which shift whenever the game log changes)."""
     load_games_list.clear()
     load_deck_win_rates.clear()
     load_player_win_rates.clear()
     load_deck_stats.clear()
     load_dashboard_summary.clear()
+    load_known_player_names.clear()
+    load_known_untracked_deck_names.clear()
+    load_player_elo_ratings.clear()
+    load_player_head_to_head.clear()
 
 
 def invalidate_deck_caches(deck_id=None):
@@ -221,6 +252,11 @@ def invalidate_deck_caches(deck_id=None):
     load_deck_price_top10.clear()
     load_deck_win_rates.clear()
     load_game_changers_overview.clear()
+    # A deleted deck's game_participants rows detach to deck_id=NULL
+    # (writes.delete_deck()) rather than disappearing, so its name can
+    # now show up in the "known opponent deck" autofill list too
+    # (Prompt Pass 7).
+    load_known_untracked_deck_names.clear()
 
 
 def invalidate_collection_caches():

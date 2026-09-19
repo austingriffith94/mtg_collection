@@ -1,12 +1,27 @@
 for the game logs:
-the ability to edit existing game entries (so far I can delete, but if I want to make a small change is it possible to edit an entry?)
+adding some color formatting to the head to head win tables to make it pop more. do conditional formatting, I would anchor the neutral color at the value 25% since that is your fair chance to win in a game of 4, if the value is less then you are worse (red) and if you are greater than 25% than it is better (blue). apply a similar conditional formatting logic to the win % in the win by deck and win by person at the top of the page.
 
-right now it is tracking games by number in the database and in the delete log dropdown. there is no need to track the game # outright, since if I enter them out of order played then the number means nothing.
+small formatting tweaks:
+some of the descriptions on the page have artifacts like "Prompt Pass 5:" and "rather than the old plain draw probability" etc. These are talking about the prompt and/or removed features. can you please look through the descriptions in the tool and make sure these are removed, since they are distracting from the descriptions.
 
-for the logs, is there a way to have the opponents deck field and player field show recommended autofill if the typed in text is resembling an already existing entry? Or would it be easier to add to a list of allowable fields in the dropdown by entering new players and deck names somewhere to populate a dropdown? whichever makes the most sense from a page construction standpoint, no issue with either option to me.
+Can you make the labels on the left like "dashboard" into all CAPS
 
-can you use the records to get something like an ELO of players vs each other? some sort of metrics/visualization of how each person plays against each other. this might be limited since most games I am in, so 1 of the 4 will always be me, and it's typically a similar group for each game, something to keep in mind.
 
-also if I remove a tracked deck, will that break the logic of the log page? is that situation accounted for? if I try to enter a log without a winner or all decks entered, will the tool allow me to do that or will it stop me?
+Land Probability:
+in the commander cast probability calculator, I like that you are assuming a standard 1 land played per turn. however I see you have calculated values greater than 0 for a turn count that is less than a commander (example is Marchesa Thatcher, which is a 4 mana commander having a 28% probability on turn 3 though in theory there shouldn't be enough played lands to cast the card). can you make sure the methodology is sound here.
 
-the layout of hte page is a little awkward, since the stats tracking is at the bottom, once the list starts to get long it's a pain to scroll all the way to the bottom just to see it. it might be worth having the stats on a different tab within the Commander Game Tracking so it's easier to see.
+weighted mana-source availability graph, can you please apply the same color logic to mana sources that you already have on the "Decks" page. if a mana rock or mana dork then make them into a new color that doesn't overlap with the existing WUBRG colors.
+
+DECK:
+the sleeved in deck count is assuming that I don't have any of the basic lands sleeved, which is incorrect. I just don't assign a basic land in my collection to the deck, so you can update the assumption that I do sleeve my basic lands despite not having a record in the collection for those.
+
+for the game changers section, you don't need a status, you just need to show the card name, and the tag for it.
+
+On the main page, can you do some formatting tweaks:
+show the mana symbols of the color identity of the deck
+you can use the colors of the mana identity to also add some formatting/highlights to the deck page so it's not just a flat black and white page
+for the short phrase like "big mana group slug" for each commander, can you put that under the name of the deck rather than under the initial table stats
+you can remove the card emoji and title "Decks" at the top of the page here. Instead you can make the png if available and the name of the deck the title instead (if that is possible).
+
+EDITOR:
+I'm not seeing a way to edit the optimized mana flags table. does this exist anywhere/can I update/mantain it anywhere?

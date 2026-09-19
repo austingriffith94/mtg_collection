@@ -4,6 +4,7 @@ function takes an open sqlite3.Connection as its first argument, so this
 module can be unit-tested directly against mtg_collection.db (or the
 offline _test_mtg_collection.db) without launching the dashboard.
 """
+import itertools
 import sqlite3
 import pandas as pd
 
@@ -613,6 +614,64 @@ def games_list(conn):
     return games
 
 
+def game_detail(conn, game_id):
+    """Full detail for ONE logged game (Prompt Pass 7) — the data
+    source for the Commander Game Tracking page's "Edit a logged game"
+    form. Returns None if the game doesn't exist, else a dict:
+    {"game_id", "date", "note", "participants": [{"seat", "deck_name",
+    "deck_id", "is_winner", "player_name"}, ...]} ordered by seat.
+    Deliberately not wrapped by a loaders.py @st.cache_data function —
+    it's a single-row, on-demand lookup driving a form's defaults, and
+    should always reflect the current DB state rather than a cached
+    one."""
+    row = conn.execute(
+        "SELECT game_id, date, note FROM games WHERE game_id=?", (game_id,)
+    ).fetchone()
+    if not row:
+        return None
+    gid, date, note = row
+    participants = [
+        {
+            "seat": seat, "deck_name": deck_name, "deck_id": deck_id,
+            "is_winner": bool(is_winner), "player_name": player_name,
+        }
+        for seat, deck_name, deck_id, is_winner, player_name in conn.execute(
+            """SELECT seat, deck_name, deck_id, is_winner, player_name
+               FROM game_participants WHERE game_id=? ORDER BY seat""",
+            (game_id,),
+        ).fetchall()
+    ]
+    return {"game_id": gid, "date": date, "note": note, "participants": participants}
+
+
+def distinct_player_names(conn):
+    """Every distinct player_name ever logged (Prompt Pass 7) — feeds
+    the "Player" autofill dropdown on the Commander Game Tracking
+    page's log/edit forms, so a regular playgroup doesn't have to be
+    retyped by hand each time."""
+    rows = conn.execute(
+        """SELECT DISTINCT player_name FROM game_participants
+           WHERE player_name IS NOT NULL AND TRIM(player_name) != ''
+           ORDER BY player_name COLLATE NOCASE"""
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def distinct_untracked_deck_names(conn):
+    """Every distinct deck_name ever logged WITHOUT a tracked deck_id
+    (Prompt Pass 7) — an opponent's deck that was never in your own
+    `decks` table, OR a deck that WAS tracked but has since been
+    deleted (deleting a deck detaches its game_participants rows to
+    deck_id=NULL rather than losing them — see writes.delete_deck()).
+    Feeds the "known opponent deck" autofill dropdown."""
+    rows = conn.execute(
+        """SELECT DISTINCT deck_name FROM game_participants
+           WHERE deck_id IS NULL
+           ORDER BY deck_name COLLATE NOCASE"""
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
 def deck_win_rates(conn):
     """All decks' win/loss/win-rate (deck_stats view), decks with at
     least one logged game only, most-played first."""
@@ -634,6 +693,162 @@ def player_win_rates(conn):
            ORDER BY games_played DESC, win_rate DESC""",
         conn,
     )
+
+
+def player_elo_ratings(conn, k_factor=20, initial_rating=1000):
+    """Player-vs-player ELO variant for the Commander Game Tracking
+    Stats tab (Prompt Pass 7's "Win Rates & ELO Tracking" requirement).
+
+    Standard 1v1 ELO assumes a 50% baseline win probability, which
+    doesn't fit a 4-player free-for-all pod — an average player there
+    wins about 1 game in 4, not 1 in 2. This uses the common
+    multiplayer-ELO extension of decomposing each game into every PAIR
+    of seated players and running an ordinary pairwise ELO update for
+    each pair: the winner is scored a win (1-0) against every other
+    seated player, and every pair of NON-winners is scored a draw
+    (0.5-0.5) against each other, since a plain win/loss log doesn't
+    capture full 2nd/3rd/4th placement. Over many games this settles
+    ratings around a baseline appropriate to a 4-player pod rather than
+    assuming a 50/50 world — the "Commander Context Adjustments" this
+    project's spec asked for. A moderate K-factor (20, vs. chess's
+    classic ~32) is used since this is a low-volume, small, consistent
+    playgroup (per PROJECT_STATE.md: primarily the dashboard's owner
+    plus a handful of regulars) where a single game shouldn't swing a
+    rating too wildly.
+
+    Only participant rows with a non-blank player_name count (same
+    scoping as player_stats/player_win_rates — games logged before
+    Phase 2 added player_name are excluded), and only games with at
+    least 2 named players contribute an update (nothing to compare a
+    solo-named game against). Games are processed in chronological
+    order (date, then game_id as the same-day tiebreaker) so ratings
+    evolve the way they actually would have, game by game. Within one
+    game, every pairwise delta is computed from a SNAPSHOT of ratings
+    taken at the start of that game and applied all at once at the
+    end — not applied one pair at a time as they're computed — so a
+    player's earlier pairing within the same game can't shift the
+    expected-score baseline used for their later pairings in that same
+    game. Without this, a 4-player game's outcome would depend on the
+    arbitrary order the pairs happen to be iterated in (an artifact
+    caught by this pass's own test suite), which isn't a property a
+    rating system should have. Never stored — recomputed fresh every
+    call, same "can't go stale" philosophy as deck_stats/player_stats.
+
+    Returns a DataFrame [player_name, rating, games_played] — rating
+    rounded to the nearest whole number, sorted highest first. Empty
+    DataFrame (same columns) if no game has 2+ named players yet."""
+    rows = conn.execute(
+        """SELECT gp.game_id, g.date, gp.player_name, gp.is_winner
+           FROM game_participants gp
+           JOIN games g ON g.game_id = gp.game_id
+           WHERE gp.player_name IS NOT NULL AND TRIM(gp.player_name) != ''
+           ORDER BY g.date, gp.game_id, gp.seat"""
+    ).fetchall()
+
+    by_game = {}
+    for game_id, date, player_name, is_winner in rows:
+        by_game.setdefault((date, game_id), []).append((player_name, bool(is_winner)))
+
+    ratings = {}
+    games_played = {}
+
+    def rating_of(name):
+        return ratings.setdefault(name, float(initial_rating))
+
+    for participants in by_game.values():
+        if len(participants) < 2:
+            continue
+        for name, _ in participants:
+            games_played[name] = games_played.get(name, 0) + 1
+
+        snapshot = {name: rating_of(name) for name, _ in participants}
+        deltas = {name: 0.0 for name, _ in participants}
+        for (name_a, win_a), (name_b, win_b) in itertools.combinations(participants, 2):
+            ra, rb = snapshot[name_a], snapshot[name_b]
+            expected_a = 1.0 / (1.0 + 10 ** ((rb - ra) / 400.0))
+            if win_a and not win_b:
+                actual_a = 1.0
+            elif win_b and not win_a:
+                actual_a = 0.0
+            else:
+                actual_a = 0.5
+            delta_a = k_factor * (actual_a - expected_a)
+            deltas[name_a] += delta_a
+            deltas[name_b] -= delta_a
+        for name, delta in deltas.items():
+            ratings[name] = snapshot[name] + delta
+
+    if not ratings:
+        return pd.DataFrame(columns=["player_name", "rating", "games_played"])
+
+    out = pd.DataFrame(
+        [
+            {"player_name": name, "rating": round(rating), "games_played": games_played.get(name, 0)}
+            for name, rating in ratings.items()
+        ]
+    )
+    return out.sort_values("rating", ascending=False).reset_index(drop=True)
+
+
+def player_head_to_head_matrix(conn):
+    """Pairwise head-to-head win rate between every two players who've
+    ever shared a game (Commander Game Tracking Stats tab, Prompt Pass
+    7) — a more literal "how do I do against Anthony specifically"
+    complement to player_elo_ratings(). For each shared game between
+    two players A and B: if A won and B didn't (or vice versa), that's
+    a win/loss for the pair; if neither did (including a historical
+    pre-Prompt-Pass-7 logged draw), it still counts toward games shared
+    but doesn't move either player's numerator — same "only a recorded
+    winner moves the needle" logic as the rest of this page.
+
+    Returns a square DataFrame indexed and columned by player name
+    (alphabetical): cell [A, B] is A's win rate against B specifically
+    (float 0-1, NaN if they've never shared a game); the diagonal is
+    always NaN. Same player_name scoping as player_elo_ratings() —
+    only games with a recorded player_name contribute. Never stored,
+    recomputed fresh every call."""
+    rows = conn.execute(
+        """SELECT gp.game_id, gp.player_name, gp.is_winner
+           FROM game_participants gp
+           WHERE gp.player_name IS NOT NULL AND TRIM(gp.player_name) != ''"""
+    ).fetchall()
+
+    by_game = {}
+    for game_id, player_name, is_winner in rows:
+        by_game.setdefault(game_id, []).append((player_name, bool(is_winner)))
+
+    wins = {}       # (a, b) -> a's win count vs b
+    together = {}   # (a, b) -> games shared, stored symmetrically both directions
+    players = set()
+
+    for participants in by_game.values():
+        if len(participants) < 2:
+            continue
+        for name, _ in participants:
+            players.add(name)
+        for (name_a, win_a), (name_b, win_b) in itertools.combinations(participants, 2):
+            together[(name_a, name_b)] = together.get((name_a, name_b), 0) + 1
+            together[(name_b, name_a)] = together.get((name_b, name_a), 0) + 1
+            if win_a and not win_b:
+                wins[(name_a, name_b)] = wins.get((name_a, name_b), 0) + 1
+            elif win_b and not win_a:
+                wins[(name_b, name_a)] = wins.get((name_b, name_a), 0) + 1
+
+    names = sorted(players)
+    if not names:
+        return pd.DataFrame()
+
+    data = {}
+    for col in names:
+        col_vals = []
+        for row_name in names:
+            if row_name == col:
+                col_vals.append(float("nan"))
+                continue
+            shared = together.get((row_name, col), 0)
+            col_vals.append(round(wins.get((row_name, col), 0) / shared, 3) if shared else float("nan"))
+        data[col] = col_vals
+    return pd.DataFrame(data, index=names)
 
 
 # ------------------------------------------------------------------

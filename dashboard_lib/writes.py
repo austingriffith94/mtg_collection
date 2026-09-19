@@ -337,13 +337,27 @@ def delete_deck(conn, deck_id, clear_collection_locations=True):
     cleared to NULL by default (clear_collection_locations=True) so
     "sleeved in this deck" tracking doesn't point at a phantom deck —
     set to False to leave that text as-is.
+
+    Audited as part of Prompt Pass 7 (Commander Game Tracking "Tracked
+    Deck Deletion" requirement): the detach-not-delete behavior above
+    was already correct going into that pass. The one gap found and
+    fixed here is `is_own_deck` — it used to stay 1 on a detached row
+    even after deck_id went NULL, which is a mismatch (is_own_deck=1
+    implies "this seat maps to a deck row you still track" — this now
+    also clears to 0, matching every genuinely-untracked/free-text
+    participant row's own shape). `is_own_deck` isn't currently read by
+    any query/page — deck_stats/player_stats/games_list all key off
+    deck_id/player_name directly — so this is a data-hygiene fix, not a
+    behavior change to anything visible today.
     """
     row = conn.execute("SELECT name FROM decks WHERE deck_id=?", (deck_id,)).fetchone()
     if not row:
         return None, "Deck not found."
     deck_name = row[0]
 
-    conn.execute("UPDATE game_participants SET deck_id=NULL WHERE deck_id=?", (deck_id,))
+    conn.execute(
+        "UPDATE game_participants SET deck_id=NULL, is_own_deck=0 WHERE deck_id=?", (deck_id,)
+    )
 
     for table in _DECK_SCOPED_TABLES:
         conn.execute(f"DELETE FROM {table} WHERE deck_id=?", (deck_id,))
@@ -536,22 +550,37 @@ def prune_collection(conn):
     return [(r[0], r[1]) for r in rows]
 
 
-def create_game(conn, date, note, participants):
-    """Logs one Commander game. participants: ordered list of dicts,
-    each {"deck_name": str, "deck_id": int_or_None, "is_winner": bool,
-    "player_name": str_or_None} — seat number is assigned 1..N by list
-    position. deck_id is None for opponent decks not in your tracked
-    `decks` table (free-text entry); is_own_deck is derived as
-    deck_id is not None, matching migrate.py's original convention.
-    Returns (game_id, error) — error is a message if no usable
-    participants were given, else None."""
-    participants = [p for p in participants if (p.get("deck_name") or "").strip()]
-    if not participants:
-        return None, "Add at least one deck/participant before logging the game."
+def _validate_game_participants(participants):
+    """Shared create_game()/update_game() validation (Prompt Pass 7):
+    at least one usable participant, and — among participants that
+    actually have a deck — exactly one winner. Returns an error
+    string, or None if the list is fine to save.
 
-    cur = conn.execute("INSERT INTO games (date, note) VALUES (?,?)", (date or None, note or None))
-    game_id = cur.lastrowid
+    This is a defense-in-depth backstop: the Commander Game Tracking
+    page's own form-level validation (which can give a friendlier,
+    seat-numbered error message) is expected to catch these cases
+    first, but this layer means a game can't be logged with zero or
+    multiple winners no matter how it's called. Note this only applies
+    going forward — historical games imported by migrate.py insert
+    directly via SQL and never pass through here, so any real draws
+    (zero winners) already in games_played.csv are preserved as-is."""
+    usable = [p for p in participants if (p.get("deck_name") or "").strip()]
+    if not usable:
+        return "Add at least one deck/participant before logging the game."
+    winner_count = sum(1 for p in usable if p.get("is_winner"))
+    if winner_count == 0:
+        return "Select a winner before logging the game."
+    if winner_count > 1:
+        return "Only one seat can be marked as the winner."
+    return None
 
+
+def _insert_game_participants(conn, game_id, participants):
+    """Shared insert step for create_game()/update_game(): participants
+    is assumed already filtered/validated. Seat number is assigned
+    1..N by list position; deck_id is None for opponent decks not in
+    the tracked `decks` table (free-text entry), and is_own_deck is
+    derived from that, matching migrate.py's original convention."""
     for seat, p in enumerate(participants, start=1):
         deck_id = p.get("deck_id")
         conn.execute(
@@ -568,8 +597,50 @@ def create_game(conn, date, note, participants):
                 (p.get("player_name") or "").strip() or None,
             ),
         )
+
+
+def create_game(conn, date, note, participants):
+    """Logs one Commander game. participants: ordered list of dicts,
+    each {"deck_name": str, "deck_id": int_or_None, "is_winner": bool,
+    "player_name": str_or_None}. Returns (game_id, error) — error is a
+    message and game_id is None if the participant list doesn't pass
+    _validate_game_participants() (Prompt Pass 7: a winner is now
+    required, not just "at most one" — see that function's docstring
+    for the historical-data caveat)."""
+    participants = [p for p in participants if (p.get("deck_name") or "").strip()]
+    err = _validate_game_participants(participants)
+    if err:
+        return None, err
+
+    cur = conn.execute("INSERT INTO games (date, note) VALUES (?,?)", (date or None, note or None))
+    game_id = cur.lastrowid
+    _insert_game_participants(conn, game_id, participants)
     conn.commit()
     return game_id, None
+
+
+def update_game(conn, game_id, date, note, participants):
+    """Edits an existing logged game in place (Prompt Pass 7): updates
+    the games row's date/note, then replaces its entire
+    game_participants set (delete + reinsert, same whole-list-replace
+    pattern as set_deck_rank_list()) rather than diffing seat by seat —
+    game_participants has no other table pointing at it via FK, so a
+    full reassignment is simple and safe. participants: same shape as
+    create_game()'s. Returns (success, error)."""
+    row = conn.execute("SELECT game_id FROM games WHERE game_id=?", (game_id,)).fetchone()
+    if not row:
+        return False, "Game not found."
+
+    participants = [p for p in participants if (p.get("deck_name") or "").strip()]
+    err = _validate_game_participants(participants)
+    if err:
+        return False, err
+
+    conn.execute("UPDATE games SET date=?, note=? WHERE game_id=?", (date or None, note or None, game_id))
+    conn.execute("DELETE FROM game_participants WHERE game_id=?", (game_id,))
+    _insert_game_participants(conn, game_id, participants)
+    conn.commit()
+    return True, None
 
 
 def delete_game(conn, game_id):

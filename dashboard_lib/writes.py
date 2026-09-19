@@ -15,6 +15,18 @@ initial import, then manage things here from then on.
 import datetime
 import sqlite3
 
+from . import queries as q
+
+# The fallback storage Location a deck's collection.location rows are
+# reassigned to (Prompt Pass 13) instead of being cleared to NULL —
+# used by delete_deck() (deleting a deck) and execute_swap() (removing
+# a card from a deck via the Swap Manager). "Box" is always offered in
+# the Location dropdown regardless of the master catalog's contents
+# (see queries._seed_location_catalog / schema.sql's location_catalog
+# comment), so a row reassigned here always resolves to a real,
+# selectable option.
+DEFAULT_LOCATION = "Box"
+
 
 def get_or_create_tag(conn, tag_type, label):
     tag_type = tag_type.strip()
@@ -149,6 +161,113 @@ def bulk_set_game_changer_tags(conn, edits):
 # for why. cards.edhrec_salt itself is left in the schema untouched
 # (additive policy), so any values entered before this pass aren't lost —
 # there just isn't an in-dashboard write path to it anymore.
+
+
+# ------------------------------------------------------------------
+# Mana tag catalog (Prompt Pass 12) — the master list the Editor's Mana
+# Tags dropdown is populated from. Separate from mana_tags (the actual
+# per-card assignments); removing a tag here does not touch any card's
+# existing assignments. Exact mirror of the Game Changer category catalog
+# functions above.
+# ------------------------------------------------------------------
+def list_mana_tag_catalog(conn):
+    rows = conn.execute(
+        "SELECT tag FROM mana_tag_catalog ORDER BY tag COLLATE NOCASE"
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def add_mana_tag_to_catalog(conn, tag):
+    tag = (tag or "").strip()
+    if not tag:
+        return
+    conn.execute("INSERT OR IGNORE INTO mana_tag_catalog (tag) VALUES (?)", (tag,))
+    conn.commit()
+
+
+def remove_mana_tag_from_catalog(conn, tag):
+    conn.execute("DELETE FROM mana_tag_catalog WHERE tag=?", (tag,))
+    conn.commit()
+
+
+# ------------------------------------------------------------------
+# Mana tag assignment (Prompt Pass 12) — card_name-keyed (matches
+# mana_tags' own grain), NOT deck-scoped, unlike card_tags. mana_tags has
+# no Scryfall-derived flag the way game_changer_tags does, so this is the
+# ONLY write path that puts a card in front of the Editor's Mana Tags
+# overview table — exact mirror of the Game Changer tag-assignment
+# functions above, just without a scryfall_flag concept.
+# ------------------------------------------------------------------
+def get_mana_tags_map(conn):
+    """{card_name: [tag, ...]} for every card currently carrying at least
+    one optimized-mana tag."""
+    rows = conn.execute("SELECT card_name, tag FROM mana_tags").fetchall()
+    result = {}
+    for card_name, tag in rows:
+        result.setdefault(card_name, []).append(tag)
+    return result
+
+
+def set_mana_tags(conn, card_name, tags):
+    """Replace ALL of one card's mana tags with exactly `tags` (list of
+    strings; pass [] to clear). Also registers any brand-new tag in the
+    master catalog, so a tag typed here immediately shows up in the
+    dropdown too."""
+    conn.execute("DELETE FROM mana_tags WHERE card_name=?", (card_name,))
+    seen = set()
+    for raw in tags:
+        label = (raw or "").strip()
+        if not label or label.lower() in seen:
+            continue
+        seen.add(label.lower())
+        conn.execute(
+            "INSERT OR IGNORE INTO mana_tags (card_name, tag) VALUES (?,?)",
+            (card_name, label),
+        )
+        add_mana_tag_to_catalog(conn, label)
+    conn.commit()
+
+
+def bulk_set_mana_tags(conn, edits):
+    """edits: {card_name: [tag, ...]}. Returns count of cards whose tag
+    set actually changed."""
+    before = get_mana_tags_map(conn)
+    changed = 0
+    for card_name, tags in edits.items():
+        new_set = {t.strip().lower() for t in tags if t and t.strip()}
+        old_set = {t.strip().lower() for t in before.get(card_name, [])}
+        if new_set != old_set:
+            set_mana_tags(conn, card_name, tags)
+            changed += 1
+    return changed
+
+
+# ------------------------------------------------------------------
+# Location catalog (Prompt Pass 13) — the master list of "standard"
+# (non-deck) storage locations offered in the Editor's Location
+# dropdown, alongside every tracked deck's own name (see
+# queries.location_options()). Removing an entry here does not touch
+# any collection row's existing Location value — same pattern as the
+# theme/game-changer-category/mana-tag catalogs above.
+# ------------------------------------------------------------------
+def list_location_catalog(conn):
+    rows = conn.execute(
+        "SELECT location FROM location_catalog ORDER BY location COLLATE NOCASE"
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def add_location_to_catalog(conn, location):
+    location = (location or "").strip()
+    if not location:
+        return
+    conn.execute("INSERT OR IGNORE INTO location_catalog (location) VALUES (?)", (location,))
+    conn.commit()
+
+
+def remove_location_from_catalog(conn, location):
+    conn.execute("DELETE FROM location_catalog WHERE location=?", (location,))
+    conn.commit()
 
 
 # ------------------------------------------------------------------
@@ -334,9 +453,15 @@ def delete_deck(conn, deck_id, clear_collection_locations=True):
     opponent's deck already has.
 
     collection.location rows that exactly matched this deck's name are
-    cleared to NULL by default (clear_collection_locations=True) so
-    "sleeved in this deck" tracking doesn't point at a phantom deck —
-    set to False to leave that text as-is.
+    reassigned to DEFAULT_LOCATION ("Box") by default
+    (clear_collection_locations=True) so "sleeved in this deck" tracking
+    doesn't point at a phantom deck — those cards physically still exist,
+    they've just come out of a deck that no longer exists, so they land
+    back in general storage rather than losing their Location entirely.
+    Set to False to leave that text as-is. (Prompt Pass 13: this used to
+    clear the Location to NULL instead of reassigning it — changed so a
+    deleted deck's cards don't silently become "no location recorded",
+    which is indistinguishable from a card that was never logged at all.)
 
     Audited as part of Prompt Pass 7 (Commander Game Tracking "Tracked
     Deck Deletion" requirement): the detach-not-delete behavior above
@@ -363,7 +488,9 @@ def delete_deck(conn, deck_id, clear_collection_locations=True):
         conn.execute(f"DELETE FROM {table} WHERE deck_id=?", (deck_id,))
 
     if clear_collection_locations:
-        conn.execute("UPDATE collection SET location=NULL WHERE location=?", (deck_name,))
+        conn.execute(
+            "UPDATE collection SET location=? WHERE location=?", (DEFAULT_LOCATION, deck_name)
+        )
 
     conn.execute("DELETE FROM decks WHERE deck_id=?", (deck_id,))
     conn.commit()
@@ -736,3 +863,70 @@ def bulk_update_collection(conn, updates):
             update_collection_lot(conn, collection_id, **new_vals)
             changed += 1
     return changed
+
+
+# ------------------------------------------------------------------
+# Deck Swap / Upgrade Manager (Prompt Pass 13 / prompt6.txt) — applies
+# one queued swap from the Editor's Swap Manager tab. Card resolution
+# (name/set/number -> scryfall_id, including a live Scryfall lookup for
+# a brand-new card) happens at the call site via card_resolver, same
+# division of responsibility as the Mainboard tab's own "Add a card"
+# flow — this function only takes already-resolved printings and does
+# the actual deck/collection writes.
+# ------------------------------------------------------------------
+def execute_swap(conn, deck_id, deck_name, remove_scryfall_id, remove_card_name,
+                  add_scryfall_id, add_card_name, quantity=1, default_location=None):
+    """Removes `remove_scryfall_id` from the deck's mainboard and adds
+    `add_scryfall_id` in its place at `quantity` copies, then reconciles
+    collection.location for both cards so the collection doesn't quietly
+    drift out of sync with what the deck actually runs:
+
+      - any collection lot for the removed card currently sleeved in
+        THIS deck (Location == deck_name) moves back to
+        `default_location` (DEFAULT_LOCATION/"Box" if not given) — same
+        "return to storage" convention delete_deck() uses.
+      - the added card gets sleeved here: reuses the first available
+        (not already sleeved in any deck) lot for it if one exists
+        (queries.card_inventory_status()), else creates a brand-new
+        starter lot (source "Auto-added (swap manager)"). Unlike
+        auto_add_to_collection(), this isn't gated on "zero lots exist
+        anywhere" — a card that's owned but every copy is already
+        sleeved in some OTHER deck still needs its own fresh lot here
+        rather than silently stealing one from that other deck's box.
+
+    Returns {"moved_out": bool, "assigned_lot_id": int_or_None,
+    "created_lot": bool} describing what happened on the collection
+    side, so the caller can report it per swap."""
+    default_location = default_location or DEFAULT_LOCATION
+
+    remove_deck_card(conn, deck_id, remove_scryfall_id)
+    add_deck_card(conn, deck_id, add_scryfall_id, quantity=quantity)
+
+    moved_out = False
+    if remove_card_name:
+        rows = conn.execute(
+            """SELECT col.collection_id FROM collection col
+               JOIN cards c ON c.scryfall_id = col.scryfall_id
+               WHERE c.name = ? COLLATE NOCASE AND col.location = ?""",
+            (remove_card_name, deck_name),
+        ).fetchall()
+        for (collection_id,) in rows:
+            update_collection_lot(conn, collection_id, location=default_location)
+            moved_out = True
+
+    assigned_lot_id = None
+    created_lot = False
+    status = q.card_inventory_status(conn, add_card_name, deck_name=deck_name)
+    if status["available_lots"]:
+        assigned_lot_id = status["available_lots"][0]["collection_id"]
+        update_collection_lot(conn, assigned_lot_id, location=deck_name)
+    elif status["in_this_deck_qty"] == 0:
+        assigned_lot_id = add_collection_lot(
+            conn, add_scryfall_id,
+            quantity=quantity, foil=False, location=deck_name,
+            date_acquired=datetime.date.today().isoformat(), price_paid=None,
+            source="Auto-added (swap manager)",
+        )
+        created_lot = True
+
+    return {"moved_out": moved_out, "assigned_lot_id": assigned_lot_id, "created_lot": created_lot}

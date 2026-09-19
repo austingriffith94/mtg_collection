@@ -226,10 +226,12 @@ The dashboard currently covers:
     the deck's cover image, edit Win Conditions/Strengths/Weaknesses (up
     to 3 ranked entries each), create a brand new deck from scratch
     (sidebar), or **permanently delete a deck** — removes its
-    mainboard/maybeboard/card tags/themes, clears any collection Locations
-    that matched its name, and detaches (rather than deletes) its rows in
-    past games so the rest of that game's history stays intact. Requires
-    typing the deck's exact name to confirm; cannot be undone.
+    mainboard/maybeboard/card tags/themes, reassigns any collection
+    Locations that matched its name back to the default "Box" storage
+    location (Prompt Pass 13 — it used to clear them to blank instead),
+    and detaches (rather than deletes) its rows in past games so the rest
+    of that game's history stays intact. Requires typing the deck's exact
+    name to confirm; cannot be undone.
   - **Themes** — add/remove main/sub themes per deck, picked from a
     master theme dropdown you manage (add/remove entries in an expander;
     removing one only changes what's offered, never touches existing
@@ -249,7 +251,25 @@ The dashboard currently covers:
     name) — Deck Building Auto-Add, so the collection can't silently drift
     out of sync with what your decks actually run. Maybeboard adds don't
     trigger this (a maybeboard card is still just under consideration).
-  - **Collection** — type a card name for a suggestion list drawn from
+  - **Swap Manager** (Prompt Pass 13) — a deck-scoped tool for planning
+    and applying mainboard upgrades. Build a queue of "Add [Card A] ->
+    Replace [Card B]" entries (nothing is written to the database until
+    you confirm); each queued entry shows live inventory availability for
+    the card being added — whether you own it, whether a copy is sitting
+    free in storage, or whether every copy you own is already sleeved in
+    another one of your decks. Confirming the queue updates this deck's
+    mainboard for every swap AND reconciles `collection.location`: the
+    replaced card's lot(s) sleeved in this deck move back to "Box", and
+    the added card is sleeved here — reusing an available owned copy if
+    one exists, otherwise creating a brand-new starter lot (tagged
+    "Auto-added (swap manager)", same auditability convention as Deck
+    Building Auto-Add below) rather than ever pulling a physical copy out
+    of another deck's box.
+  - **Collection** — the Location field is a controlled dropdown (Prompt
+    Pass 13): a master list of standard storage locations you manage (an
+    expander, "Box"/"Lands Box" seeded by default) unioned with every
+    tracked deck's own name, so "sleeved in this deck" tracking can't
+    drift from a typo. Type a card name for a suggestion list drawn from
     cards already in your database (refreshes once you finish typing or
     press Enter); pick one to get a second dropdown of every printing you
     already know about (set, collector number, price), or a "🔍 Check
@@ -259,7 +279,8 @@ The dashboard currently covers:
     (defaulting to today)/source, or skip the suggestions entirely and
     enter a Set Code + Collector Number directly for a brand-new card
     (live Scryfall lookup, same fallback as Mainboard/Maybeboard above).
-    Then search and bulk-edit or remove existing lots.
+    Then search and bulk-edit (Location is a dropdown here too) or remove
+    existing lots.
   - **Game Changers** — every card that's either Scryfall-flagged or
     already carries one of your custom categories, across your whole
     database (not just one deck), shown with card art. Edit categories
@@ -454,8 +475,14 @@ WHERE d.name = 'Vilis, Blood ATM';
 
 `mana_tags.csv` loads into a `mana_tags` table (Fast, Dual, Shockland,
 Fetch, Ritual, Mana Doubler, Medallion, Moxen, etc.) — same static,
-name-keyed pattern as Game Changers, no Scryfall calls needed. Reconstructs
-the old "Optimized Mana" PDF footnote dynamically, per deck:
+name-keyed pattern as Game Changers, no Scryfall calls needed. As of
+Prompt Pass 12, it also has an in-dashboard editor — the Editor page's
+**Mana Tags** tab, mirroring the Game Changers tab's master-catalog +
+bulk-edit pattern (a `mana_tag_catalog` table backs the tag dropdown),
+plus a card-name search to assign a first-ever tag to any card in the
+database (mana_tags has no Scryfall-derived flag the way Game Changers
+does, so nothing else seeds a brand-new candidate card). Reconstructs the
+old "Optimized Mana" PDF footnote dynamically, per deck:
 
 ```sql
 SELECT tag, cards FROM deck_mana_tag_summary dmts
@@ -466,6 +493,48 @@ WHERE d.name = 'Vilis, Blood ATM';
 -- Medallion      | Jet Medallion
 -- Ritual         | Dark Ritual
 ```
+
+## Deck Swap Manager
+
+Added in Prompt Pass 13 (Editor page, **Swap Manager** tab, deck-scoped)
+to make upgrading a deck a deliberate, reviewable batch action instead of
+adding/removing cards one at a time and separately remembering to fix up
+`collection.location` afterward. Workflow:
+
+1. **Swap Builder** — pick a card currently in the deck's mainboard to
+   replace, and type the name of the card you want to add instead. Queue
+   as many of these `Add [Card A] -> Replace [Card B]` entries as you
+   want before touching the database.
+2. **Inventory Checking** — each queued entry shows a live read of
+   `collection` for the card being added: not owned at all, owned and
+   sitting free in storage, or owned but every copy is already sleeved
+   in one of your OTHER decks (named, so you know exactly where it is).
+3. **Execution Confirmation** — one button applies the whole queue.
+   `deck_cards` is updated for every swap, and `collection.location` is
+   reconciled for both sides: the replaced card's lot(s) sleeved in this
+   deck move back to `"Box"`, and the added card gets a lot sleeved in
+   this deck — an existing available copy if you have one, otherwise a
+   fresh starter lot (`source = "Auto-added (swap manager)"`, same
+   auditability convention as the Mainboard tab's Deck Building
+   Auto-Add). It will never silently move a card out of another deck's
+   box to satisfy this one.
+
+The queue itself only lives in the page session — nothing is written
+until you click "Confirm & apply all queued swaps".
+
+## Collection Location — now a dropdown
+
+`collection.location` is still free text at the schema level (a box
+label or a deck's own name — see schema.sql's comment on the column),
+but as of Prompt Pass 13 the Editor no longer lets you type it freely.
+A new `location_catalog` table holds your standard, non-deck storage
+locations (seeded with `"Box"` and `"Lands Box"`, manage the rest in the
+Collection tab's "⚙️ Manage the master Location list" expander); the
+dropdown offered everywhere Location is set or edited is that catalog
+unioned with every currently tracked deck's own name. Deleting a deck
+now **reassigns** any collection rows whose Location matched it back to
+`"Box"` (previously this cleared them to blank) — the cards still
+physically exist, they've just come out of a deck that no longer exists.
 
 ## Banlist / legality check
 
@@ -616,12 +685,12 @@ since this sandbox has no network access.
 ## Custom fields & editable data: CSV for initial import, dashboard from then on
 
 Deck names/metadata, mainboard, maybeboard, themes, collection lots, card
-tags, and Game Changer categories are all editable directly in the
-dashboard (Editor page — there's no separate Tag Editor page anymore; it
-was folded into Editor) — no CSV round-trip needed for any of it. Mana
-tags remain purely CSV-driven (`mana_tags.csv`), with no in-tool editor
-yet. (EDHREC salt scores used to be hand-editable here too; that feature
-was retired dashboard-wide — see "EDHREC Salt Score" below.)
+tags, Game Changer categories, and (Prompt Pass 12) mana tags are all
+editable directly in the dashboard (Editor page — there's no separate
+Tag Editor page anymore; it was folded into Editor) — no CSV round-trip
+needed for any of it. (EDHREC salt scores used to be hand-editable here
+too; that feature was retired dashboard-wide — see "EDHREC Salt Score"
+below.)
 
 `migrate.py` wipes and rebuilds the whole database on every run, with no
 attempt to preserve dashboard edits — see "Migration is one-way" above.

@@ -60,6 +60,21 @@ CREATE TABLE collection (
 CREATE INDEX idx_collection_card ON collection(scryfall_id);
 CREATE INDEX idx_collection_location ON collection(location);
 
+-- Master list of "standard" (non-deck) storage locations offered in the
+-- Editor's Location dropdown (Prompt Pass 13), alongside every currently
+-- tracked deck name (queries.location_options() unions the two — a
+-- deck's own name is always a valid Location, meaning "sleeved in that
+-- deck", without needing its own catalog entry). Seeded with "Box" (also
+-- the fallback location a deck's Location rows are reassigned to when
+-- that deck is deleted or a Swap Manager swap removes a card from it —
+-- see writes.DEFAULT_LOCATION) and "Lands Box". Adding/removing entries
+-- here only changes what the dropdown offers; it never touches any
+-- collection row's existing Location value — same pattern as
+-- theme_catalog/game_changer_category_catalog/mana_tag_catalog above.
+CREATE TABLE location_catalog (
+    location  TEXT PRIMARY KEY
+);
+
 -- ------------------------------------------------------------
 -- Decks
 -- ------------------------------------------------------------
@@ -212,6 +227,16 @@ CREATE TABLE mana_tags (
     card_name  TEXT NOT NULL,
     tag        TEXT NOT NULL,
     PRIMARY KEY (card_name, tag)
+);
+
+-- Master list of Optimized-mana categories offered in the Editor's Mana
+-- Tags dropdown (Prompt Pass 12). Seeded once from whatever distinct tag
+-- values already exist in mana_tags (originally sourced from
+-- mana_tags.csv at migration). Adding/removing entries here only affects
+-- what the dropdown offers; it never touches existing mana_tags
+-- assignments — same pattern as game_changer_category_catalog above.
+CREATE TABLE mana_tag_catalog (
+    tag  TEXT PRIMARY KEY
 );
 
 -- ------------------------------------------------------------

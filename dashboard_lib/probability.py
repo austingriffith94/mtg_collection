@@ -218,7 +218,15 @@ def commander_cast_probability_by_turn(
     Compounds two independent factors per turn:
       1) land_factor  — P(at least `commander_cmc` lands drawn by this
          turn), i.e. the standard 1-land-per-turn, no-ramp land-drop math
-         already used elsewhere on this page.
+         already used elsewhere on this page. Bounded to 0 whenever the
+         turn number itself is less than commander_cmc: with a single
+         land drop per turn and no ramp/fast mana accounted for, turn T
+         can put at most T lands into play regardless of how many extra
+         lands have been drawn, so a commander needing more mana than
+         the turn number allows is simply uncastable that early (Prompt
+         Pass 11 fix — the old version only checked lands DRAWN, so a
+         land-flooded draw could show a nonzero chance of casting a
+         4-drop on turn 3, which isn't legal without ramp).
       2) color_factor — the PRODUCT, across every distinct colored pip in
          the commander's cost, of P(at least `need` sources of that color
          drawn by this turn) — using source_counts (see count_color_sources).
@@ -233,7 +241,10 @@ def commander_cast_probability_by_turn(
     rows = []
     for turn in range(1, max_turn + 1):
         seen = cards_seen_by_turn(turn, on_the_play)
-        land_factor = prob_at_least(library_size, land_count, seen, needed_lands)
+        if turn < needed_lands:
+            land_factor = 0.0
+        else:
+            land_factor = prob_at_least(library_size, land_count, seen, needed_lands)
         color_factor = 1.0
         for color, need in (colored_pips or {}).items():
             color_factor *= prob_at_least(library_size, source_counts.get(color, 0), seen, need)
@@ -264,7 +275,11 @@ def card_cast_probability_by_turn(
          only ever showed this factor alone, which is why every
          singleton looked identical.
       2) land_factor  — P(at least `card_cmc` lands drawn by this turn),
-         same land-drop math used elsewhere on this page.
+         same land-drop math used elsewhere on this page — including the
+         same Prompt Pass 11 fix as the commander engine above: bounded
+         to 0 whenever turn < card_cmc, since one land drop per turn (no
+         ramp/fast mana accounted for) caps lands in play at the turn
+         number regardless of how many extra lands were drawn.
       3) color_factor — the PRODUCT, across every distinct colored pip in
          the card's own cost, of P(at least `need` sources of that color
          drawn by this turn) — using source_counts (see
@@ -283,7 +298,10 @@ def card_cast_probability_by_turn(
     for turn in range(0, max_turn + 1):
         seen = cards_seen_by_turn(turn, on_the_play)
         draw_factor = prob_at_least(library_size, card_qty, seen, 1)
-        land_factor = prob_at_least(library_size, land_count, seen, needed_lands)
+        if turn < needed_lands:
+            land_factor = 0.0
+        else:
+            land_factor = prob_at_least(library_size, land_count, seen, needed_lands)
         color_factor = 1.0
         for color, need in (colored_pips or {}).items():
             color_factor *= prob_at_least(library_size, source_counts.get(color, 0), seen, need)

@@ -69,12 +69,45 @@ def _seed_game_changer_category_catalog(conn):
     )
 
 
+def _seed_mana_tag_catalog(conn):
+    conn.execute(
+        """INSERT OR IGNORE INTO mana_tag_catalog (tag)
+           SELECT DISTINCT tag FROM mana_tags"""
+    )
+
+
+def _seed_location_catalog(conn):
+    """Prompt Pass 13: seed with the two standard locations named in the
+    prompt spec, plus whatever non-deck Location text is already in use
+    in the collection (so upgrading an existing database doesn't drop
+    any of the free-text locations already relied on from the new
+    dropdown's options)."""
+    conn.execute("INSERT OR IGNORE INTO location_catalog (location) VALUES ('Box')")
+    conn.execute("INSERT OR IGNORE INTO location_catalog (location) VALUES ('Lands Box')")
+    conn.execute(
+        """INSERT OR IGNORE INTO location_catalog (location)
+           SELECT DISTINCT location FROM collection
+           WHERE location IS NOT NULL AND TRIM(location) != ''
+             AND location NOT IN (SELECT name FROM decks)"""
+    )
+
+
 _SCHEMA_TABLE_UPGRADES = [
     ("theme_catalog", "CREATE TABLE theme_catalog (theme TEXT PRIMARY KEY)", _seed_theme_catalog),
     (
         "game_changer_category_catalog",
         "CREATE TABLE game_changer_category_catalog (category TEXT PRIMARY KEY)",
         _seed_game_changer_category_catalog,
+    ),
+    (
+        "mana_tag_catalog",
+        "CREATE TABLE mana_tag_catalog (tag TEXT PRIMARY KEY)",
+        _seed_mana_tag_catalog,
+    ),
+    (
+        "location_catalog",
+        "CREATE TABLE location_catalog (location TEXT PRIMARY KEY)",
+        _seed_location_catalog,
     ),
 ]
 
@@ -314,16 +347,39 @@ def deck_value_row(conn, deck_id):
     return d
 
 
-def in_deck_sleeved_count(conn, deck_name):
+def in_deck_sleeved_count(conn, deck_id, deck_name):
     """SUM(collection.quantity) where Location matches this deck's name
     exactly (physically sleeved cards, per the Location free-text
-    convention). Returns None if nothing matched (not necessarily zero —
-    could just mean nothing in the collection is tagged with that
-    location)."""
-    row = conn.execute(
+    convention), PLUS the deck list's own basic land quantities.
+
+    Basic lands are never given their own collection rows (per the
+    project's Location-tagging convention — see PROJECT_STATE.md), even
+    though they're physically sleeved in the deck along with everything
+    else, so counting collection rows alone always undercounts a deck
+    by however many basics it runs. cards.is_basic_land (populated by
+    scryfall_lookup.py from the type line) lets us add those in without
+    needing an explicit collection entry for them.
+
+    Returns None if nothing matched on either side (not necessarily
+    zero — could just mean nothing in the collection is tagged with
+    that location and the deck list itself hasn't loaded yet)."""
+    collection_row = conn.execute(
         "SELECT SUM(quantity) FROM collection WHERE location = ?", (deck_name,)
     ).fetchone()
-    return row[0]
+    collection_sleeved = collection_row[0]
+
+    basic_row = conn.execute(
+        """SELECT SUM(dc.quantity)
+           FROM deck_cards dc
+           JOIN cards c ON c.scryfall_id = dc.scryfall_id
+           WHERE dc.deck_id = ? AND c.is_basic_land = 1""",
+        (deck_id,),
+    ).fetchone()
+    basic_lands = basic_row[0] or 0
+
+    if collection_sleeved is None and basic_lands == 0:
+        return None
+    return (collection_sleeved or 0) + basic_lands
 
 
 _RANK_TABLES = {"win_conditions", "strengths", "weaknesses"}
@@ -496,6 +552,72 @@ def maybeboard_dataframe(conn, deck_id):
 
 
 # ------------------------------------------------------------------
+# Collection Location dropdown + Swap Manager inventory checking
+# (Prompt Pass 13 / prompt6.txt)
+# ------------------------------------------------------------------
+def location_options(conn):
+    """Every valid Location value offered in the Editor's dropdowns: the
+    standard-location catalog (location_catalog — "Box", "Lands Box",
+    etc.) unioned with every currently tracked deck's own name (a deck
+    name in collection.location has always meant "sleeved in that deck",
+    per this project's free-text convention — see schema.sql's comment
+    on collection.location). Sorted case-insensitively."""
+    catalog = {r[0] for r in conn.execute("SELECT location FROM location_catalog").fetchall()}
+    decks = {r[0] for r in conn.execute("SELECT name FROM decks").fetchall()}
+    return sorted(catalog | decks, key=str.casefold)
+
+
+def card_inventory_status(conn, card_name, deck_name=None):
+    """Availability snapshot for `card_name` (matched by exact,
+    case-insensitive name, across every owned printing) — powers the
+    Swap Manager's Inventory Checking step (Prompt Pass 13). A
+    collection lot whose Location exactly matches a currently tracked
+    deck's name is considered "sleeved in that deck"; anything else
+    (blank/NULL, or a plain storage-box label like "Box") counts as
+    available.
+
+    Returns a dict:
+      {"owned_qty": int,
+       "available_lots": [{"collection_id", "quantity", "location"}, ...],
+       "in_this_deck_qty": int,
+       "in_other_decks": {deck_name: qty, ...}}
+
+    `available_lots` excludes anything already sleeved in `deck_name` or
+    in another tracked deck, ordered largest-quantity-first (the Swap
+    Manager reassigns the first one on execute rather than creating a
+    redundant new lot). Returns all-zero/empty for a blank name or a
+    name with no collection rows at all."""
+    result = {"owned_qty": 0, "available_lots": [], "in_this_deck_qty": 0, "in_other_decks": {}}
+    card_name = (card_name or "").strip()
+    if not card_name:
+        return result
+
+    deck_names = {r[0] for r in conn.execute("SELECT name FROM decks").fetchall()}
+    rows = conn.execute(
+        """SELECT col.collection_id, col.quantity, col.location
+           FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
+           WHERE c.name = ? COLLATE NOCASE""",
+        (card_name,),
+    ).fetchall()
+
+    for collection_id, quantity, location in rows:
+        qty = quantity or 0
+        result["owned_qty"] += qty
+        loc = (location or "").strip()
+        if deck_name and loc == deck_name:
+            result["in_this_deck_qty"] += qty
+        elif loc in deck_names:
+            result["in_other_decks"][loc] = result["in_other_decks"].get(loc, 0) + qty
+        else:
+            result["available_lots"].append(
+                {"collection_id": collection_id, "quantity": qty, "location": location}
+            )
+
+    result["available_lots"].sort(key=lambda lot: lot["quantity"], reverse=True)
+    return result
+
+
+# ------------------------------------------------------------------
 # Collection
 # ------------------------------------------------------------------
 def collection_dataframe(conn):
@@ -550,6 +672,48 @@ def game_changers_overview(conn):
            FROM cards c
            LEFT JOIN game_changer_tags gct ON gct.card_name = c.name
            WHERE c.is_game_changer = 1 OR c.name IN (SELECT DISTINCT card_name FROM game_changer_tags)
+           GROUP BY c.name
+           ORDER BY c.name COLLATE NOCASE""",
+        conn,
+    )
+    if df.empty:
+        return df
+
+    owned = pd.read_sql_query(
+        """SELECT c.name AS name, SUM(col.quantity) AS owned_qty
+           FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
+           GROUP BY c.name""",
+        conn,
+    )
+    assigned = pd.read_sql_query(
+        """SELECT c.name AS name, COUNT(DISTINCT dc.deck_id) AS deck_count
+           FROM deck_cards dc JOIN cards c ON c.scryfall_id = dc.scryfall_id
+           GROUP BY c.name""",
+        conn,
+    )
+    df = df.merge(owned, on="name", how="left").merge(assigned, on="name", how="left")
+    df["owned_qty"] = df["owned_qty"].fillna(0).astype(int)
+    df["deck_count"] = df["deck_count"].fillna(0).astype(int)
+    return df
+
+
+# ------------------------------------------------------------------
+# Mana Tags overview (Editor -> Mana Tags tab, Prompt Pass 12) — every
+# card that already carries at least one optimized-mana category
+# (mana_tags), across the whole database (not deck-scoped), with art plus
+# owned/assigned counters. Unlike Game Changers, mana_tags has no
+# Scryfall-derived flag to fall back on (it's 100% hand-curated), so a
+# card only appears here once it's been tagged at least once — the
+# Editor's own "tag a card" search covers assigning a first-ever tag to a
+# card that isn't in this list yet. Matches by card NAME (not
+# scryfall_id), same reasoning as game_changers_overview.
+# ------------------------------------------------------------------
+def mana_tags_overview(conn):
+    df = pd.read_sql_query(
+        """SELECT c.scryfall_id, c.name, c.image_uri, c.local_image_path,
+                  GROUP_CONCAT(DISTINCT mt.tag) AS tags
+           FROM cards c
+           JOIN mana_tags mt ON mt.card_name = c.name
            GROUP BY c.name
            ORDER BY c.name COLLATE NOCASE""",
         conn,

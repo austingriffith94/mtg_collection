@@ -300,6 +300,23 @@ class Migrator:
                     row.get("Order Note") if pd.notna(row.get("Order Note")) else None,
                 ),
             )
+        # Prompt Pass 13: seed the master Location dropdown with the two
+        # standard storage locations named in the prompt spec, plus
+        # whatever non-deck Location text the CSV itself already used —
+        # same reason as the theme_catalog/game_changer_category_catalog
+        # seeds above: a fresh migrate.py run already has this table from
+        # schema.sql, so ensure_schema()'s own seeding (which only fires
+        # when upgrading a pre-Prompt-Pass-13 database that doesn't have
+        # the table yet) never runs for it here.
+        self.conn.execute("INSERT OR IGNORE INTO location_catalog (location) VALUES ('Box')")
+        self.conn.execute("INSERT OR IGNORE INTO location_catalog (location) VALUES ('Lands Box')")
+        self.conn.execute(
+            """INSERT OR IGNORE INTO location_catalog (location)
+               SELECT DISTINCT location FROM collection
+               WHERE location IS NOT NULL AND TRIM(location) != ''
+                 AND location NOT IN (SELECT name FROM decks)"""
+        )
+
         self.conn.commit()
         self.log(f"  {self.report['collection_rows']} collection rows processed, "
                  f"{self.report['collection_cards_fetched']} unique printings fetched.")

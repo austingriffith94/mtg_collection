@@ -249,7 +249,11 @@ else:
     # Only chart categories that actually have any sources, so an empty
     # color doesn't clutter the stacked bar with a flat zero series.
     nonzero_cols = [c for c in prob.MANA_SOURCE_CATEGORIES if category_counts.get(c, 0) > 0]
-    st.bar_chart(weighted_df[nonzero_cols])
+    # Prompt Pass 12: explicit per-category colors (fmt.MANA_SOURCE_COLOR_HEX)
+    # aligned with the Decks page's WUBRG palette, instead of Streamlit's
+    # auto-assigned default categorical colors.
+    chart_colors = [fmt.MANA_SOURCE_COLOR_HEX[c] for c in nonzero_cols]
+    st.bar_chart(weighted_df[nonzero_cols], color=chart_colors)
 
     with st.expander("Show as a table"):
         st.dataframe(weighted_df[nonzero_cols].round(2), use_container_width=True)

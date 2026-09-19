@@ -325,6 +325,35 @@ def deck_accent_gradient(ci_str):
     return f"linear-gradient(90deg, {', '.join(hexes)})"
 
 
+# ------------------------------------------------------------------
+# Weighted mana-source-availability chart colors (Prompt Pass 12 /
+# prompt5.txt) — the Land Probability page's "Weighted mana-source
+# availability" graph (probability.MANA_SOURCE_CATEGORIES: Rocks/Dorks,
+# Colorless, Any Color, W, U, B, R, G) used to render with Streamlit's
+# default auto-assigned categorical palette, which had no relationship to
+# the WUBRG colors used everywhere else in the app (MANA_CURVE_COLOR_HEX
+# above, the Decks page's mana curve and color-identity accents). The
+# W/U/B/R/G entries here are pulled directly from MANA_CURVE_COLOR_HEX
+# (not re-typed as separate hex literals) so the two palettes can never
+# drift out of alignment; "Colorless" reuses that same dict's grey and
+# "Any Color" its goldenrod Multi-color swatch, since an any-color source
+# is conceptually the mana-curve chart's "Multi-color" bucket. "Rocks/
+# Dorks" (nonland mana rocks/dorks, formatting.is_mana_rock_or_dork) gets
+# its own dedicated purple, per the prompt's explicit ask for a new color
+# that doesn't overlap White/Blue/Black/Red/Green.
+# ------------------------------------------------------------------
+MANA_SOURCE_COLOR_HEX = {
+    "Rocks/Dorks": "#9B5DE5",  # dedicated purple — non-land mana sources
+    "Colorless": MANA_CURVE_COLOR_HEX["Colorless"],
+    "Any Color": MANA_CURVE_COLOR_HEX["Multi-color"],
+    "W": MANA_CURVE_COLOR_HEX["W"],
+    "U": MANA_CURVE_COLOR_HEX["U"],
+    "B": MANA_CURVE_COLOR_HEX["B"],
+    "R": MANA_CURVE_COLOR_HEX["R"],
+    "G": MANA_CURVE_COLOR_HEX["G"],
+}
+
+
 def is_mana_rock_or_dork(type_line, oracle_text):
     """True for a NONLAND Artifact or Creature with a mana ability of its
     own — the 'Mana Rocks / Mana Dorks' bucket in the Phase 3 weighted

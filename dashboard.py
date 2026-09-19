@@ -9,6 +9,10 @@ deck tiles (Prompt Pass 4). Clicking a tile navigates straight to that
 deck's page on the Decks page (pages/2_Decks.py), which reads the
 `deck_id` query param the tile's link carries to pre-select it.
 
+The sidebar-nav explainer text sits directly above the deck tile grid
+(Prompt Pass 9 / prompt2.txt) — it used to run at the very bottom of the
+page, below the tiles.
+
 The Collection, Decks, Land & Color Probability, Editor, and Commander
 Game Tracking pages live under pages/ and appear automatically in the
 sidebar nav (Streamlit's native multipage-app convention).
@@ -44,17 +48,6 @@ c4.metric("Games logged", summary["games_logged"])
 
 st.divider()
 
-st.subheader("Your decks")
-st.caption("Click a deck to jump straight to its page.")
-
-decks_with_covers = loaders.load_decks_with_covers(conn)
-cv.render_deck_landing_grid(decks_with_covers)
-
-if summary["maybeboard_rows"]:
-    st.caption(f"{summary['maybeboard_rows']} maybeboard rows across all decks.")
-
-st.divider()
-
 st.markdown(
     """
 Use the sidebar to jump to:
@@ -63,7 +56,7 @@ Use the sidebar to jump to:
   image-grid view (48 cards per page by default), with layered filters and
   breakouts (color, type, rarity, set, location, Showcase/Borderless, and
   more), plus a one-click link out to each card's Scryfall page.
-- **🃏 Decks** — pick a deck (or click its tile above) to see its "Turn 0"
+- **🃏 Decks** — pick a deck (or click its tile below) to see its "Turn 0"
   summary (colors, bracket, combos/tutors), win conditions/strengths/
   weaknesses, optimized mana, Game Changers, and Reserved List right
   underneath, then themes, mana curve, type breakdown, strategy tags,
@@ -92,3 +85,14 @@ Use the sidebar to jump to:
   a multiplayer ELO rating, and a head-to-head win-rate matrix).
 """
 )
+
+st.divider()
+
+st.subheader("Your decks")
+st.caption("Click a deck to jump straight to its page.")
+
+decks_with_covers = loaders.load_decks_with_covers(conn)
+cv.render_deck_landing_grid(decks_with_covers)
+
+if summary["maybeboard_rows"]:
+    st.caption(f"{summary['maybeboard_rows']} maybeboard rows across all decks.")

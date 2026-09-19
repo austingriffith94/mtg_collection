@@ -109,7 +109,7 @@ deck_id = int(label_to_id[chosen_label])
 meta = loaders.load_deck_meta(conn, deck_id)
 stats = loaders.load_deck_stats(conn, deck_id)
 value = loaders.load_deck_value(conn, deck_id)
-sleeved = loaders.load_in_deck_sleeved_count(conn, meta.get("name"))
+sleeved = loaders.load_in_deck_sleeved_count(conn, deck_id, meta.get("name"))
 
 # ------------------------------------------------------------------
 # Deck header + page-wide themed accents (Prompt Pass 10 / prompt3.txt)
@@ -156,7 +156,7 @@ stat_col3.metric("Losses", stats["losses"])
 stat_col4.metric("Win rate", f"{stats['win_rate']*100:.0f}%" if stats["win_rate"] is not None else "—")
 deck_size = value.get("total_cards") or 0
 sleeved_label = f"{int(sleeved)}/{deck_size}" if sleeved is not None else f"—/{deck_size}"
-stat_col5.metric("Sleeved in deck", sleeved_label, help="Tracked collection rows whose Location matches this deck's name, vs. mainboard size.")
+stat_col5.metric("Sleeved in deck", sleeved_label, help="Tracked collection rows whose Location matches this deck's name, plus the deck list's own basic lands (never individually tracked in the collection but physically sleeved all the same), vs. mainboard size.")
 
 st.caption(f"Estimated deck value: {fmt.format_money(value.get('total_value'))}")
 

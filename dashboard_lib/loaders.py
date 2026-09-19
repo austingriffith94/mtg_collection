@@ -70,8 +70,8 @@ def load_deck_value(_conn, deck_id):
 
 
 @st.cache_data(show_spinner=False)
-def load_in_deck_sleeved_count(_conn, deck_name):
-    return q.in_deck_sleeved_count(_conn, deck_name)
+def load_in_deck_sleeved_count(_conn, deck_id, deck_name):
+    return q.in_deck_sleeved_count(_conn, deck_id, deck_name)
 
 
 @st.cache_data(show_spinner=False)
@@ -153,6 +153,26 @@ def load_game_changers_overview(_conn):
     return q.game_changers_overview(_conn)
 
 
+@st.cache_data(show_spinner=False)
+def load_mana_tag_catalog(_conn):
+    return w.list_mana_tag_catalog(_conn)
+
+
+@st.cache_data(show_spinner=False)
+def load_location_catalog(_conn):
+    return w.list_location_catalog(_conn)
+
+
+@st.cache_data(show_spinner=False)
+def load_location_options(_conn):
+    return q.location_options(_conn)
+
+
+@st.cache_data(show_spinner="Loading mana tags…")
+def load_mana_tags_overview(_conn):
+    return q.mana_tags_overview(_conn)
+
+
 @st.cache_data(show_spinner="Loading game history…")
 def load_games_list(_conn):
     return q.games_list(_conn)
@@ -195,17 +215,23 @@ def load_player_head_to_head(_conn):
 
 def invalidate_reference_caches():
     """Clear caches for the name-keyed / global reference data touched by
-    the Editor's Themes and Game Changers management UI (catalogs,
-    category assignments) — these aren't deck- or collection-scoped, so
-    they don't belong in the other two invalidate_* functions."""
+    the Editor's Themes, Game Changers, and Mana Tags (Prompt Pass 12)
+    management UIs (catalogs, category/tag assignments) — these aren't
+    deck- or collection-scoped, so they don't belong in the other two
+    invalidate_* functions."""
     load_theme_catalog.clear()
     load_game_changer_categories.clear()
     load_game_changers_overview.clear()
+    load_mana_tag_catalog.clear()
+    load_mana_tags_overview.clear()
+    load_deck_mana_tag_summary.clear()  # Decks page's "Optimized mana" panel
     load_collection_df.clear()  # GC category can show in Collection later
     load_deck_cards_df.clear()
     load_deck_library_df.clear()
     load_deck_price_top10.clear()
     load_deck_game_changers.clear()
+    load_location_catalog.clear()   # Prompt Pass 13
+    load_location_options.clear()
 
 
 def invalidate_game_tracking_caches():
@@ -257,6 +283,9 @@ def invalidate_deck_caches(deck_id=None):
     # now show up in the "known opponent deck" autofill list too
     # (Prompt Pass 7).
     load_known_untracked_deck_names.clear()
+    # A create/rename/delete changes the deck-name half of the Location
+    # dropdown's option set (Prompt Pass 13).
+    load_location_options.clear()
 
 
 def invalidate_collection_caches():

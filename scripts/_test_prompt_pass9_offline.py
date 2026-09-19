@@ -2,7 +2,7 @@
 Offline test for Prompt Pass 9 changes: no Streamlit, no live network.
 
 Prompt Pass 9 ("prompt2.txt" — conditional win-rate formatting across
-Game Logs):
+Game Logs, plus a Dashboard layout tweak):
   1. New pure color-math helpers in formatting.py: win_rate_background_color()
      and win_rate_cell_style(), implementing a diverging red/white/blue
      scale anchored at a 25% "fair" 4-player-pod win rate.
@@ -12,6 +12,10 @@ Game Logs):
   3. pages/5_Commander_Game_Tracking.py's "By deck" / "By player" summary
      tables and the Head-to-Head matrix now render through that Styler
      instead of a plain DataFrame of pre-formatted strings.
+  4. dashboard.py's sidebar-nav explainer text (instruction #2 of
+     prompt2.txt) moved from below the deck tile grid to directly above
+     it — this part of the prompt was missed when items 1-3 first landed
+     and was added in a follow-up pass.
 
 Covers:
   A. win_rate_background_color() — anchor/extremes/blend math, clamping,
@@ -25,6 +29,8 @@ Covers:
      manual string-formatting lines are gone, the new styling helper is
      wired in for all three tables, and the ELO table (out of scope per
      the prompt — it has no Win % column) is left untouched.
+  E. dashboard.py source-text check — the sidebar-nav explainer markdown
+     block now appears before the deck-grid render call, not after.
 
 Run from anywhere:
     python scripts/_test_prompt_pass9_offline.py
@@ -201,6 +207,22 @@ def main():
         "elo_df.rename(columns={\"player_name\": \"Player\", \"rating\": \"Rating\", \"games_played\": \"Games\"})"
         in page_text
         and "style_win_rate_percentages(elo_df" not in page_text,
+    )
+
+    # ------------------------------------------------------------------
+    # E. dashboard.py source-text check — the sidebar-nav explainer text
+    #    (prompt2.txt instruction #2) sits above the deck tile grid now,
+    #    not below it.
+    # ------------------------------------------------------------------
+    dashboard_path = os.path.join(PROJECT_ROOT, "dashboard.py")
+    with open(dashboard_path, encoding="utf-8") as f:
+        dashboard_text = f.read()
+
+    markdown_pos = dashboard_text.index("Use the sidebar to jump to:")
+    grid_call_pos = dashboard_text.index("cv.render_deck_landing_grid(")
+    check(
+        "dashboard.py's sidebar-nav explainer text now precedes the deck tile grid render call",
+        markdown_pos < grid_call_pos,
     )
 
     print("\nAll Prompt Pass 9 offline checks passed.")

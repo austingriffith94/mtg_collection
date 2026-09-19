@@ -87,8 +87,10 @@ with st.sidebar.expander("➕ Create a new deck"):
                 st.session_state["editor_deck_select"] = cn_name.strip()
                 st.rerun()
 
-tab_info, tab_themes, tab_cardtags, tab_main, tab_maybe, tab_coll, tab_gc, tab_carddata = st.tabs(
-    ["Deck Info", "Themes", "Card Tags", "Mainboard", "Maybeboard", "Collection", "Game Changers", "Card Data"]
+(tab_info, tab_themes, tab_cardtags, tab_main, tab_maybe, tab_swap,
+ tab_coll, tab_gc, tab_manatags, tab_carddata) = st.tabs(
+    ["Deck Info", "Themes", "Card Tags", "Mainboard", "Maybeboard", "Swap Manager",
+     "Collection", "Game Changers", "Mana Tags", "Card Data"]
 )
 
 # ------------------------------------------------------------------
@@ -246,8 +248,11 @@ with tab_info:
             f"**{del_mb_count}** maybeboard card(s), and **{del_stats['games_played']}** logged game(s)."
         )
         del_clear_loc = st.checkbox(
-            "Also clear collection Locations that matched this deck's name",
+            f"Also reassign collection Locations that matched this deck's name back to '{writes.DEFAULT_LOCATION}'",
             value=True, key=f"editor_{deck_id}_delete_clearloc",
+            help="Those cards still physically exist — they're just coming out of a deck "
+                 "that no longer exists, so they land back in general storage instead of "
+                 "losing their Location entirely.",
         )
         del_confirm = st.text_input(
             f"Type the deck's name to confirm — **{meta.get('name')}**",
@@ -569,9 +574,195 @@ with tab_maybe:
                 st.rerun()
 
 # ------------------------------------------------------------------
+# Swap Manager (Prompt Pass 13 / prompt6.txt) — queue up planned
+# mainboard swaps ("Add Card A -> Replace Card B"), see real-time
+# collection availability for each candidate before committing anything,
+# then apply the whole queue at once. writes.execute_swap() does the
+# actual work per swap: updates deck_cards (remove B, add A), moves any
+# collection lot for B that's sleeved in THIS deck back to storage, and
+# sleeves A here (reusing an available owned lot, or creating a starter
+# one if it isn't owned/available). The queue itself is session-only —
+# nothing is written to the database until "Confirm & apply" is clicked.
+# ------------------------------------------------------------------
+with tab_swap:
+    if deck_id is None:
+        st.info("Create a deck in the sidebar to get started.")
+    else:
+        swap_deck_name = loaders.load_deck_meta(conn, deck_id).get("name")
+        swap_main_df = loaders.load_deck_cards_df(conn, deck_id)
+        queue_key = f"editor_{deck_id}_swap_queue"
+        result_key = f"editor_{deck_id}_swap_last_result"
+        if queue_key not in st.session_state:
+            st.session_state[queue_key] = []
+
+        if st.session_state.get(result_key):
+            for line in st.session_state[result_key]:
+                (st.success if line.startswith("✅") else st.error)(line)
+            del st.session_state[result_key]
+
+        st.markdown("**Swap Builder**")
+        st.caption(
+            "Build a list of planned swaps below — nothing is written to the database "
+            "until you review and confirm it in Execution Confirmation."
+        )
+        if swap_main_df.empty:
+            st.info("This deck has no mainboard cards yet — add some in the Mainboard tab first.")
+        else:
+            sw1, sw2, sw3 = st.columns([2, 2, 1])
+            swap_add_name = sw1.text_input(
+                "Add (card name)", key=f"editor_{deck_id}_swap_add_name",
+                help="The exact printing is resolved locally, or fetched fresh from "
+                     "Scryfall if needed, when you confirm the swap below.",
+            )
+            swap_remove_options = {
+                f"{r['name']} (x{int(r['quantity'])})": r for _, r in swap_main_df.iterrows()
+            }
+            swap_remove_label = sw2.selectbox(
+                "Replace (current mainboard card)", list(swap_remove_options.keys()),
+                key=f"editor_{deck_id}_swap_remove_pick",
+            )
+            swap_remove_row = swap_remove_options[swap_remove_label]
+            swap_qty = sw3.number_input(
+                "Qty", min_value=1, value=int(swap_remove_row["quantity"]), step=1,
+                key=f"editor_{deck_id}_swap_qty",
+            )
+            if st.button("➕ Queue this swap", key=f"editor_{deck_id}_swap_queue_btn"):
+                if not swap_add_name.strip():
+                    st.warning("Enter a card name to add.")
+                else:
+                    st.session_state[queue_key].append({
+                        "add_name": swap_add_name.strip(),
+                        "remove_scryfall_id": swap_remove_row["scryfall_id"],
+                        "remove_name": swap_remove_row["name"],
+                        "qty": int(swap_qty),
+                    })
+                    st.rerun()
+
+        st.divider()
+        st.markdown("**Queued swaps**")
+        swap_queue = st.session_state[queue_key]
+        if not swap_queue:
+            st.caption("Nothing queued yet.")
+        else:
+            # Inventory Checking: live availability for each candidate
+            # "Add" card, recomputed on every render (not cached) so it
+            # always reflects the current collection state.
+            queue_rows = []
+            for i, item in enumerate(swap_queue):
+                status = q.card_inventory_status(conn, item["add_name"], deck_name=swap_deck_name)
+                if status["owned_qty"] == 0:
+                    availability = "Not owned — a starter lot will be created"
+                elif status["available_lots"]:
+                    best = status["available_lots"][0]
+                    availability = f"Available in storage ({best['location'] or 'no location set'})"
+                elif status["in_other_decks"]:
+                    others = ", ".join(f"{d} (x{n})" for d, n in status["in_other_decks"].items())
+                    availability = f"Owned, but every copy is already sleeved in: {others}"
+                else:
+                    availability = "Already sleeved in this deck"
+                queue_rows.append({
+                    "#": i,
+                    "Add": item["add_name"],
+                    "Owned": status["owned_qty"],
+                    "Availability": availability,
+                    "Replace": item["remove_name"],
+                    "Qty": item["qty"],
+                    "Remove from queue": False,
+                })
+            queue_edited = st.data_editor(
+                pd.DataFrame(queue_rows),
+                column_config={
+                    "#": st.column_config.NumberColumn("#", disabled=True, width="small"),
+                    "Add": st.column_config.TextColumn("Add", disabled=True),
+                    "Owned": st.column_config.NumberColumn("Owned", disabled=True, width="small"),
+                    "Availability": st.column_config.TextColumn("Availability", disabled=True),
+                    "Replace": st.column_config.TextColumn("Replace", disabled=True),
+                    "Qty": st.column_config.NumberColumn("Qty", disabled=True, width="small"),
+                    "Remove from queue": st.column_config.CheckboxColumn("Remove from queue"),
+                },
+                column_order=["Add", "Owned", "Availability", "Replace", "Qty", "Remove from queue"],
+                hide_index=True, use_container_width=True,
+                key=f"editor_{deck_id}_swap_queue_editor",
+            )
+            qbtn1, qbtn2 = st.columns(2)
+            if qbtn1.button("🗑️ Remove checked from queue", key=f"editor_{deck_id}_swap_queue_remove_btn"):
+                keep = {row["#"] for _, row in queue_edited.iterrows() if not row["Remove from queue"]}
+                st.session_state[queue_key] = [item for i, item in enumerate(swap_queue) if i in keep]
+                st.rerun()
+            if qbtn2.button("🧹 Clear entire queue", key=f"editor_{deck_id}_swap_queue_clear_btn"):
+                st.session_state[queue_key] = []
+                st.rerun()
+
+            st.divider()
+            st.markdown("**Execution Confirmation**")
+            st.caption(
+                "Applies every queued swap at once: updates this deck's mainboard, moves "
+                "the replaced card's collection lot(s) that are sleeved here back to "
+                "storage, and sleeves the added card here (an available owned copy if one "
+                "exists, otherwise a brand-new starter lot)."
+            )
+            if st.button("✅ Confirm & apply all queued swaps", key=f"editor_{deck_id}_swap_execute_btn"):
+                results = []
+                for item in swap_queue:
+                    sid, was_new, err = card_resolver.resolve_or_fetch_card(conn, name=item["add_name"])
+                    if err:
+                        results.append(f"❌ {item['add_name']}: {err}")
+                        continue
+                    outcome = writes.execute_swap(
+                        conn, deck_id, swap_deck_name,
+                        remove_scryfall_id=item["remove_scryfall_id"], remove_card_name=item["remove_name"],
+                        add_scryfall_id=sid, add_card_name=item["add_name"], quantity=item["qty"],
+                    )
+                    fetch_note = " (fetched fresh from Scryfall)" if was_new else ""
+                    if outcome["created_lot"]:
+                        lot_note = " — created a new starter collection lot"
+                    elif outcome["assigned_lot_id"]:
+                        lot_note = " — reassigned an existing owned copy"
+                    else:
+                        lot_note = ""
+                    results.append(
+                        f"✅ Added {item['add_name']}{fetch_note}, replaced {item['remove_name']}{lot_note}."
+                    )
+                st.session_state[queue_key] = []
+                st.session_state[result_key] = results
+                loaders.invalidate_deck_caches()
+                loaders.invalidate_collection_caches()
+                st.rerun()
+
+# ------------------------------------------------------------------
 # Collection
 # ------------------------------------------------------------------
 with tab_coll:
+    with st.expander("⚙️ Manage the master Location list"):
+        st.caption(
+            "Standard, non-deck storage locations (e.g. 'Box', 'Lands Box') offered "
+            "alongside every tracked deck's own name in the Location dropdowns below. "
+            "Adding/removing here only changes what's offered — it never touches any "
+            "collection row's existing Location value."
+        )
+        loc_catalog = loaders.load_location_catalog(conn)
+        new_loc_catalog_entry = st.text_input("New location name", key="editor_loc_catalog_add")
+        if st.button("➕ Add to master list", key="editor_loc_catalog_add_btn"):
+            if new_loc_catalog_entry.strip():
+                writes.add_location_to_catalog(conn, new_loc_catalog_entry.strip())
+                loaders.invalidate_reference_caches()
+                st.success(f"Added '{new_loc_catalog_entry.strip()}' to the master list.")
+                st.rerun()
+            else:
+                st.warning("Enter a location name.")
+
+        if loc_catalog:
+            loc_catalog_remove = st.selectbox(
+                "Remove from master list", loc_catalog, key="editor_loc_catalog_remove"
+            )
+            if st.button("🗑️ Remove from master list", key="editor_loc_catalog_remove_btn"):
+                writes.remove_location_from_catalog(conn, loc_catalog_remove)
+                loaders.invalidate_reference_caches()
+                st.success(f"Removed '{loc_catalog_remove}' from the master list.")
+                st.rerun()
+        else:
+            st.caption("Master location list is empty.")
+
     st.markdown("**Add a card to your collection**")
     st.caption(
         "Start typing a card name — matches already in your database appear as "
@@ -643,8 +834,16 @@ with tab_coll:
     cc4, cc5, cc6, cc7 = st.columns(4)
     coll_add_qty = cc4.number_input("Quantity", min_value=0, value=1, step=1, key="editor_coll_add_qty")
     coll_add_foil = cc5.checkbox("Foil", key="editor_coll_add_foil")
-    coll_add_location = cc6.text_input("Location", key="editor_coll_add_location")
+    LOC_OTHER = "+ Other (type a new location below)..."
+    loc_pick = cc6.selectbox(
+        "Location", [""] + loaders.load_location_options(conn) + [LOC_OTHER],
+        key="editor_coll_add_location_pick",
+    )
     coll_add_price = cc7.number_input("Price paid", min_value=0.0, value=0.0, step=0.5, key="editor_coll_add_price")
+    if loc_pick == LOC_OTHER:
+        coll_add_location = st.text_input("New location", key="editor_coll_add_location_new")
+    else:
+        coll_add_location = loc_pick
 
     cc8, cc9 = st.columns(2)
     coll_add_date = cc8.date_input(
@@ -682,7 +881,10 @@ with tab_coll:
                 price_paid=float(coll_add_price) if coll_add_price else None,
                 source=coll_add_source.strip() or None,
             )
+            if loc_pick == LOC_OTHER and coll_add_location.strip():
+                writes.add_location_to_catalog(conn, coll_add_location.strip())
             loaders.invalidate_collection_caches()
+            loaders.invalidate_reference_caches()
             note = " (fetched fresh from Scryfall)" if was_new else ""
             st.success(f"Added to collection{note}.")
             st.rerun()
@@ -714,6 +916,14 @@ with tab_coll:
                 for _, r in scoped.iterrows()
             ]
             coll_editor_df = pd.DataFrame(coll_rows)
+            # SelectboxColumn options: the catalog + deck names, plus
+            # whatever Location text these specific rows already carry
+            # (even pre-existing free text that was never added to the
+            # catalog) so editing this table can never blank out a value
+            # it doesn't recognize.
+            loc_select_options = sorted(
+                set(loaders.load_location_options(conn)) | {r["Location"] for r in coll_rows} | {""}
+            )
             coll_edited = st.data_editor(
                 coll_editor_df,
                 column_config={
@@ -721,7 +931,7 @@ with tab_coll:
                     "Set": st.column_config.TextColumn("Set", disabled=True),
                     "Qty": st.column_config.NumberColumn("Qty", min_value=0, step=1),
                     "Foil": st.column_config.CheckboxColumn("Foil"),
-                    "Location": st.column_config.TextColumn("Location"),
+                    "Location": st.column_config.SelectboxColumn("Location", options=loc_select_options),
                     "Date": st.column_config.DateColumn("Acquired", format="YYYY-MM-DD"),
                     "Price Paid": st.column_config.NumberColumn("Price Paid", format="$%.2f"),
                     "Source": st.column_config.TextColumn("Source"),
@@ -840,6 +1050,132 @@ with tab_gc:
             changed = writes.bulk_set_game_changer_tags(conn, gc_edits)
             loaders.invalidate_reference_caches()
             st.success(f"Updated categories on {changed} card(s).")
+            st.rerun()
+
+# ------------------------------------------------------------------
+# Mana Tags (Prompt Pass 12 / prompt5.txt) — card_name-keyed (NOT
+# deck-scoped), across every card in the database, same pattern as Game
+# Changers above. Unlike Game Changers, mana_tags has no Scryfall-derived
+# flag to seed candidates from (it's 100% hand-curated — Fast, Dual,
+# Shockland, Fetch, Ritual, Mana Doubler, Medallion, Moxen, etc.), so a
+# dedicated "tag a card" search comes first, letting you assign a tag to
+# ANY card in the database (not just ones that already have one); the
+# overview table below it only ever shows cards that already carry at
+# least one tag, exactly like Game Changers' overview does for its own
+# candidate set.
+# ------------------------------------------------------------------
+with tab_manatags:
+    st.caption(
+        "Optimized-mana categorization (Fast, Dual, Shockland, Fetch, Ritual, Mana Doubler, "
+        "Medallion, Moxen, etc.) — reconstructs the old 'Optimized Mana' footnote, shown live "
+        "per deck on the Decks page's 'Optimized mana' panel. Card-name-keyed across your "
+        "whole database, not deck-scoped, same as Game Changers."
+    )
+
+    with st.expander("⚙️ Manage the master tag list"):
+        st.caption(
+            "Adding/removing here only changes what's offered below — it never touches any "
+            "card's existing tag assignments."
+        )
+        mt_catalog = loaders.load_mana_tag_catalog(conn)
+        new_mt_tag = st.text_input("New tag name", key="editor_mt_catalog_add")
+        if st.button("➕ Add to master list", key="editor_mt_catalog_add_btn"):
+            if new_mt_tag.strip():
+                writes.add_mana_tag_to_catalog(conn, new_mt_tag.strip())
+                loaders.invalidate_reference_caches()
+                st.success(f"Added '{new_mt_tag.strip()}' to the master list.")
+                st.rerun()
+            else:
+                st.warning("Enter a tag name.")
+
+        if mt_catalog:
+            mt_catalog_remove = st.selectbox(
+                "Remove from master list", mt_catalog, key="editor_mt_catalog_remove"
+            )
+            if st.button("🗑️ Remove from master list", key="editor_mt_catalog_remove_btn"):
+                writes.remove_mana_tag_from_catalog(conn, mt_catalog_remove)
+                loaders.invalidate_reference_caches()
+                st.success(f"Removed '{mt_catalog_remove}' from the master list.")
+                st.rerun()
+        else:
+            st.caption("Master tag list is empty.")
+
+    st.divider()
+
+    st.markdown("**Tag a card**")
+    st.caption(
+        "Search any card in your database and assign its optimized-mana tags — this is the "
+        "only way to give a card its FIRST tag, since (unlike Game Changers) there's no "
+        "Scryfall flag to seed the list below from."
+    )
+    mt_search = st.text_input("Search for a card by name", key="editor_mt_search_add")
+    mt_matches = q.search_card_names(conn, mt_search) if mt_search.strip() else []
+    if mt_search.strip() and not mt_matches:
+        st.caption("No cards found matching that name.")
+    elif mt_matches:
+        mt_pick = st.selectbox("Card", mt_matches, key="editor_mt_pick")
+        mt_current_tags = writes.get_mana_tags_map(conn).get(mt_pick, [])
+        mt_tags_input = st.text_input(
+            "Tags (comma-separated)",
+            value=", ".join(mt_current_tags),
+            key=f"editor_mt_tags_input_{mt_pick}",
+        )
+        if st.button("💾 Save tags for this card", key="editor_mt_save_one"):
+            labels = [x.strip() for x in mt_tags_input.split(",") if x.strip()]
+            writes.set_mana_tags(conn, mt_pick, labels)
+            loaders.invalidate_reference_caches()
+            st.success(f"Updated mana tags on '{mt_pick}'.")
+            st.rerun()
+
+    st.divider()
+
+    mt_df = loaders.load_mana_tags_overview(conn)
+    if mt_df.empty:
+        st.info(
+            "No cards carry an optimized-mana tag yet — use 'Tag a card' above to assign the "
+            "first one."
+        )
+    else:
+        mt_bulk_search = st.text_input("Search by card name", key="editor_mt_bulk_search")
+        mt_scoped = (
+            mt_df[mt_df["name"].str.contains(mt_bulk_search, case=False, na=False, regex=False)]
+            if mt_bulk_search else mt_df
+        )
+
+        mt_rows = [
+            {
+                "scryfall_id": r["scryfall_id"],
+                "image_uri": fmt.resolve_local_image(r["local_image_path"]) or r["image_uri"],
+                "Card": r["name"],
+                "Tags": r["tags"] if pd.notna(r["tags"]) else "",
+                "Owned": int(r["owned_qty"]),
+                "In decks": int(r["deck_count"]),
+            }
+            for _, r in mt_scoped.iterrows()
+        ]
+        mt_editor_df = pd.DataFrame(mt_rows)
+        mt_edited = st.data_editor(
+            mt_editor_df,
+            column_config={
+                "image_uri": st.column_config.ImageColumn("Art", width="small"),
+                "Card": st.column_config.TextColumn("Card", disabled=True),
+                "Tags": st.column_config.TextColumn("Tags (comma-separated)"),
+                "Owned": st.column_config.NumberColumn("Owned", disabled=True),
+                "In decks": st.column_config.NumberColumn("In decks", disabled=True),
+            },
+            column_order=["image_uri", "Card", "Tags", "Owned", "In decks"],
+            hide_index=True, use_container_width=True,
+            key=f"editor_mt_editor_{mt_bulk_search}",
+        )
+        if st.button("💾 Save tag changes", key="editor_mt_save_bulk"):
+            mt_edits = {}
+            for _, row in mt_edited.iterrows():
+                raw = row["Tags"]
+                labels = [] if pd.isna(raw) or not str(raw).strip() else [x.strip() for x in str(raw).split(",")]
+                mt_edits[row["Card"]] = labels
+            changed = writes.bulk_set_mana_tags(conn, mt_edits)
+            loaders.invalidate_reference_caches()
+            st.success(f"Updated mana tags on {changed} card(s).")
             st.rerun()
 
 # ------------------------------------------------------------------

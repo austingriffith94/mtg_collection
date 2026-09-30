@@ -103,6 +103,33 @@ def reset_filters():
 
 
 # ------------------------------------------------------------------
+# Shared "Choose a deck" sidebar picker — Decks, Land Probability, and
+# Deck Editor pages each need a single deck_id chosen from decks_df;
+# this replaces three independent copies of the same
+# labels/label_to_id/selectbox block (each with its own key).
+# ------------------------------------------------------------------
+def render_deck_picker(decks_df, key, container=None, empty_message="No decks found."):
+    """Render the "Choose a deck" selectbox and return the chosen
+    deck_id, or None if decks_df is empty (empty_message is shown via
+    st.info in that case). Callers that require a deck to proceed
+    should st.stop() themselves on a None return — the Deck Editor page
+    instead falls through to its "create a new deck" flow, so the stop
+    is left to the caller rather than done here. A caller that needs to
+    pre-seed the selection (e.g. the Decks page honoring a `?deck_id=`
+    query param) should set st.session_state[key] BEFORE calling this,
+    since that's the only point Streamlit allows setting a widget's
+    value."""
+    c = container if container is not None else st.sidebar
+    if decks_df.empty:
+        c.info(empty_message)
+        return None
+    deck_labels = [row["name"] for _, row in decks_df.iterrows()]
+    label_to_id = dict(zip(deck_labels, decks_df["deck_id"]))
+    chosen_label = c.selectbox("Choose a deck", deck_labels, key=key)
+    return int(label_to_id[chosen_label])
+
+
+# ------------------------------------------------------------------
 # Derived columns shared by every card-bearing dataframe
 # ------------------------------------------------------------------
 def add_derived_columns(df):

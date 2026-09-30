@@ -79,9 +79,6 @@ if decks_df.empty:
     st.info("No decks found.")
     st.stop()
 
-deck_labels = [f"{row['name']}" for _, row in decks_df.iterrows()]
-label_to_id = dict(zip(deck_labels, decks_df["deck_id"]))
-
 # Honor a `?deck_id=<id>` query param (set by the home page's deck-tile
 # links, see dashboard_lib.card_view.render_deck_landing_grid) by
 # pre-selecting that deck in the sidebar picker below — but only by
@@ -97,14 +94,13 @@ if query_deck_id is not None:
     except (TypeError, ValueError):
         target_deck_id = None
     if target_deck_id is not None:
-        id_to_label = {v: k for k, v in label_to_id.items()}
+        id_to_label = dict(zip(decks_df["deck_id"], decks_df["name"]))
         target_label = id_to_label.get(target_deck_id)
         if target_label:
             st.session_state["deckpage_deck_select"] = target_label
     del st.query_params["deck_id"]
 
-chosen_label = st.sidebar.selectbox("Choose a deck", deck_labels, key="deckpage_deck_select")
-deck_id = int(label_to_id[chosen_label])
+deck_id = cv.render_deck_picker(decks_df, key="deckpage_deck_select")
 
 meta = loaders.load_deck_meta(conn, deck_id)
 stats = loaders.load_deck_stats(conn, deck_id)

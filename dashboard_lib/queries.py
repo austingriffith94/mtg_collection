@@ -290,7 +290,11 @@ def search_card_names(conn, query_text, limit=25):
     """Distinct card names from `cards` matching `query_text` as a
     case-insensitive substring, names that START WITH the query ranked
     ahead of names that merely contain it, alphabetical within each
-    group. Returns [] for blank input rather than the whole table."""
+    group. Returns [] for blank input rather than the whole table.
+    Called directly from pages rather than through a loaders.py
+    @st.cache_data wrapper — it's a search-as-you-type lookup with a
+    new `query_text` on nearly every keystroke, so caching it would add
+    overhead without saving repeat work."""
     query_text = (query_text or "").strip()
     if not query_text:
         return []
@@ -320,7 +324,10 @@ def card_printings_by_name(conn, name):
     name match, ordered by set then collector number. Returns [] if the
     name isn't in the local database under any printing yet. Builds dicts
     from plain tuples (not sqlite3.Row) so this works regardless of the
-    caller's row_factory setting."""
+    caller's row_factory setting. Called directly from pages rather than
+    through a loaders.py @st.cache_data wrapper — it's a one-off lookup
+    driven by the user's current name selection, not a repeated query
+    worth caching."""
     name = (name or "").strip()
     if not name:
         return []
@@ -594,6 +601,11 @@ def card_inventory_status(conn, card_name, deck_name=None):
        "available_lots": [{"collection_id", "quantity", "location"}, ...],
        "in_this_deck_qty": int,
        "in_other_decks": {deck_name: qty, ...}}
+
+    Called directly from pages rather than through a loaders.py
+    @st.cache_data wrapper — it drives the Swap Manager's live
+    inventory check and must always reflect the current DB state,
+    including collection writes made earlier in the same page run.
 
     `available_lots` excludes anything already sleeved in `deck_name` or
     in another tracked deck, ordered largest-quantity-first (the Swap

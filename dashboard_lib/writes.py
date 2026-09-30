@@ -43,18 +43,6 @@ def list_tag_types(conn):
     return [r[0] for r in rows]
 
 
-def list_tags(conn, tag_type=None):
-    if tag_type:
-        rows = conn.execute(
-            "SELECT tag_id, tag_type, label FROM tags WHERE tag_type=? ORDER BY label", (tag_type,)
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT tag_id, tag_type, label FROM tags ORDER BY tag_type, label"
-        ).fetchall()
-    return [{"tag_id": r[0], "tag_type": r[1], "label": r[2]} for r in rows]
-
-
 # ------------------------------------------------------------------
 # Theme catalog (Phase 2) — the master list the Deck Editor's Themes dropdown
 # is populated from. Separate from deck_themes (which is deck_id-scoped

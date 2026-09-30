@@ -44,15 +44,9 @@ st.caption("Writes straight to the database — no CSV editing or re-migration n
 st.sidebar.header("Deck")
 db.refresh_data_button()
 decks_df = loaders.load_decks_df(conn)
-
-deck_id = None
-if not decks_df.empty:
-    deck_labels = [row["name"] for _, row in decks_df.iterrows()]
-    label_to_id = dict(zip(deck_labels, decks_df["deck_id"]))
-    chosen_label = st.sidebar.selectbox("Choose a deck", deck_labels, key="editor_deck_select")
-    deck_id = int(label_to_id[chosen_label])
-else:
-    st.sidebar.info("No decks yet — create one below.")
+deck_id = cv.render_deck_picker(
+    decks_df, key="editor_deck_select", empty_message="No decks yet — create one below."
+)
 
 with st.sidebar.expander("➕ Create a new deck"):
     cn_name = st.text_input("Deck name (required)", key="editor_newdeck_name")

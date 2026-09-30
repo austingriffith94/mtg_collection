@@ -63,14 +63,9 @@ st.sidebar.header("Deck")
 db.refresh_data_button()
 
 decks_df = loaders.load_decks_df(conn)
-if decks_df.empty:
-    st.info("No decks found.")
+deck_id = cv.render_deck_picker(decks_df, key="landprob_deck_select")
+if deck_id is None:
     st.stop()
-
-deck_labels = [row["name"] for _, row in decks_df.iterrows()]
-label_to_id = dict(zip(deck_labels, decks_df["deck_id"]))
-chosen_label = st.sidebar.selectbox("Choose a deck", deck_labels, key="landprob_deck_select")
-deck_id = int(label_to_id[chosen_label])
 
 meta = loaders.load_deck_meta(conn, deck_id)
 library_df = loaders.load_deck_library_df(conn, deck_id)

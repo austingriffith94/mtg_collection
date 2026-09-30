@@ -170,6 +170,24 @@ CREATE TABLE maybeboard (
 );
 
 -- ------------------------------------------------------------
+-- Editor's Swap Manager tab: planned-but-not-yet-applied "Add Card A ->
+-- Replace Card B" swaps. Persisted (not session-only) so the queue
+-- survives closing the dashboard between sessions — it's a scratchpad
+-- of changes you're still weighing, not a change that's been applied.
+-- Only Execution Confirmation's "Confirm & apply" (writes.execute_swap)
+-- ever touches deck_cards/collection; rows here are pure bookkeeping.
+-- ------------------------------------------------------------
+CREATE TABLE deck_swap_queue (
+    queue_id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    deck_id            INTEGER NOT NULL REFERENCES decks(deck_id),
+    add_name           TEXT NOT NULL,
+    remove_scryfall_id TEXT NOT NULL REFERENCES cards(scryfall_id),
+    remove_name        TEXT NOT NULL,
+    quantity           INTEGER NOT NULL DEFAULT 1,
+    queued_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ------------------------------------------------------------
 -- Flexible multi-valued tagging (strategy tags, Rule 0 tags, etc.)
 -- Supports many tags per card-in-deck. There is deliberately no
 -- deck-level tags table — deck-level notes live in decks.description/

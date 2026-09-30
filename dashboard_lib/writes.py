@@ -930,3 +930,52 @@ def execute_swap(conn, deck_id, deck_name, remove_scryfall_id, remove_card_name,
         created_lot = True
 
     return {"moved_out": moved_out, "assigned_lot_id": assigned_lot_id, "created_lot": created_lot}
+
+
+# ------------------------------------------------------------------
+# Swap Manager queue — persisted in deck_swap_queue (schema.sql) so a
+# deck's planned-but-not-yet-applied swaps survive closing the dashboard
+# between sessions. Purely bookkeeping: nothing here touches deck_cards
+# or collection — that only happens via execute_swap() above, when the
+# Editor's "Confirm & apply" button runs.
+# ------------------------------------------------------------------
+def list_swap_queue(conn, deck_id):
+    rows = conn.execute(
+        """SELECT queue_id, add_name, remove_scryfall_id, remove_name, quantity
+           FROM deck_swap_queue WHERE deck_id = ? ORDER BY queue_id""",
+        (deck_id,),
+    ).fetchall()
+    return [
+        {
+            "queue_id": r[0],
+            "add_name": r[1],
+            "remove_scryfall_id": r[2],
+            "remove_name": r[3],
+            "quantity": r[4],
+        }
+        for r in rows
+    ]
+
+
+def queue_swap(conn, deck_id, add_name, remove_scryfall_id, remove_name, quantity):
+    cur = conn.execute(
+        """INSERT INTO deck_swap_queue (deck_id, add_name, remove_scryfall_id, remove_name, quantity)
+           VALUES (?,?,?,?,?)""",
+        (deck_id, add_name, remove_scryfall_id, remove_name, quantity),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def remove_swap_queue_items(conn, queue_ids):
+    queue_ids = list(queue_ids)
+    if not queue_ids:
+        return
+    placeholders = ",".join("?" for _ in queue_ids)
+    conn.execute(f"DELETE FROM deck_swap_queue WHERE queue_id IN ({placeholders})", queue_ids)
+    conn.commit()
+
+
+def clear_swap_queue(conn, deck_id):
+    conn.execute("DELETE FROM deck_swap_queue WHERE deck_id = ?", (deck_id,))
+    conn.commit()

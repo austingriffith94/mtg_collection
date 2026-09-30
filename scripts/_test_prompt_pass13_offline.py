@@ -318,7 +318,7 @@ def main():
     check("Editor has a 'with tab_swap:' block", "with tab_swap:" in editor_text)
     check("Swap Manager tab checks live inventory via card_inventory_status", "q.card_inventory_status(conn" in editor_text)
     check("Swap Manager tab executes queued swaps via writes.execute_swap", "writes.execute_swap(" in editor_text)
-    check("Swap Manager tab keeps its queue in st.session_state (not written until confirmed)", "queue_key" in editor_text and "st.session_state[queue_key]" in editor_text)
+    check("Swap Manager tab persists its queue via writes.list_swap_queue/queue_swap (not just session state)", "writes.list_swap_queue(conn" in editor_text and "writes.queue_swap(" in editor_text)
 
     check(
         "Editor's Collection tab uses a Location dropdown (loaders.load_location_options), not free text",

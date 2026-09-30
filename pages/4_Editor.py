@@ -582,8 +582,10 @@ with tab_maybe:
 # actual work per swap: updates deck_cards (remove B, add A), moves any
 # collection lot for B that's sleeved in THIS deck back to storage, and
 # sleeves A here (reusing an available owned lot, or creating a starter
-# one if it isn't owned/available). The queue itself is session-only —
-# nothing is written to the database until "Confirm & apply" is clicked.
+# one if it isn't owned/available). The queue is persisted in the
+# deck_swap_queue table (writes.queue_swap/list_swap_queue/etc.) so it
+# survives closing the dashboard between sessions — nothing is written
+# to deck_cards/collection until "Confirm & apply" is clicked.
 # ------------------------------------------------------------------
 with tab_swap:
     if deck_id is None:
@@ -591,10 +593,7 @@ with tab_swap:
     else:
         swap_deck_name = loaders.load_deck_meta(conn, deck_id).get("name")
         swap_main_df = loaders.load_deck_cards_df(conn, deck_id)
-        queue_key = f"editor_{deck_id}_swap_queue"
         result_key = f"editor_{deck_id}_swap_last_result"
-        if queue_key not in st.session_state:
-            st.session_state[queue_key] = []
 
         if st.session_state.get(result_key):
             for line in st.session_state[result_key]:
@@ -631,17 +630,18 @@ with tab_swap:
                 if not swap_add_name.strip():
                     st.warning("Enter a card name to add.")
                 else:
-                    st.session_state[queue_key].append({
-                        "add_name": swap_add_name.strip(),
-                        "remove_scryfall_id": swap_remove_row["scryfall_id"],
-                        "remove_name": swap_remove_row["name"],
-                        "qty": int(swap_qty),
-                    })
+                    writes.queue_swap(
+                        conn, deck_id,
+                        add_name=swap_add_name.strip(),
+                        remove_scryfall_id=swap_remove_row["scryfall_id"],
+                        remove_name=swap_remove_row["name"],
+                        quantity=int(swap_qty),
+                    )
                     st.rerun()
 
         st.divider()
         st.markdown("**Queued swaps**")
-        swap_queue = st.session_state[queue_key]
+        swap_queue = writes.list_swap_queue(conn, deck_id)
         if not swap_queue:
             st.caption("Nothing queued yet.")
         else:
@@ -649,7 +649,7 @@ with tab_swap:
             # "Add" card, recomputed on every render (not cached) so it
             # always reflects the current collection state.
             queue_rows = []
-            for i, item in enumerate(swap_queue):
+            for item in swap_queue:
                 status = q.card_inventory_status(conn, item["add_name"], deck_name=swap_deck_name)
                 if status["owned_qty"] == 0:
                     availability = "Not owned — a starter lot will be created"
@@ -662,12 +662,12 @@ with tab_swap:
                 else:
                     availability = "Already sleeved in this deck"
                 queue_rows.append({
-                    "#": i,
+                    "#": item["queue_id"],
                     "Add": item["add_name"],
                     "Owned": status["owned_qty"],
                     "Availability": availability,
                     "Replace": item["remove_name"],
-                    "Qty": item["qty"],
+                    "Qty": item["quantity"],
                     "Remove from queue": False,
                 })
             queue_edited = st.data_editor(
@@ -687,11 +687,11 @@ with tab_swap:
             )
             qbtn1, qbtn2 = st.columns(2)
             if qbtn1.button("🗑️ Remove checked from queue", key=f"editor_{deck_id}_swap_queue_remove_btn"):
-                keep = {row["#"] for _, row in queue_edited.iterrows() if not row["Remove from queue"]}
-                st.session_state[queue_key] = [item for i, item in enumerate(swap_queue) if i in keep]
+                remove_ids = [row["#"] for _, row in queue_edited.iterrows() if row["Remove from queue"]]
+                writes.remove_swap_queue_items(conn, remove_ids)
                 st.rerun()
             if qbtn2.button("🧹 Clear entire queue", key=f"editor_{deck_id}_swap_queue_clear_btn"):
-                st.session_state[queue_key] = []
+                writes.clear_swap_queue(conn, deck_id)
                 st.rerun()
 
             st.divider()
@@ -712,7 +712,7 @@ with tab_swap:
                     outcome = writes.execute_swap(
                         conn, deck_id, swap_deck_name,
                         remove_scryfall_id=item["remove_scryfall_id"], remove_card_name=item["remove_name"],
-                        add_scryfall_id=sid, add_card_name=item["add_name"], quantity=item["qty"],
+                        add_scryfall_id=sid, add_card_name=item["add_name"], quantity=item["quantity"],
                     )
                     fetch_note = " (fetched fresh from Scryfall)" if was_new else ""
                     if outcome["created_lot"]:
@@ -724,7 +724,7 @@ with tab_swap:
                     results.append(
                         f"✅ Added {item['add_name']}{fetch_note}, replaced {item['remove_name']}{lot_note}."
                     )
-                st.session_state[queue_key] = []
+                writes.clear_swap_queue(conn, deck_id)
                 st.session_state[result_key] = results
                 loaders.invalidate_deck_caches()
                 loaders.invalidate_collection_caches()

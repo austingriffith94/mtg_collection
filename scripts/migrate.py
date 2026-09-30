@@ -293,6 +293,9 @@ class Migrator:
                 (
                     scryfall_id,
                     quantity,
+                    # Legacy collection CSV encodes foil status as the literal string
+                    # "F" in the Finish column (vs. order_import.py's newer "foil"/
+                    # "non-foil" convention, see FINISH_FOIL_MAP there).
                     1 if row["Finish"] == "F" else 0,
                     row.get("Location") if pd.notna(row.get("Location")) else None,
                     excel_serial_to_iso(row.get("Order/Add Date")),

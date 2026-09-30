@@ -358,6 +358,9 @@ def base_column_config(price=True):
 # ------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def _encode_local_image_b64(abs_path, mtime):
+    # `mtime` is unused in the body but is part of Streamlit's cache key: without
+    # it, replacing the file on disk at the same `abs_path` would keep serving the
+    # stale cached bytes forever. Callers must pass the file's current mtime.
     with open(abs_path, "rb") as f:
         return base64.b64encode(f.read()).decode("ascii")
 

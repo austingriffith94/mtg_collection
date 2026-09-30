@@ -109,6 +109,19 @@ _SCHEMA_TABLE_UPGRADES = [
         "CREATE TABLE location_catalog (location TEXT PRIMARY KEY)",
         _seed_location_catalog,
     ),
+    (
+        "deck_swap_queue",
+        """CREATE TABLE deck_swap_queue (
+               queue_id           INTEGER PRIMARY KEY AUTOINCREMENT,
+               deck_id            INTEGER NOT NULL REFERENCES decks(deck_id),
+               add_name           TEXT NOT NULL,
+               remove_scryfall_id TEXT NOT NULL REFERENCES cards(scryfall_id),
+               remove_name        TEXT NOT NULL,
+               quantity           INTEGER NOT NULL DEFAULT 1,
+               queued_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )""",
+        None,
+    ),
 ]
 
 # Same additive philosophy as _SCHEMA_TABLE_UPGRADES, but for VIEWS (kept

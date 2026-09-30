@@ -126,6 +126,54 @@ def resolve_or_fetch_card(conn, name=None, set_code=None, collector_number=None)
     return row["scryfall_id"], True, None
 
 
+def resolve_exact_printing(conn, set_code, collector_number):
+    """Like resolve_or_fetch_card(), but for callers (e.g. order_import.py)
+    that already know the exact printing they want and must NOT accept a
+    substitute: resolve_or_fetch_card()'s name-only fallback would happily
+    return a different printing of the same card name already in the local
+    `cards` table (see find_local_card()'s docstring), which is wrong when
+    a set code + collector number came from a source (a purchase order)
+    that names one specific printing. This only ever returns that exact
+    set+number's scryfall_id — a local exact match, or else a fresh
+    Scryfall get_by_set_number() lookup — never a same-name substitute.
+
+    Returns (scryfall_id, was_newly_fetched, error)."""
+    set_code = (set_code or "").strip() or None
+    collector_number = (str(collector_number).strip() if collector_number not in (None, "") else None)
+    if not (set_code and collector_number):
+        return None, False, "A set code and collector number are both required."
+
+    local = find_local_card(conn, set_code=set_code, collector_number=collector_number)
+    if local:
+        return local, False, None
+
+    try:
+        scryfall_lookup = _load_scryfall_module()
+    except ImportError:
+        return None, False, (
+            "Not found in your local database, and the `requests` package isn't "
+            "installed, so a live Scryfall lookup isn't possible. Run "
+            "`pip install requests` to enable adding brand-new cards."
+        )
+
+    client = scryfall_lookup.ScryfallClient(verbose=False)
+    data = client.get_by_set_number(set_code, collector_number)
+    if not data:
+        return None, False, (
+            f"Couldn't resolve '{set_code}/{collector_number}' on Scryfall — check the "
+            f"set code, or that you have network access right now."
+        )
+
+    row = scryfall_lookup.to_card_row(data)
+    today = datetime.date.today().isoformat()
+    row["price_updated_at"] = today
+    row["last_fetched_at"] = today
+
+    _insert_card_row(conn, row)
+    conn.commit()
+    return row["scryfall_id"], True, None
+
+
 def fetch_additional_printings(conn, name):
     """Prompt Pass 6 — powers the Collection tab's "look up more
     printings" button: queries Scryfall for EVERY printing of `name`

@@ -17,6 +17,7 @@ import, then manage everything here from then on — see the README.
 import sys
 import os
 import datetime
+import hashlib
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -24,7 +25,7 @@ import pandas as pd
 import streamlit as st
 
 from dashboard_lib import db, loaders, writes, card_resolver, refresh, formatting as fmt, queries as q
-from dashboard_lib import card_view as cv
+from dashboard_lib import card_view as cv, order_import
 
 DECK_COVER_DIR = os.path.join(db.BASE_DIR, "image_cache", "deck_covers")
 
@@ -763,6 +764,188 @@ with tab_coll:
         else:
             st.caption("Master location list is empty.")
 
+    st.markdown("**Import a purchase order (CSV)**")
+    st.caption(
+        "Upload a marketplace order export (e.g. Mana Pool's "
+        "'order_<id>_<date>.csv' download) to add every line item at once. "
+        "Each row's Set Code + Collector # is looked up against your "
+        "database (falling back to a live Scryfall lookup) to resolve the "
+        "exact printing and its real name — the card name printed in the "
+        "file itself is never trusted for the match, only used as a "
+        "fallback label if a row can't be resolved at all."
+    )
+    order_file = st.file_uploader("Order CSV", type=["csv"], key="editor_order_import_file")
+
+    if order_file is not None:
+        order_rows = []
+        try:
+            # dtype=str: without it, pandas infers numeric dtypes per column,
+            # and a Collector # column that's all-digits in a given file
+            # would silently lose a leading zero (e.g. "007" -> 7) — see
+            # order_import.py's module docstring.
+            order_df = pd.read_csv(order_file, dtype=str)
+            order_rows = order_import.parse_order_csv(order_df)
+        except Exception as e:
+            st.error(f"Couldn't read this file: {e}")
+
+        if order_rows:
+            # Cache resolved rows in session_state by file content hash so
+            # a Streamlit rerun (e.g. from touching the Location dropdown
+            # below) doesn't re-hit Scryfall for every row again.
+            file_hash = hashlib.md5(order_file.getvalue()).hexdigest()
+            cache_key = f"editor_order_import_resolved_{file_hash}"
+            if cache_key not in st.session_state:
+                with st.spinner("Resolving printings (checking your database, then Scryfall)..."):
+                    order_import.resolve_rows(conn, order_rows)
+                    order_import.mark_existing_lots(conn, order_rows)
+                st.session_state[cache_key] = order_rows
+            order_rows = st.session_state[cache_key]
+
+            singles = [r for r in order_rows if r["is_single"]]
+            non_single = [r for r in order_rows if not r["is_single"]]
+            resolved = [r for r in singles if r.get("scryfall_id")]
+            unresolved = [r for r in singles if not r.get("scryfall_id")]
+            already_owned = [r for r in resolved if r["already_in_collection"]]
+            all_already_owned = bool(resolved) and len(already_owned) == len(resolved)
+            unrecognized_finish = [r for r in singles if not r["finish_recognized"]]
+            price_mismatches = [r for r in singles if r["price_mismatch"]]
+
+            summary = f"Found **{len(singles)}** single card line item(s)"
+            summary += f", {len(non_single)} non-single row(s) will be skipped." if non_single else "."
+            st.write(summary)
+            if unresolved:
+                st.warning(f"{len(unresolved)} row(s) couldn't be resolved to a printing — see below.")
+
+            def _status(r):
+                if not r.get("scryfall_id"):
+                    return f"❌ {r['error']}"
+                bits = ["🆕 New (from Scryfall)" if r.get("was_new") else "✓ Known"]
+                if r["already_in_collection"]:
+                    bits.append("already owned")
+                if not r["finish_recognized"]:
+                    bits.append(f"⚠️ unrecognized Finish '{r['finish_raw']}'")
+                if r["price_mismatch"]:
+                    bits.append("⚠️ price mismatch")
+                return " · ".join(bits)
+
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "Card": r["resolved_name"], "Set": r["set_code"].upper(), "#": r["collector_number"],
+                        "Condition": r["condition"], "Finish": r["finish_raw"], "Qty": r["quantity"],
+                        "Unit Price": r["unit_price"], "Total Price": r["total_price"],
+                        "Seller": r["seller"], "Status": _status(r),
+                    }
+                    for r in singles
+                ]),
+                hide_index=True, use_container_width=True,
+            )
+
+            if unrecognized_finish:
+                st.warning(
+                    f"⚠️ {len(unrecognized_finish)} row(s) have a Finish value other than "
+                    f"exactly 'Foil'/'Non-Foil' (e.g. a foil-etched or alt-finish printing) — "
+                    f"they've been treated as **non-foil** by default since that can't be "
+                    f"inferred automatically. Check the Status column above and fix the Foil "
+                    f"flag afterward in 'Edit / remove collection lots' below if needed."
+                )
+            if price_mismatches:
+                st.warning(
+                    f"⚠️ {len(price_mismatches)} row(s) have a Total Price that doesn't match "
+                    f"Quantity × Unit Price — the Unit Price shown is still what gets stored "
+                    f"as the price paid, but double-check these rows in case the file's "
+                    f"columns parsed unexpectedly."
+                )
+
+            confirm_dupe_key = f"editor_order_import_confirm_dupe_{file_hash}"
+            confirm_dupe = True
+            if all_already_owned:
+                st.warning(
+                    "⚠️ Every card below is already in your collection (same printing + "
+                    "foil already has a lot). This looks like it might be a re-upload of "
+                    "an order you've already imported — importing now will add brand-new "
+                    "duplicate lots, not update the existing ones."
+                )
+                confirm_dupe = st.checkbox(
+                    "I understand — add these as new lots anyway",
+                    key=confirm_dupe_key,
+                )
+            elif already_owned:
+                st.caption(
+                    f"{len(already_owned)} of {len(resolved)} row(s) are already in your "
+                    f"collection (marked 'already owned' above) — importing will still add "
+                    f"a new lot for them, same as any other row."
+                )
+            if any(r["csv_name"] != r["resolved_name"] for r in singles if r.get("scryfall_id")):
+                st.caption(
+                    "Note: some resolved names differ from the file's own Card Name text "
+                    "(e.g. MDFC naming) — the resolved name above is what gets stored."
+                )
+            if any(r["language"] and r["language"].lower() != "english" for r in singles):
+                st.caption(
+                    "Note: this file has non-English cards — the collection schema "
+                    "doesn't track Language, so it'll be dropped on import."
+                )
+            st.caption(
+                "Condition and Language are shown above for reference but aren't stored — "
+                "the collection schema has no per-lot Condition/Language column today."
+            )
+
+            oc1, oc2, oc3 = st.columns(3)
+            LOC_OTHER_IMPORT = "+ Other (type a new location below)..."
+            order_loc_pick = oc1.selectbox(
+                "Location for all imported cards", [""] + loaders.load_location_options(conn) + [LOC_OTHER_IMPORT],
+                key="editor_order_import_location_pick",
+            )
+            if order_loc_pick == LOC_OTHER_IMPORT:
+                order_location = st.text_input("New location", key="editor_order_import_location_new")
+            else:
+                order_location = order_loc_pick
+            order_date = oc2.date_input(
+                "Date acquired", value=datetime.date.today(), key="editor_order_import_date"
+            )
+            order_source = oc3.text_input(
+                "Source label", value="Mana Pool", key="editor_order_import_source"
+            )
+            append_seller = st.checkbox(
+                "Append each line's seller name to Source (e.g. 'Mana Pool (Tobemi Games)')",
+                value=True, key="editor_order_import_append_seller",
+            )
+
+            if st.button(
+                f"📥 Import {len(singles)} card(s) into collection", key="editor_order_import_btn",
+                disabled=all_already_owned and not confirm_dupe,
+            ):
+                results = order_import.import_rows(
+                    conn, order_rows,
+                    location=order_location.strip() or None,
+                    date_acquired=order_date.isoformat() if order_date else None,
+                    source_prefix=order_source.strip() or "Mana Pool",
+                    append_seller=append_seller,
+                )
+                if order_loc_pick == LOC_OTHER_IMPORT and order_location.strip():
+                    writes.add_location_to_catalog(conn, order_location.strip())
+                loaders.invalidate_collection_caches()
+                loaders.invalidate_reference_caches()
+
+                added = [r for r in results if r["status"] in ("added", "added_new_card")]
+                fetched = [r for r in results if r["status"] == "added_new_card"]
+                errors = [r for r in results if r["status"] == "error"]
+                skipped = [r for r in results if r["status"] == "skipped"]
+
+                note = f" ({len(fetched)} fetched fresh from Scryfall)" if fetched else ""
+                st.success(f"Imported {len(added)} card(s){note}.")
+                if skipped:
+                    st.info(f"Skipped {len(skipped)} non-single row(s).")
+                if errors:
+                    st.error(f"{len(errors)} row(s) failed:")
+                    for r in errors:
+                        row = r["row"]
+                        st.write(f"- {row['resolved_name']} ({row['set_code']}/{row['collector_number']}): {r['message']}")
+                del st.session_state[cache_key]
+                st.rerun()
+
+    st.divider()
     st.markdown("**Add a card to your collection**")
     st.caption(
         "Start typing a card name — matches already in your database appear as "

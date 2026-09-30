@@ -2,7 +2,7 @@
 Write layer for in-dashboard editing: card_tags, deck metadata,
 deck_cards (mainboard), maybeboard, deck_themes, and the collection
 (including prune_collection, the automatic cleanup step run as part of
-the Editor page's Card Data "Refresh" action). Plain sqlite3, no
+the Card Database page's Card Data "Refresh" action). Plain sqlite3, no
 Streamlit dependency, so it can be unit-tested directly against a
 scratch copy of mtg_collection.db.
 
@@ -56,7 +56,7 @@ def list_tags(conn, tag_type=None):
 
 
 # ------------------------------------------------------------------
-# Theme catalog (Phase 2) — the master list the Editor's Themes dropdown
+# Theme catalog (Phase 2) — the master list the Deck Editor's Themes dropdown
 # is populated from. Separate from deck_themes (which is deck_id-scoped
 # and still holds the actual main/sub assignments); this table only
 # controls what shows up as an OPTION in the dropdown. Removing a theme
@@ -81,8 +81,8 @@ def remove_theme_from_catalog(conn, theme):
 
 
 # ------------------------------------------------------------------
-# Game Changer category catalog (Phase 2) — the master list the Editor's
-# Game Changers dropdown is populated from. Separate from
+# Game Changer category catalog (Phase 2) — the master list the Card
+# Database's Game Changers dropdown is populated from. Separate from
 # game_changer_tags (the actual per-card assignments); removing a
 # category here does not touch any card's existing assignments.
 # ------------------------------------------------------------------
@@ -164,8 +164,8 @@ def bulk_set_game_changer_tags(conn, edits):
 
 
 # ------------------------------------------------------------------
-# Mana tag catalog (Prompt Pass 12) — the master list the Editor's Mana
-# Tags dropdown is populated from. Separate from mana_tags (the actual
+# Mana tag catalog (Prompt Pass 12) — the master list the Card Database's
+# Mana Tags dropdown is populated from. Separate from mana_tags (the actual
 # per-card assignments); removing a tag here does not touch any card's
 # existing assignments. Exact mirror of the Game Changer category catalog
 # functions above.
@@ -194,8 +194,8 @@ def remove_mana_tag_from_catalog(conn, tag):
 # Mana tag assignment (Prompt Pass 12) — card_name-keyed (matches
 # mana_tags' own grain), NOT deck-scoped, unlike card_tags. mana_tags has
 # no Scryfall-derived flag the way game_changer_tags does, so this is the
-# ONLY write path that puts a card in front of the Editor's Mana Tags
-# overview table — exact mirror of the Game Changer tag-assignment
+# ONLY write path that puts a card in front of the Card Database's Mana
+# Tags overview table — exact mirror of the Game Changer tag-assignment
 # functions above, just without a scryfall_flag concept.
 # ------------------------------------------------------------------
 def get_mana_tags_map(conn):
@@ -244,7 +244,7 @@ def bulk_set_mana_tags(conn, edits):
 
 # ------------------------------------------------------------------
 # Location catalog (Prompt Pass 13) — the master list of "standard"
-# (non-deck) storage locations offered in the Editor's Location
+# (non-deck) storage locations offered in the Collection Editor's Location
 # dropdown, alongside every tracked deck's own name (see
 # queries.location_options()). Removing an entry here does not touch
 # any collection row's existing Location value — same pattern as the
@@ -652,8 +652,8 @@ def prune_collection(conn):
          under consideration for a deck isn't swept away just because it
          isn't physically located anywhere yet.
 
-    Called automatically as part of the Editor page's Card Data "Refresh"
-    action (see dashboard_lib/refresh.py) so stale collection rows for
+    Called automatically as part of the Card Database page's Card Data
+    "Refresh" action (see dashboard_lib/refresh.py) so stale collection rows for
     cards you no longer own and aren't running anywhere get cleaned up
     without a separate manual step. Returns a list of
     (collection_id, card_name) tuples for whatever was removed, so
@@ -787,8 +787,8 @@ def delete_game(conn, game_id):
 # Deck Building Auto-Add (Prompt Pass 6) — when a card added to a deck's
 # mainboard isn't tracked in the collection AT ALL yet, give it a starter
 # collection lot automatically instead of letting the deck and the
-# collection quietly drift apart. Only called from the Editor's Mainboard
-# "Add to mainboard" action (see pages/4_Editor.py) — NOT from the
+# collection quietly drift apart. Only called from the Deck Editor's
+# Mainboard "Add to mainboard" action (see pages/4_Deck_Editor.py) — NOT from the
 # Maybeboard add flow, since a maybeboard card is explicitly "under
 # consideration", not yet a real deck inclusion, so assuming ownership
 # there would overstate the collection.
@@ -867,7 +867,7 @@ def bulk_update_collection(conn, updates):
 
 # ------------------------------------------------------------------
 # Deck Swap / Upgrade Manager (Prompt Pass 13 / prompt6.txt) — applies
-# one queued swap from the Editor's Swap Manager tab. Card resolution
+# one queued swap from the Deck Editor's Swap Manager tab. Card resolution
 # (name/set/number -> scryfall_id, including a live Scryfall lookup for
 # a brand-new card) happens at the call site via card_resolver, same
 # division of responsibility as the Mainboard tab's own "Add a card"
@@ -937,7 +937,7 @@ def execute_swap(conn, deck_id, deck_name, remove_scryfall_id, remove_card_name,
 # deck's planned-but-not-yet-applied swaps survive closing the dashboard
 # between sessions. Purely bookkeeping: nothing here touches deck_cards
 # or collection — that only happens via execute_swap() above, when the
-# Editor's "Confirm & apply" button runs.
+# Deck Editor's "Confirm & apply" button runs.
 # ------------------------------------------------------------------
 def list_swap_queue(conn, deck_id):
     rows = conn.execute(

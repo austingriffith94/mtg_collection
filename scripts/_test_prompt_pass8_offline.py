@@ -54,8 +54,10 @@ PAGE_FILES = [
     "pages/1_Collection.py",
     "pages/2_Decks.py",
     "pages/3_Land_Probability.py",
-    "pages/4_Editor.py",
-    "pages/5_Commander_Game_Tracking.py",
+    "pages/4_Deck_Editor.py",
+    "pages/5_Collection_Editor.py",
+    "pages/6_Card_Database.py",
+    "pages/7_Commander_Game_Tracking.py",
 ]
 
 

@@ -246,15 +246,18 @@ def main():
     conn.close()
 
     # ------------------------------------------------------------------
-    # G. Source-text checks — Editor page wiring
+    # G. Source-text checks — Card Database page wiring (Mana Tags tab
+    #    lived in the combined pages/4_Editor.py at the time this test
+    #    was written; the Editor was later split by domain and Mana Tags
+    #    moved to pages/6_Card_Database.py)
     # ------------------------------------------------------------------
-    editor_path = os.path.join(PROJECT_ROOT, "pages", "4_Editor.py")
+    editor_path = os.path.join(PROJECT_ROOT, "pages", "6_Card_Database.py")
     with open(editor_path, encoding="utf-8") as f:
         editor_text = f.read()
 
-    check("Editor's tab tuple now includes tab_manatags", "tab_manatags" in editor_text and "st.tabs(" in editor_text)
-    check("Editor's tab labels now include 'Mana Tags'", '"Mana Tags"' in editor_text)
-    check("Editor has a 'with tab_manatags:' block", "with tab_manatags:" in editor_text)
+    check("Card Database's tab tuple now includes tab_manatags", "tab_manatags" in editor_text and "st.tabs(" in editor_text)
+    check("Card Database's tab labels now include 'Mana Tags'", '"Mana Tags"' in editor_text)
+    check("Card Database has a 'with tab_manatags:' block", "with tab_manatags:" in editor_text)
     check("Mana Tags tab manages the master tag catalog", "writes.add_mana_tag_to_catalog(conn" in editor_text and "writes.remove_mana_tag_from_catalog(conn" in editor_text)
     check("Mana Tags tab has a search-and-tag-a-card flow", "q.search_card_names(conn, mt_search)" in editor_text and "writes.set_mana_tags(conn" in editor_text)
     check("Mana Tags tab has a bulk data_editor save path", "writes.bulk_set_mana_tags(conn, mt_edits)" in editor_text)

@@ -22,10 +22,10 @@ Proxy flags are intentionally NOT shown here yet — per the project state
 doc, the Proxy convention in Location hasn't been confirmed with the user.
 
 Phase 2 additions: an optional custom cover-image thumbnail next to the
-deck header (set via the Editor's Deck Info tab), and Top 10 Most
+deck header (set via the Deck Editor's Deck Info tab), and Top 10 Most
 Expensive / Top 10 Saltiest card lists alongside the existing Game
 Changers and Reserved List panels. Saltiest is hand-maintained EDHREC
-data (Editor -> Card Data -> Salt Scores), not a Scryfall field — this
+data (Card Database -> Card Data -> Salt Scores), not a Scryfall field — this
 panel itself was removed dashboard-wide in Prompt Pass 5, see below.
 
 Prompt Pass 10 (prompt3.txt — branding/layout/color-identity/tag-list
@@ -344,7 +344,7 @@ st.divider()
 # maintained EDHREC salt scores — was removed dashboard-wide in Prompt
 # Pass 5; see PROJECT_STATE.md for why.)
 # ------------------------------------------------------------------
-st.markdown("**Top 10 most expensive cards**", help="By cards.current_price_usd, refreshed via Editor -> Card Data. Single-card (unit) pricing — quantity isn't shown here.")
+st.markdown("**Top 10 most expensive cards**", help="By cards.current_price_usd, refreshed via Card Database -> Card Data. Single-card (unit) pricing — quantity isn't shown here.")
 price_df = loaders.load_deck_price_top10(conn, deck_id)
 if not price_df.empty:
     # Prompt Pass 4: quantity column hidden (unit pricing only); a

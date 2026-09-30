@@ -4,12 +4,15 @@ Offline test for Prompt Pass 9 changes: no Streamlit, no live network.
 Prompt Pass 9 ("prompt2.txt" — conditional win-rate formatting across
 Game Logs, plus a Dashboard layout tweak):
   1. New pure color-math helpers in formatting.py: win_rate_background_color()
-     and win_rate_cell_style(), implementing a diverging red/white/blue
-     scale anchored at a 25% "fair" 4-player-pod win rate.
+     and win_rate_cell_style(). Originally a diverging red/white/blue
+     scale anchored at a 25% "fair" 4-player-pod win rate; later replaced
+     with fixed red/amber/green buckets (below 20% / 20-35% / above 35%)
+     for readability — this file's assertions below test the current
+     bucketed behavior, not the original blend.
   2. A new card_view.style_win_rate_percentages() that builds a pandas
      Styler applying that scale (plus whole-percent formatting) over one
      or more columns of a DataFrame.
-  3. pages/5_Commander_Game_Tracking.py's "By deck" / "By player" summary
+  3. pages/7_Commander_Game_Tracking.py's "By deck" / "By player" summary
      tables and the Head-to-Head matrix now render through that Styler
      instead of a plain DataFrame of pre-formatted strings.
   4. dashboard.py's sidebar-nav explainer text (instruction #2 of
@@ -18,14 +21,14 @@ Game Logs, plus a Dashboard layout tweak):
      and was added in a follow-up pass.
 
 Covers:
-  A. win_rate_background_color() — anchor/extremes/blend math, clamping,
-     None/NaN/non-numeric handling, a custom baseline.
+  A. win_rate_background_color() — bucket boundaries, clamping,
+     None/NaN/non-numeric handling, custom thresholds.
   B. win_rate_cell_style() — CSS string vs. "" (Styler no-op) output.
   C. card_view.style_win_rate_percentages() — end-to-end Styler output
      (color hex codes and formatted percentages actually present in the
      rendered HTML; NaN cells get no background-color; columns=None
      styles every column for the head-to-head-matrix use case).
-  D. pages/5_Commander_Game_Tracking.py source-text checks — the old
+  D. pages/7_Commander_Game_Tracking.py source-text checks — the old
      manual string-formatting lines are gone, the new styling helper is
      wired in for all three tables, and the ELO table (out of scope per
      the prompt — it has no Win % column) is left untouched.
@@ -80,40 +83,40 @@ def main():
     # A. win_rate_background_color()
     # ------------------------------------------------------------------
     check(
-        "exactly the 25% anchor -> neutral white",
-        fmt.win_rate_background_color(0.25) == fmt.WIN_RATE_NEUTRAL_HEX,
+        "just below the low threshold (20%) -> red",
+        fmt.win_rate_background_color(0.19) == fmt.WIN_RATE_RED_HEX,
     )
     check(
-        "0% (full underperformance) -> full red",
+        "0% (full underperformance) -> red",
         fmt.win_rate_background_color(0.0) == fmt.WIN_RATE_RED_HEX,
     )
     check(
-        "100% (full overperformance) -> full blue",
-        fmt.win_rate_background_color(1.0) == fmt.WIN_RATE_BLUE_HEX,
-    )
-
-    # Halfway between white and red (0.125 is halfway from 0.25 down to 0.0).
-    half_red = fmt.win_rate_background_color(0.125)
-    expected_half_red = fmt._blend_hex(fmt.WIN_RATE_NEUTRAL_HEX, fmt.WIN_RATE_RED_HEX, 0.5)
-    check("below-anchor blend is proportional to distance from 25%", half_red == expected_half_red)
-
-    # Halfway between white and blue (0.625 is halfway from 0.25 up to 1.0).
-    half_blue = fmt.win_rate_background_color(0.625)
-    expected_half_blue = fmt._blend_hex(fmt.WIN_RATE_NEUTRAL_HEX, fmt.WIN_RATE_BLUE_HEX, 0.5)
-    check("above-anchor blend is proportional to distance from 25%", half_blue == expected_half_blue)
-
-    check(
-        "a value just below the anchor is closer to white than full red",
-        fmt.win_rate_background_color(0.24) != fmt.WIN_RATE_RED_HEX
-        and fmt.win_rate_background_color(0.24) != fmt.WIN_RATE_NEUTRAL_HEX,
-    )
-
-    check(
-        "an out-of-range value above 1.0 clamps to full blue, doesn't error",
-        fmt.win_rate_background_color(1.5) == fmt.WIN_RATE_BLUE_HEX,
+        "exactly the low threshold (20%) -> amber (inclusive boundary)",
+        fmt.win_rate_background_color(0.20) == fmt.WIN_RATE_YELLOW_HEX,
     )
     check(
-        "an out-of-range value below 0.0 clamps to full red, doesn't error",
+        "the 25% \"fair\" rate -> amber",
+        fmt.win_rate_background_color(0.25) == fmt.WIN_RATE_YELLOW_HEX,
+    )
+    check(
+        "exactly the high threshold (35%) -> amber (inclusive boundary)",
+        fmt.win_rate_background_color(0.35) == fmt.WIN_RATE_YELLOW_HEX,
+    )
+    check(
+        "just above the high threshold (35%) -> green",
+        fmt.win_rate_background_color(0.36) == fmt.WIN_RATE_GREEN_HEX,
+    )
+    check(
+        "100% (full overperformance) -> green",
+        fmt.win_rate_background_color(1.0) == fmt.WIN_RATE_GREEN_HEX,
+    )
+
+    check(
+        "an out-of-range value above 1.0 clamps to green, doesn't error",
+        fmt.win_rate_background_color(1.5) == fmt.WIN_RATE_GREEN_HEX,
+    )
+    check(
+        "an out-of-range value below 0.0 clamps to red, doesn't error",
         fmt.win_rate_background_color(-0.5) == fmt.WIN_RATE_RED_HEX,
     )
 
@@ -121,16 +124,18 @@ def main():
     check("NaN returns None (unstyled)", fmt.win_rate_background_color(float("nan")) is None)
     check("a non-numeric string returns None (unstyled)", fmt.win_rate_background_color("n/a") is None)
 
-    # A custom baseline (e.g. a straight 1v1 50% anchor) is honored, not
-    # hardcoded to 25% — confirms the function is genuinely parametrized
-    # even though every current caller uses the 25% default.
+    # Custom thresholds (e.g. a straight 1v1 50% anchor with a tight
+    # +/-5% amber band) are honored, not hardcoded to 20%/35% — confirms
+    # the function is genuinely parametrized even though every current
+    # caller uses the default thresholds.
     check(
-        "a custom baseline is respected",
-        fmt.win_rate_background_color(0.5, baseline=0.5) == fmt.WIN_RATE_NEUTRAL_HEX,
+        "custom thresholds are respected",
+        fmt.win_rate_background_color(0.5, low=0.45, high=0.55) == fmt.WIN_RATE_YELLOW_HEX,
     )
     check(
-        "a custom baseline changes which side of the scale a value falls on",
-        fmt.win_rate_background_color(0.4, baseline=0.5) != fmt.win_rate_background_color(0.4, baseline=0.25),
+        "custom thresholds change which bucket a value falls into",
+        fmt.win_rate_background_color(0.4, low=0.45, high=0.55)
+        != fmt.win_rate_background_color(0.4, low=0.20, high=0.35),
     )
 
     # ------------------------------------------------------------------
@@ -151,8 +156,8 @@ def main():
     })
     styler = cv.style_win_rate_percentages(deck_like, columns=["Win %"])
     html = styler.to_html()
-    check("styled HTML contains the full-red hex for the 0% row", fmt.WIN_RATE_RED_HEX in html)
-    check("styled HTML contains the full-blue hex for the 100% row", fmt.WIN_RATE_BLUE_HEX in html)
+    check("styled HTML contains the red hex for the 0% row", fmt.WIN_RATE_RED_HEX in html)
+    check("styled HTML contains the green hex for the 100% row", fmt.WIN_RATE_GREEN_HEX in html)
     check("styled HTML renders whole-percent text ('100%')", "100%" in html)
     check(
         "the 'Played' column (not in `columns`) isn't percent-formatted",
@@ -167,7 +172,7 @@ def main():
     )
     h2h_styler = cv.style_win_rate_percentages(h2h_like)
     h2h_html = h2h_styler.to_html()
-    check("head-to-head styling covers every column with columns=None", fmt.WIN_RATE_RED_HEX in h2h_html and fmt.WIN_RATE_BLUE_HEX in h2h_html)
+    check("head-to-head styling covers every column with columns=None", fmt.WIN_RATE_RED_HEX in h2h_html and fmt.WIN_RATE_GREEN_HEX in h2h_html)
     check("head-to-head NaN diagonal cells show the em-dash, not a stray '%'", h2h_html.count("\u2014") == 2)
     check(
         "head-to-head NaN diagonal cells get no background-color (only the 2 real cells do)",
@@ -186,7 +191,7 @@ def main():
     #    and that the ELO table (out of scope — no Win % column) wasn't
     #    touched.
     # ------------------------------------------------------------------
-    page_path = os.path.join(PROJECT_ROOT, "pages", "5_Commander_Game_Tracking.py")
+    page_path = os.path.join(PROJECT_ROOT, "pages", "7_Commander_Game_Tracking.py")
     with open(page_path, encoding="utf-8") as f:
         page_text = f.read()
 

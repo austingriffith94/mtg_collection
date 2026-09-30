@@ -38,9 +38,11 @@ Covers:
      owned and available; owned but every copy is in another deck),
      plus the removed card's location moving back to storage and a
      no-matching-lot removal being a harmless no-op.
-  H. Source-text checks confirming pages/4_Editor.py actually wires in
+  H. Source-text checks confirming the Editor pages actually wire in
      the Swap Manager tab and the Location dropdowns, not just having
-     the backing functions exist in isolation.
+     the backing functions exist in isolation. (Written against the
+     combined pages/4_Editor.py; the Editor was later split by domain
+     into pages/4_Deck_Editor.py and pages/5_Collection_Editor.py.)
   I. loaders.py — invalidate_reference_caches()/invalidate_deck_caches()
      clear the new location caches.
 
@@ -307,34 +309,40 @@ def main():
     conn.close()
 
     # ------------------------------------------------------------------
-    # H. Source-text checks — pages/4_Editor.py wiring
+    # H. Source-text checks — page wiring (pages/4_Editor.py at the time
+    #    this test was written; the Editor was later split by domain into
+    #    pages/4_Deck_Editor.py and pages/5_Collection_Editor.py)
     # ------------------------------------------------------------------
-    editor_path = os.path.join(PROJECT_ROOT, "pages", "4_Editor.py")
-    with open(editor_path, encoding="utf-8") as f:
-        editor_text = f.read()
+    deck_editor_path = os.path.join(PROJECT_ROOT, "pages", "4_Deck_Editor.py")
+    with open(deck_editor_path, encoding="utf-8") as f:
+        deck_editor_text = f.read()
 
-    check("Editor's tab tuple now includes tab_swap", "tab_swap" in editor_text and "st.tabs(" in editor_text)
-    check("Editor's tab labels now include 'Swap Manager'", '"Swap Manager"' in editor_text)
-    check("Editor has a 'with tab_swap:' block", "with tab_swap:" in editor_text)
-    check("Swap Manager tab checks live inventory via card_inventory_status", "q.card_inventory_status(conn" in editor_text)
-    check("Swap Manager tab executes queued swaps via writes.execute_swap", "writes.execute_swap(" in editor_text)
-    check("Swap Manager tab persists its queue via writes.list_swap_queue/queue_swap (not just session state)", "writes.list_swap_queue(conn" in editor_text and "writes.queue_swap(" in editor_text)
-
-    check(
-        "Editor's Collection tab uses a Location dropdown (loaders.load_location_options), not free text",
-        "loaders.load_location_options(conn)" in editor_text,
-    )
-    check(
-        "Editor's bulk collection editor uses a SelectboxColumn for Location",
-        'st.column_config.SelectboxColumn("Location"' in editor_text,
-    )
-    check(
-        "Editor manages a master Location catalog (add/remove)",
-        "writes.add_location_to_catalog(conn" in editor_text and "writes.remove_location_from_catalog(conn" in editor_text,
-    )
+    check("Deck Editor's tab tuple now includes tab_swap", "tab_swap" in deck_editor_text and "st.tabs(" in deck_editor_text)
+    check("Deck Editor's tab labels now include 'Swap Manager'", '"Swap Manager"' in deck_editor_text)
+    check("Deck Editor has a 'with tab_swap:' block", "with tab_swap:" in deck_editor_text)
+    check("Swap Manager tab checks live inventory via card_inventory_status", "q.card_inventory_status(conn" in deck_editor_text)
+    check("Swap Manager tab executes queued swaps via writes.execute_swap", "writes.execute_swap(" in deck_editor_text)
+    check("Swap Manager tab persists its queue via writes.list_swap_queue/queue_swap (not just session state)", "writes.list_swap_queue(conn" in deck_editor_text and "writes.queue_swap(" in deck_editor_text)
     check(
         "Deck Info's delete-deck checkbox now references writes.DEFAULT_LOCATION rather than 'clear'",
-        "writes.DEFAULT_LOCATION" in editor_text,
+        "writes.DEFAULT_LOCATION" in deck_editor_text,
+    )
+
+    collection_editor_path = os.path.join(PROJECT_ROOT, "pages", "5_Collection_Editor.py")
+    with open(collection_editor_path, encoding="utf-8") as f:
+        collection_editor_text = f.read()
+
+    check(
+        "Collection Editor uses a Location dropdown (loaders.load_location_options), not free text",
+        "loaders.load_location_options(conn)" in collection_editor_text,
+    )
+    check(
+        "Collection Editor's bulk collection editor uses a SelectboxColumn for Location",
+        'st.column_config.SelectboxColumn("Location"' in collection_editor_text,
+    )
+    check(
+        "Collection Editor manages a master Location catalog (add/remove)",
+        "writes.add_location_to_catalog(conn" in collection_editor_text and "writes.remove_location_from_catalog(conn" in collection_editor_text,
     )
 
     loaders_path = os.path.join(PROJECT_ROOT, "dashboard_lib", "loaders.py")

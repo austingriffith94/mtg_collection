@@ -424,44 +424,37 @@ def split_multi_value(cell):
 
 
 # ------------------------------------------------------------------
-# Win-rate conditional-formatting scale (Prompt Pass 9 / prompt2.txt) —
-# used by the Commander Game Tracking page's Win-by-Deck summary,
-# Win-by-Player summary, and Head-to-Head matrix. A straight 50/50 split
-# doesn't fit a 4-player free-for-all pod (see player_elo_ratings()'s own
-# docstring in queries.py, which makes the same point for ELO) — with 4
-# equally-matched seats, a "fair" win rate is 1 in 4, so that's the
-# neutral anchor for this diverging scale instead of the usual 50%.
-# Below the anchor shades toward red (underperforming that baseline);
-# above shades toward blue (overperforming it); intensity scales with
-# distance from the anchor, reaching full color at the 0%/100% extremes.
-# Applied identically (same anchor, same two colors) to all three tables
-# per the prompt's "color logic applies consistently" instruction — see
-# PROJECT_STATE.md for the note on the Head-to-Head table specifically,
-# where a pure 1-on-1 reading might otherwise suggest a 50% anchor.
+# Win-rate conditional-formatting scale — used by the Commander Game
+# Tracking page's Win-by-Deck summary, Win-by-Player summary, and
+# Head-to-Head matrix. A straight 50/50 split doesn't fit a 4-player
+# free-for-all pod (see player_elo_ratings()'s own docstring in
+# queries.py, which makes the same point for ELO) — with 4 equally-
+# matched seats, a "fair" win rate is 1 in 4, so the bucket thresholds
+# below sit around that 25% mark rather than around 50%.
+#
+# Originally a continuous red/white/blue blend anchored at 25% (Prompt
+# Pass 9 / prompt2.txt); replaced with three flat buckets for
+# readability — a continuous gradient makes it hard to eyeball which
+# side of "fair" a given cell falls on at a glance, where a flat color
+# reads instantly. Below 20% is red (clearly underperforming); 20-35%
+# is amber (roughly at the fair 25% rate); above 35% is green (clearly
+# overperforming). All three are dark enough to keep this dashboard's
+# white cell text readable — a true bright yellow can't hit that
+# contrast, hence "amber" rather than a lighter yellow.
 # ------------------------------------------------------------------
-WIN_RATE_BASELINE = 0.25  # "fair" win rate for a 4-player Commander pod
-WIN_RATE_NEUTRAL_HEX = "#FFFFFF"
-WIN_RATE_RED_HEX = "#C0392B"    # full-intensity "below baseline" color
-WIN_RATE_BLUE_HEX = "#2E86C1"   # full-intensity "above baseline" color
+WIN_RATE_LOW_THRESHOLD = 0.20   # below this: red
+WIN_RATE_HIGH_THRESHOLD = 0.35  # above this: green; in between: amber
+WIN_RATE_RED_HEX = "#C0392B"
+WIN_RATE_YELLOW_HEX = "#8F7300"
+WIN_RATE_GREEN_HEX = "#1E8449"
 
 
-def _blend_hex(hex_a, hex_b, t):
-    """Linear-interpolate two '#RRGGBB' colors; t=0.0 -> hex_a, t=1.0 ->
-    hex_b, clamped to [0, 1] for any t outside that range."""
-    t = max(0.0, min(1.0, t))
-    a = [int(hex_a[i:i + 2], 16) for i in (1, 3, 5)]
-    b = [int(hex_b[i:i + 2], 16) for i in (1, 3, 5)]
-    blended = [round(a[i] + (b[i] - a[i]) * t) for i in range(3)]
-    return "#{:02X}{:02X}{:02X}".format(*blended)
-
-
-def win_rate_background_color(value, baseline=WIN_RATE_BASELINE):
-    """Diverging red/white/blue background color for a win-rate `value`
-    (0.0-1.0), anchored at `baseline`. Below the anchor blends from white
-    toward WIN_RATE_RED_HEX (0% win rate = full red); above blends from
-    white toward WIN_RATE_BLUE_HEX (100% = full blue); exactly at the
-    anchor is neutral white. `value` is clamped into [0, 1] first, so an
-    out-of-range float still resolves to some point on the scale rather
+def win_rate_background_color(value, low=WIN_RATE_LOW_THRESHOLD, high=WIN_RATE_HIGH_THRESHOLD):
+    """Bucketed red/amber/green background color for a win-rate `value`
+    (0.0-1.0): below `low` is WIN_RATE_RED_HEX, above `high` is
+    WIN_RATE_GREEN_HEX, and everything in between (inclusive of both
+    thresholds) is WIN_RATE_YELLOW_HEX. `value` is clamped into [0, 1]
+    first, so an out-of-range float still resolves to a bucket rather
     than being rejected. Returns None (meaning: leave the cell unstyled)
     for None, NaN, or anything that can't be read as a float — callers
     treat a None return as a no-op style."""
@@ -474,23 +467,20 @@ def win_rate_background_color(value, baseline=WIN_RATE_BASELINE):
     if value != value:  # NaN != NaN is the standard no-import NaN check
         return None
     value = max(0.0, min(1.0, value))
-    if value < baseline:
-        t = (baseline - value) / baseline if baseline else 0.0
-        return _blend_hex(WIN_RATE_NEUTRAL_HEX, WIN_RATE_RED_HEX, t)
-    if value > baseline:
-        span = 1.0 - baseline
-        t = (value - baseline) / span if span else 0.0
-        return _blend_hex(WIN_RATE_NEUTRAL_HEX, WIN_RATE_BLUE_HEX, t)
-    return WIN_RATE_NEUTRAL_HEX
+    if value < low:
+        return WIN_RATE_RED_HEX
+    if value > high:
+        return WIN_RATE_GREEN_HEX
+    return WIN_RATE_YELLOW_HEX
 
 
-def win_rate_cell_style(value, baseline=WIN_RATE_BASELINE):
+def win_rate_cell_style(value, low=WIN_RATE_LOW_THRESHOLD, high=WIN_RATE_HIGH_THRESHOLD):
     """CSS `background-color: #RRGGBB` declaration for `value` (see
     win_rate_background_color()), or '' for a value that should stay
     unstyled — '' rather than None specifically because this is meant to
     be handed straight to a pandas Styler, which expects an empty string
     (not None) for a no-op cell style."""
-    color = win_rate_background_color(value, baseline)
+    color = win_rate_background_color(value, low, high)
     return f"background-color: {color}" if color else ""
 
 

@@ -277,13 +277,13 @@ st.caption(
 
 commander_names_ordered = [n for n in (meta.get("commander"), meta.get("partner")) if n]
 if not commander_names_ordered:
-    st.info("No commander set for this deck yet (Editor → Deck Info) — nothing to calculate.")
+    st.info("No commander set for this deck yet (Deck Editor → Deck Info) — nothing to calculate.")
 else:
     commander_cards_df = loaders.load_cards_by_name(conn, tuple(commander_names_ordered))
     if commander_cards_df.empty:
         st.info(
-            "Couldn't find the commander's own card data in the database yet — try an "
-            "Editor → Card Data refresh, or check the commander name matches a card exactly."
+            "Couldn't find the commander's own card data in the database yet — try a "
+            "Card Database → Card Data refresh, or check the commander name matches a card exactly."
         )
     else:
         pick_label = commander_names_ordered[0]
@@ -296,7 +296,7 @@ else:
             )
         cmdr_row = commander_cards_df[commander_cards_df["name"].str.lower() == pick_label.lower()]
         if cmdr_row.empty:
-            st.info(f"Couldn't find card data for **{pick_label}** — try an Editor → Card Data refresh.")
+            st.info(f"Couldn't find card data for **{pick_label}** — try a Card Database → Card Data refresh.")
         else:
             cmdr_row = cmdr_row.iloc[0]
             commander_cmc = cmdr_row.get("cmc") or 0

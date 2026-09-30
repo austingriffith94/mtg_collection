@@ -10,7 +10,7 @@ Collection page — browse the full physical collection.
   foil, basic land, game changer, Showcase, Borderless, price, mana
   value) all combine (AND across facets, "any of" within a facet).
   Showcase/Borderless are Scryfall frame-treatment flags (Phase 2),
-  populated by the Editor's Card Data refresh / any new card fetch.
+  populated by the Card Database's Card Data refresh / any new card fetch.
 - Deck-status toggle (Prompt Pass 4): All / In a deck / Not in a deck /
   Not in a deck OR another location — see the comment above that control
   below for exactly what each option means.

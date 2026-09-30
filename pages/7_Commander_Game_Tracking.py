@@ -15,10 +15,11 @@ Two tabs:
   - "Player & deck stats" — win-rate-by-deck/by-player tables, plus a
     Prompt-Pass-7 ELO rating table and head-to-head win-rate matrix —
     moved into its own tab so long game logs don't push these metrics
-    off the bottom of the page. As of Prompt Pass 9, every Win %
-    cell across the by-deck/by-player summaries and the head-to-head
-    matrix is background-shaded on a shared red/white/blue scale
-    anchored at 25% (a 4-player pod's fair/expected win rate) — see
+    off the bottom of the page. Every Win % cell across the
+    by-deck/by-player summaries and the head-to-head matrix is
+    background-shaded on a shared red/amber/green bucket scale (below
+    20% red, 20-35% amber, above 35% green — 25% being a 4-player
+    pod's fair/expected win rate) — see
     dashboard_lib.card_view.style_win_rate_percentages().
 
 Player name is a field as of Phase 2 (game_participants.player_name).
@@ -243,9 +244,10 @@ with tab_log:
 with tab_stats:
     st.subheader("Win rate comparisons")
     st.caption(
-        "Win % is shaded against a 25% baseline \u2014 the fair/expected win rate in a "
-        "4-player Commander pod where every seat is equally likely to win. Below 25% shades "
-        "red (underperforming); above 25% shades blue (overperforming); exactly 25% is neutral."
+        "Win % is bucketed against a 25% fair/expected win rate for a 4-player Commander pod "
+        "where every seat is equally likely to win: below 20% shades red (clearly "
+        "underperforming), 20\u201335% shades amber (around the fair rate), above 35% shades "
+        "green (clearly overperforming)."
     )
 
     wr_col1, wr_col2 = st.columns(2)
@@ -309,7 +311,7 @@ with tab_stats:
     st.caption(
         "Row player's win rate against column player, counting only games the two of them "
         "shared (with anyone else also at the table). \u2014 means they've never shared a "
-        "logged game. Shaded on the same 25% red/blue baseline as the summaries above."
+        "logged game. Shaded on the same red/amber/green buckets as the summaries above."
     )
     h2h_df = loaders.load_player_head_to_head(conn)
     if h2h_df.empty:

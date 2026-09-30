@@ -2,10 +2,10 @@
 
 The foundation layer (SQLite schema + migration scripts converting your CSV
 exports into a real relational database) is complete and validated. The
-Streamlit dashboard is built out across five pages — Collection, Decks &
-Maybeboard, Land & Color Probability, Editor, and Commander Game Tracking
-(see "Running the dashboard" below). The print-to-PDF deck report is the
-remaining next phase.
+Streamlit dashboard is built out across seven pages — Collection, Decks &
+Maybeboard, Land & Color Probability, Deck Editor, Collection Editor, Card
+Database, and Commander Game Tracking (see "Running the dashboard" below).
+The print-to-PDF deck report is the remaining next phase.
 
 ## What's here
 
@@ -22,8 +22,10 @@ mtg_dashboard/
 │   ├── 1_Collection.py
 │   ├── 2_Decks.py
 │   ├── 3_Land_Probability.py
-│   ├── 4_Editor.py
-│   └── 5_Commander_Game_Tracking.py
+│   ├── 4_Deck_Editor.py
+│   ├── 5_Collection_Editor.py
+│   ├── 6_Card_Database.py
+│   └── 7_Commander_Game_Tracking.py
 ├── dashboard_lib/                     # shared library code behind the pages
 │   ├── formatting.py                 # card-type/color/URL/filename helpers (no Streamlit dep)
 │   ├── queries.py                    # read-only sqlite3+pandas queries (no Streamlit dep)
@@ -47,7 +49,7 @@ mtg_dashboard/
 │   └── deck_themes.csv               # main/sub theme per deck
 ├── moxfield_exports/                  # created on first use — .txt files saved from the dashboard
 ├── image_cache/                       # created on first use — one .jpg per printing (sync_images.py),
-│                                       # plus deck_covers/<deck_id>.png for custom deck thumbnails (Editor)
+│                                       # plus deck_covers/<deck_id>.png for custom deck thumbnails (Deck Editor)
 └── scripts/
     ├── scryfall_lookup.py            # Scryfall API client (lazy fetch + cache) — also
     │                                  # reused directly by dashboard_lib/card_resolver.py
@@ -102,11 +104,12 @@ tightly:
 either Moxfield export. `streamlit` is dashboard-only. Both Moxfield
 exports are pure stdlib — no install needed at all for those two.
 
-\* `requests` is only needed by the Editor page's "add a card" forms
-(Mainboard/Maybeboard/Collection tabs) and the "Card Data" tab's refresh
-button, and only when live network access is actually required (a new
-card not already in your database, or the refresh itself) — it reuses
-`scripts/scryfall_lookup.py` for those. Everything else in the dashboard,
+\* `requests` is only needed by the Deck Editor's and Collection Editor's
+"add a card" forms (Mainboard/Maybeboard/Collection) and the Card
+Database's "Card Data" tab's refresh button, and only when live network
+access is actually required (a new card not already in your database, or
+the refresh itself) — it reuses `scripts/scryfall_lookup.py` for those.
+Everything else in the dashboard,
 including editing cards you already have, works without `requests`
 installed.
 
@@ -217,8 +220,8 @@ The dashboard currently covers:
   Library size and land count auto-detect from the decklist
   (commander/partner excluded, since they live in the command zone, not
   the shuffled deck) but are editable if you want to test a hypothetical.
-- **Editor** — add, rename, and remove things directly, no CSV editing
-  required:
+- **Deck Editor** — add, rename, and remove deck-level things directly, no
+  CSV editing required:
   - **Deck Info** — rename a deck (with an option to also update any
     `collection.location` rows that matched the old name, so "sleeved in
     this deck" tracking stays correct), edit commander/partner/colors/
@@ -265,22 +268,28 @@ The dashboard currently covers:
     "Auto-added (swap manager)", same auditability convention as Deck
     Building Auto-Add below) rather than ever pulling a physical copy out
     of another deck's box.
-  - **Collection** — the Location field is a controlled dropdown (Prompt
-    Pass 13): a master list of standard storage locations you manage (an
-    expander, "Box"/"Lands Box" seeded by default) unioned with every
-    tracked deck's own name, so "sleeved in this deck" tracking can't
-    drift from a typo. Type a card name for a suggestion list drawn from
-    cards already in your database (refreshes once you finish typing or
-    press Enter); pick one to get a second dropdown of every printing you
-    already know about (set, collector number, price), or a "🔍 Check
-    Scryfall for other printings" button to pull in printings you don't
-    have locally yet. Add the exact printing along with
-    quantity/foil/location/price/a real date picker for Date Acquired
-    (defaulting to today)/source, or skip the suggestions entirely and
-    enter a Set Code + Collector Number directly for a brand-new card
-    (live Scryfall lookup, same fallback as Mainboard/Maybeboard above).
-    Then search and bulk-edit (Location is a dropdown here too) or remove
-    existing lots.
+- **Collection Editor** — manage the physical collection directly, no CSV
+  editing required. Not deck-scoped — there's no "choose a deck" sidebar
+  here, unlike Deck Editor. Import a marketplace purchase-order CSV to add
+  every line item at once (each row resolved against your database, then
+  Scryfall, by Set Code + Collector Number), or add a card by hand: the
+  Location field is a controlled dropdown (Prompt Pass 13): a master list of
+  standard storage locations you manage (an expander, "Box"/"Lands Box"
+  seeded by default) unioned with every tracked deck's own name, so
+  "sleeved in this deck" tracking can't drift from a typo. Type a card name
+  for a suggestion list drawn from cards already in your database
+  (refreshes once you finish typing or press Enter); pick one to get a
+  second dropdown of every printing you already know about (set, collector
+  number, price), or a "🔍 Check Scryfall for other printings" button to
+  pull in printings you don't have locally yet. Add the exact printing
+  along with quantity/foil/location/price/a real date picker for Date
+  Acquired (defaulting to today)/source, or skip the suggestions entirely
+  and enter a Set Code + Collector Number directly for a brand-new card
+  (live Scryfall lookup, same fallback as Mainboard/Maybeboard above). Then
+  search and bulk-edit (Location is a dropdown here too) or remove existing
+  lots.
+- **Card Database** — whole-database, card-name-keyed reference data, not
+  scoped to any one deck, no CSV editing required:
   - **Game Changers** — every card that's either Scryfall-flagged or
     already carries one of your custom categories, across your whole
     database (not just one deck), shown with card art. Edit categories
@@ -330,9 +339,9 @@ it'll print a one-line warning to that effect right before it does.
 
 **The rule going forward: once you've moved your data over, don't run
 `migrate.py` again.** Manage decks, card tags, mainboard/maybeboard,
-themes, and the collection directly in the dashboard's Editor page from
-then on — that's now the source of truth, and there's no CSV round-trip
-needed for any of it.
+themes, and the collection directly in the dashboard's Deck Editor and
+Collection Editor pages from then on — that's now the source of truth,
+and there's no CSV round-trip needed for any of it.
 
 ### Schema changes without re-migrating: additive upgrades on connect
 
@@ -440,9 +449,9 @@ matters: once a card is in your database, its flags stay whatever they
 were when you last fetched it — they don't silently update on their own.
 If WotC revises the Bracket list or adds to the Reserved List later, your
 existing cards won't reflect that until you either re-run `migrate.py`
-(which, per above, wipes and rebuilds everything) or use the **Editor
-page's "Card Data" tab** (or `scripts/refresh_card_data.py` from the
-command line), which re-fetches every card by its permanent Scryfall ID
+(which, per above, wipes and rebuilds everything) or use the **Card
+Database page's "Card Data" tab** (or `scripts/refresh_card_data.py` from
+the command line), which re-fetches every card by its permanent Scryfall ID
 and updates just these fields — Reserved List, Game Changer, Commander
 legality, and price — without touching anything else. Worth running
 occasionally as general upkeep.
@@ -476,8 +485,8 @@ WHERE d.name = 'Vilis, Blood ATM';
 `mana_tags.csv` loads into a `mana_tags` table (Fast, Dual, Shockland,
 Fetch, Ritual, Mana Doubler, Medallion, Moxen, etc.) — same static,
 name-keyed pattern as Game Changers, no Scryfall calls needed. As of
-Prompt Pass 12, it also has an in-dashboard editor — the Editor page's
-**Mana Tags** tab, mirroring the Game Changers tab's master-catalog +
+Prompt Pass 12, it also has an in-dashboard editor — the Card Database
+page's **Mana Tags** tab, mirroring the Game Changers tab's master-catalog +
 bulk-edit pattern (a `mana_tag_catalog` table backs the tag dropdown),
 plus a card-name search to assign a first-ever tag to any card in the
 database (mana_tags has no Scryfall-derived flag the way Game Changers
@@ -496,7 +505,7 @@ WHERE d.name = 'Vilis, Blood ATM';
 
 ## Deck Swap Manager
 
-Added in Prompt Pass 13 (Editor page, **Swap Manager** tab, deck-scoped)
+Added in Prompt Pass 13 (Deck Editor page, **Swap Manager** tab, deck-scoped)
 to make upgrading a deck a deliberate, reviewable batch action instead of
 adding/removing cards one at a time and separately remembering to fix up
 `collection.location` afterward. Workflow:
@@ -526,10 +535,10 @@ until you click "Confirm & apply all queued swaps".
 
 `collection.location` is still free text at the schema level (a box
 label or a deck's own name — see schema.sql's comment on the column),
-but as of Prompt Pass 13 the Editor no longer lets you type it freely.
-A new `location_catalog` table holds your standard, non-deck storage
-locations (seeded with `"Box"` and `"Lands Box"`, manage the rest in the
-Collection tab's "⚙️ Manage the master Location list" expander); the
+but as of Prompt Pass 13 the Collection Editor no longer lets you type it
+freely. A new `location_catalog` table holds your standard, non-deck
+storage locations (seeded with `"Box"` and `"Lands Box"`, manage the rest
+in the Collection Editor's "⚙️ Manage the master Location list" expander); the
 dropdown offered everywhere Location is set or edited is that catalog
 unioned with every currently tracked deck's own name. Deleting a deck
 now **reassigns** any collection rows whose Location matched it back to
@@ -686,8 +695,9 @@ since this sandbox has no network access.
 
 Deck names/metadata, mainboard, maybeboard, themes, collection lots, card
 tags, Game Changer categories, and (Prompt Pass 12) mana tags are all
-editable directly in the dashboard (Editor page — there's no separate
-Tag Editor page anymore; it was folded into Editor) — no CSV round-trip
+editable directly in the dashboard (Deck Editor and Card Database pages —
+there's no separate Tag Editor page anymore; it was folded into Deck
+Editor's Card Tags tab) — no CSV round-trip
 needed for any of it. (EDHREC salt scores used to be hand-editable here
 too; that feature was retired dashboard-wide — see "EDHREC Salt Score"
 below.)
@@ -703,7 +713,7 @@ dashboard from then on.
   the Location/Proxy convention confirmed first)
 - Rule 0 tags — no data source yet (open item, see below)
 - A discovery view of the *full* official Game Changers list (owned vs.
-  not-yet-owned) — the Editor's Game Changers tab only shows cards
+  not-yet-owned) — the Card Database's Game Changers tab only shows cards
   already in your database (owned, or run in a deck), not the whole
   official list
 - An in-tool editor for mana tags (currently CSV-only, unlike Game
@@ -711,8 +721,9 @@ dashboard from then on.
 - HTML/CSS print-to-PDF one-pager, styled after your existing deck
   summary PDFs
 - EDHREC comparison — on the backburner per your call. The narrower
-  hand-entered salt-score field that used to live in the Editor as a
-  stand-in for this was itself retired — see "EDHREC Salt Score" below —
+  hand-entered salt-score field that used to live in the Editor (now Card
+  Database) as a stand-in for this was itself retired — see "EDHREC Salt
+  Score" below —
   so there's currently no EDHREC-sourced data anywhere in the dashboard.
 
 ## EDHREC Salt Score (retired)
@@ -725,7 +736,7 @@ it only ships inside MTGJSON's full-size exports (`AllPrintings` /
 `AllIdentifiers` / `AtomicCards`, each hundreds of MB or more) — too
 heavy an ongoing dependency to sync just for one hand-sized number in a
 personal-scale, mostly-offline tool. The whole feature was removed as a
-result: the Editor's Salt Scores sub-editor, the Decks page's Top 10
+result: the Editor's (now Card Database's) Salt Scores sub-editor, the Decks page's Top 10
 Saltiest panel, and every supporting query/write/loader function are
 gone. `cards.edhrec_salt` itself is still physically declared in
 `schema.sql`, per this project's rule of never dropping a column from a

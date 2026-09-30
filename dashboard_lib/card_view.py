@@ -630,14 +630,17 @@ def inject_deck_accent_css(gradient_css, accent_hex):
 # DataFrame — everywhere else (render_table(), the two summary/matrix
 # call sites before this pass) just passes a DataFrame straight through.
 # ------------------------------------------------------------------
-def style_win_rate_percentages(df, columns=None, baseline=fmt.WIN_RATE_BASELINE, na_rep="\u2014"):
+def style_win_rate_percentages(
+    df, columns=None, low=fmt.WIN_RATE_LOW_THRESHOLD, high=fmt.WIN_RATE_HIGH_THRESHOLD, na_rep="\u2014"
+):
     """Build a pandas Styler over `df` that renders each cell in
     `columns` (win-rate floats, 0.0-1.0) as a whole-percent string and
-    colors its background on fmt.win_rate_background_color()'s diverging
-    red/white/blue scale, anchored at `baseline`. `columns=None` (the
-    default) styles every column — the Head-to-Head matrix, where every
-    cell is itself a win rate; pass an explicit list (e.g. ["Win %"]) for
-    a table like the Win-by-Deck/Win-by-Player summaries, which also
+    colors its background on fmt.win_rate_background_color()'s bucketed
+    red/amber/green scale (below `low` red, above `high` green, in
+    between amber). `columns=None` (the default) styles every column —
+    the Head-to-Head matrix, where every cell is itself a win rate;
+    pass an explicit list (e.g. ["Win %"]) for a table like the
+    Win-by-Deck/Win-by-Player summaries, which also
     carry non-win-rate columns (deck/player name, games played, ...)
     that must pass through untouched. NaN cells (e.g. the Head-to-Head
     diagonal, or a deck/player with no recorded result) render as
@@ -653,4 +656,4 @@ def style_win_rate_percentages(df, columns=None, baseline=fmt.WIN_RATE_BASELINE,
         lambda v: f"{v * 100:.0f}%" if pd.notna(v) else na_rep, subset=cols
     )
     elementwise = styler.map if hasattr(styler, "map") else styler.applymap
-    return elementwise(lambda v: fmt.win_rate_cell_style(v, baseline), subset=cols)
+    return elementwise(lambda v: fmt.win_rate_cell_style(v, low, high), subset=cols)

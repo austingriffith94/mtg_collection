@@ -19,7 +19,7 @@ def db_exists():
 
 @st.cache_resource(show_spinner=False)
 def get_connection():
-    return q.get_connection(DB_PATH)
+    return q.open_connection(DB_PATH)
 
 
 def require_db():

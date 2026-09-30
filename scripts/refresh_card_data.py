@@ -37,7 +37,7 @@ def main():
         print(f"No database found at {DB_PATH} — run migrate.py first.")
         sys.exit(1)
 
-    conn = q.get_connection(DB_PATH)  # also applies any pending schema upgrades
+    conn = q.open_connection(DB_PATH)  # also applies any pending schema upgrades
 
     total = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
     print(f"Refreshing Scryfall data for {total} card(s) in your database...")

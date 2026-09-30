@@ -45,8 +45,7 @@ def _parse_iso_date(value):
     except ValueError:
         return None
 
-st.set_page_config(page_title="Collection Editor · MTG Dashboard", page_icon="📥", layout="wide")
-cv.inject_nav_caps_css()
+cv.setup_page("Collection Editor · MTG Dashboard", "📥")
 
 db.require_db()
 conn = db.get_connection()
@@ -444,6 +443,10 @@ else:
             },
             column_order=["Card", "Set", "Qty", "Foil", "Location", "Date", "Price Paid", "Source", "Delete"],
             hide_index=True, use_container_width=True,
+            # Keyed by the search text (not a static key) so changing the
+            # search gives a genuinely fresh widget instead of Streamlit
+            # reapplying this editor's in-progress edits against a
+            # different set of rows by row position.
             key=f"editor_coll_editor_{coll_search}",
         )
         if st.button("💾 Save collection changes", key="editor_coll_save"):

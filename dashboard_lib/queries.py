@@ -202,7 +202,13 @@ def ensure_schema(conn):
     _normalize_retired_decks(conn)
 
 
-def get_connection(db_path):
+def open_connection(db_path):
+    """Open a new sqlite3 connection to `db_path` and apply any pending
+    schema upgrades (see ensure_schema above). Named distinctly from
+    db.get_connection() — that's the Streamlit-cached wrapper around
+    this that the app actually calls; this one opens a fresh connection
+    every time and is for callers outside the cached app session
+    (scripts/refresh_card_data.py) or db.py itself."""
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")

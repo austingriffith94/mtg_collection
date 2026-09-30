@@ -48,8 +48,7 @@ import streamlit as st
 from dashboard_lib import db, loaders, writes, queries as q, game_form as gf
 from dashboard_lib import card_view as cv
 
-st.set_page_config(page_title="Commander Game Tracking · MTG Dashboard", page_icon="🏆", layout="wide")
-cv.inject_nav_caps_css()
+cv.setup_page("Commander Game Tracking · MTG Dashboard", "🏆")
 
 db.require_db()
 conn = db.get_connection()

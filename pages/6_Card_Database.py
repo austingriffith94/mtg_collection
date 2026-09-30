@@ -23,8 +23,7 @@ import streamlit as st
 from dashboard_lib import db, loaders, writes, refresh, card_resolver, formatting as fmt, queries as q
 from dashboard_lib import card_view as cv
 
-st.set_page_config(page_title="Card Database · MTG Dashboard", page_icon="🗄️", layout="wide")
-cv.inject_nav_caps_css()
+cv.setup_page("Card Database · MTG Dashboard", "🗄️")
 
 db.require_db()
 conn = db.get_connection()
@@ -116,6 +115,10 @@ with tab_gc:
             },
             column_order=["image_uri", "Card", "Scryfall flag", "Categories", "Owned", "In decks"],
             hide_index=True, use_container_width=True,
+            # Keyed by the search text (not a static key) so changing the
+            # search gives a genuinely fresh widget instead of Streamlit
+            # reapplying this editor's in-progress edits against a
+            # different set of rows by row position.
             key=f"editor_gc_editor_{gc_search}",
         )
         if st.button("💾 Save category changes", key="editor_gc_save"):
@@ -195,6 +198,11 @@ with tab_manatags:
         mt_tags_input = st.text_input(
             "Tags (comma-separated)",
             value=", ".join(mt_current_tags),
+            # Keyed by the picked card (not a static key) so switching
+            # cards resets this box to THAT card's own saved tags —
+            # Streamlit ignores `value=` on rerender for a key it has
+            # already instantiated, so a static key would carry over
+            # whatever text was typed for the previous card.
             key=f"editor_mt_tags_input_{mt_pick}",
         )
         if st.button("💾 Save tags for this card", key="editor_mt_save_one"):

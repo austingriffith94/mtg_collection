@@ -28,8 +28,7 @@ import streamlit as st
 from dashboard_lib import db, loaders, formatting as fmt, moxfield_export
 from dashboard_lib import card_view as cv
 
-st.set_page_config(page_title="Collection · MTG Dashboard", page_icon="📦", layout="wide")
-cv.inject_nav_caps_css()
+cv.setup_page("Collection · MTG Dashboard", "📦")
 
 db.require_db()
 conn = db.get_connection()

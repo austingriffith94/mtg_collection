@@ -67,6 +67,17 @@ def inject_nav_caps_css():
     )
 
 
+def setup_page(page_title, page_icon, layout="wide"):
+    """st.set_page_config() + inject_nav_caps_css() — every page (and
+    dashboard.py) calls both of these as its very first UI action, in
+    this order, with layout="wide" in every case; this collapses that
+    two-line pair copy-pasted in all 8 files into one call. Each page
+    still needs its own sys.path.insert(...) BEFORE this can even be
+    imported, so that part stays per-file."""
+    st.set_page_config(page_title=page_title, page_icon=page_icon, layout=layout)
+    inject_nav_caps_css()
+
+
 # ------------------------------------------------------------------
 # Sidebar filter reset (Prompt Pass 4) — every widget key created by
 # render_filter_panel() (and any bespoke filter control a page adds

@@ -27,8 +27,7 @@ import streamlit as st
 from dashboard_lib import db, loaders
 from dashboard_lib import card_view as cv
 
-st.set_page_config(page_title="MTG Collection Dashboard", page_icon="🃏", layout="wide")
-cv.inject_nav_caps_css()
+cv.setup_page("MTG Collection Dashboard", "🃏")
 
 st.title("🃏 MTG Collection Dashboard")
 

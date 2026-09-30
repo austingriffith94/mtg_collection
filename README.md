@@ -347,7 +347,7 @@ and there's no CSV round-trip needed for any of it.
 
 With `migrate.py` retired as a re-runnable tool, the schema still needs a
 way to grow occasionally without wiping your database.
-`dashboard_lib/queries.get_connection()` — the one function everything
+`dashboard_lib/queries.open_connection()` — the one function everything
 else connects through — checks for a short list of expected
 columns/tables/views on every connect and applies a plain `ALTER TABLE`
 or `CREATE TABLE`/`CREATE VIEW` if one's missing, then moves on. It never

@@ -56,7 +56,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pandas as pd
 import streamlit as st
 
-from dashboard_lib import db, loaders, formatting as fmt, moxfield_export
+from dashboard_lib import db, loaders, formatting as fmt, moxfield_export, deck_printout
 from dashboard_lib import card_view as cv
 
 cv.setup_page("Decks · MTG Dashboard", "🃏")
@@ -175,6 +175,40 @@ with st.expander("📋 Export to Moxfield"):
             with open(out_path, "w", encoding="utf-8") as f:
                 f.write(moxfield_text + "\n")
             st.success(f"Saved to `{os.path.relpath(out_path, db.BASE_DIR)}`")
+
+with st.expander("🖨️ Printable deck sheet"):
+    st.caption(
+        "A one-page, Letter-size sheet with stats, charts, art and the full decklist. "
+        "Open the downloaded file in a browser and print (or save as PDF)."
+    )
+    _sheet_df = loaders.load_deck_cards_df(conn, deck_id)
+    if _sheet_df.empty:
+        st.caption("No mainboard cards to print yet.")
+    else:
+        _commander_names = {n for n in (meta.get("commander"), meta.get("partner")) if n}
+        _priciest = (
+            _sheet_df[~_sheet_df["name"].isin(_commander_names)]
+            .dropna(subset=["current_price_usd"])
+            .nlargest(3, "current_price_usd")
+        )
+        _showcase = [{"name": r["name"], "src": cv.card_image_src(r)} for _, r in _priciest.iterrows()]
+        sheet_html = deck_printout.build_deck_printout_html(
+            meta, stats, value, _sheet_df, header_img_src,
+            fmt.deck_color_identity_symbol_urls(color_identity_raw),
+            fmt.deck_accent_gradient(color_identity_raw), fmt.deck_accent_hex(color_identity_raw),
+            loaders.load_deck_rank_list(conn, deck_id, "win_conditions"),
+            loaders.load_deck_rank_list(conn, deck_id, "strengths"),
+            loaders.load_deck_rank_list(conn, deck_id, "weaknesses"),
+            loaders.load_deck_themes(conn, deck_id),
+            _showcase,
+        )
+        st.download_button(
+            "⬇️ Download deck sheet (.html)",
+            data=sheet_html.encode("utf-8"),
+            file_name=f"{fmt.safe_filename(deck_name)} - deck sheet.html",
+            mime="text/html",
+            key=f"deck_{deck_id}_sheet_download",
+        )
 
 st.divider()
 

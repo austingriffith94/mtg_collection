@@ -3,3 +3,4 @@
 
 # Python bytecode caches
 __pycache__/
+.pytest_cache/

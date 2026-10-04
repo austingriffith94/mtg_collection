@@ -1,8 +1,8 @@
 """
 Collection Editor page — manage the physical collection directly in the
-database: import a marketplace purchase-order CSV, add a single card lot
-by hand (with Scryfall lookup for brand-new printings), and edit/remove
-existing collection lots. No CSV editing or re-migration required.
+database: import a marketplace purchase-order CSV and add a single card lot
+by hand (with Scryfall lookup for brand-new printings). Editing/removing
+existing lots lives on the Collection page, alongside its filters. No CSV editing or re-migration required.
 
 Not deck-scoped — unlike Deck Editor, there's no "choose a deck" sidebar
 here, since every action on this page operates on the collection as a
@@ -31,19 +31,6 @@ import streamlit as st
 from dashboard_lib import db, loaders, writes, card_resolver, formatting as fmt, queries as q
 from dashboard_lib import card_view as cv, order_import
 
-
-def _parse_iso_date(value):
-    """'YYYY-MM-DD' (or NaN/None/'') -> datetime.date, else None — for
-    seeding st.date_input widgets from whatever's already in the DB."""
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return None
-    text = str(value).strip()
-    if not text or text.lower() == "nan":
-        return None
-    try:
-        return datetime.date.fromisoformat(text[:10])
-    except ValueError:
-        return None
 
 cv.setup_page("Collection Editor · MTG Dashboard", "📥")
 
@@ -168,7 +155,7 @@ if order_file is not None:
                 f"exactly 'Foil'/'Non-Foil' (e.g. a foil-etched or alt-finish printing) — "
                 f"they've been treated as **non-foil** by default since that can't be "
                 f"inferred automatically. Check the Status column above and fix the Foil "
-                f"flag afterward in 'Edit / remove collection lots' below if needed."
+                f"flag afterward in the Collection page's Edit mode if needed."
             )
         if price_mismatches:
             st.warning(
@@ -395,74 +382,8 @@ if st.button("➕ Add to collection", key="editor_coll_add_btn"):
 
 st.divider()
 st.markdown("**Edit / remove collection lots**")
-st.caption("Search first — editing the whole collection in one table isn't practical at real-world scale.")
-coll_search = st.text_input("Search by card name", key="editor_coll_search")
-
-if not coll_search:
-    st.caption("Type a search above to load matching lots for editing.")
-else:
-    coll_df = loaders.load_collection_df(conn)
-    scoped = coll_df[coll_df["name"].str.contains(coll_search, case=False, na=False, regex=False)]
-    if scoped.empty:
-        st.info("No matches.")
-    else:
-        coll_rows = [
-            {
-                "collection_id": r["collection_id"], "Card": r["name"], "Set": r["set_code"],
-                "Qty": int(r["quantity"]) if pd.notna(r["quantity"]) else None,
-                "Foil": bool(r["foil"]),
-                "Location": r["location"] if pd.notna(r["location"]) else "",
-                "Date": _parse_iso_date(r["date_acquired"]),
-                "Price Paid": float(r["price_paid"]) if pd.notna(r["price_paid"]) else None,
-                "Source": r["source"] if pd.notna(r["source"]) else "",
-                "Delete": False,
-            }
-            for _, r in scoped.iterrows()
-        ]
-        coll_editor_df = pd.DataFrame(coll_rows)
-        # SelectboxColumn options: the catalog + deck names, plus
-        # whatever Location text these specific rows already carry
-        # (even pre-existing free text that was never added to the
-        # catalog) so editing this table can never blank out a value
-        # it doesn't recognize.
-        loc_select_options = sorted(
-            set(loaders.load_location_options(conn)) | {r["Location"] for r in coll_rows} | {""}
-        )
-        coll_edited = st.data_editor(
-            coll_editor_df,
-            column_config={
-                "Card": st.column_config.TextColumn("Card", disabled=True),
-                "Set": st.column_config.TextColumn("Set", disabled=True),
-                "Qty": st.column_config.NumberColumn("Qty", min_value=0, step=1),
-                "Foil": st.column_config.CheckboxColumn("Foil"),
-                "Location": st.column_config.SelectboxColumn("Location", options=loc_select_options),
-                "Date": st.column_config.DateColumn("Acquired", format="YYYY-MM-DD"),
-                "Price Paid": st.column_config.NumberColumn("Price Paid", format="$%.2f"),
-                "Source": st.column_config.TextColumn("Source"),
-                "Delete": st.column_config.CheckboxColumn("Delete"),
-            },
-            column_order=["Card", "Set", "Qty", "Foil", "Location", "Date", "Price Paid", "Source", "Delete"],
-            hide_index=True, use_container_width=True,
-            # Keyed by the search text (not a static key) so changing the
-            # search gives a genuinely fresh widget instead of Streamlit
-            # reapplying this editor's in-progress edits against a
-            # different set of rows by row position.
-            key=f"editor_coll_editor_{coll_search}",
-        )
-        if st.button("💾 Save collection changes", key="editor_coll_save"):
-            coll_updates = {}
-            for _, row in coll_edited.iterrows():
-                row_date = row["Date"]
-                coll_updates[row["collection_id"]] = {
-                    "_delete": bool(row["Delete"]),
-                    "quantity": int(row["Qty"]) if pd.notna(row["Qty"]) else None,
-                    "foil": bool(row["Foil"]),
-                    "location": row["Location"] or None,
-                    "date_acquired": row_date.isoformat() if pd.notna(row_date) and row_date else None,
-                    "price_paid": float(row["Price Paid"]) if pd.notna(row["Price Paid"]) else None,
-                    "source": row["Source"] or None,
-                }
-            changed = writes.bulk_update_collection(conn, coll_updates)
-            loaders.invalidate_collection_caches()
-            st.success(f"Updated {changed} lot(s).")
-            st.rerun()
+st.info(
+    "Editing and removing existing lots now lives on the **Collection** page — turn on "
+    "'✏️ Edit mode' there to change quantity, foil, location, date, price, or source "
+    "directly on whatever the sidebar filters are showing."
+)

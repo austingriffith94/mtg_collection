@@ -97,13 +97,16 @@ def main():
         with open(path, encoding="utf-8") as f:
             text = f.read()
         check(f"{rel_path}: imports card_view", "card_view" in text)
-        check(f"{rel_path}: calls inject_nav_caps_css()", "cv.inject_nav_caps_css()" in text)
-        config_pos = text.find("st.set_page_config(")
-        caps_pos = text.find("cv.inject_nav_caps_css()")
-        check(
-            f"{rel_path}: inject_nav_caps_css() runs after set_page_config(), not before",
-            config_pos != -1 and caps_pos != -1 and caps_pos > config_pos,
-        )
+        # Pages now call cv.setup_page(), which runs st.set_page_config() and
+        # then inject_nav_caps_css() in that order (verified below).
+        check(f"{rel_path}: calls cv.setup_page()", "cv.setup_page(" in text)
+
+    captured_calls = []
+    st_mod = sys.modules["streamlit"]
+    st_mod.set_page_config = lambda **kw: captured_calls.append("config")
+    st_mod.markdown = lambda body, **kw: captured_calls.append("css")
+    cv.setup_page("t", "x")
+    check("setup_page() runs set_page_config() before the nav-caps CSS", captured_calls == ["config", "css"])
 
     # ------------------------------------------------------------------
     # 3. The Land Probability page's "Check a specific card" caption no

@@ -336,9 +336,12 @@ def main():
         "Collection Editor uses a Location dropdown (loaders.load_location_options), not free text",
         "loaders.load_location_options(conn)" in collection_editor_text,
     )
+    # The bulk lot editor moved from Collection Editor to the Collection page's Edit mode.
+    with open(os.path.join(PROJECT_ROOT, "pages", "1_Collection.py"), encoding="utf-8") as f:
+        collection_page_text = f.read()
     check(
-        "Collection Editor's bulk collection editor uses a SelectboxColumn for Location",
-        'st.column_config.SelectboxColumn("Location"' in collection_editor_text,
+        "Collection page's Edit mode uses a SelectboxColumn for Location",
+        'st.column_config.SelectboxColumn("Location"' in collection_page_text,
     )
     check(
         "Collection Editor manages a master Location catalog (add/remove)",

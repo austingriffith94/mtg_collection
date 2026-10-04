@@ -14,19 +14,108 @@ Collection page — browse the full physical collection.
 - Deck-status toggle (Prompt Pass 4): All / In a deck / Not in a deck /
   Not in a deck OR another location — see the comment above that control
   below for exactly what each option means.
+- Edit mode: swaps the browser for an editable table of exactly the rows
+  the filters currently show (quantity, foil, location, date, price,
+  source, delete), so a filtered set can be changed in place without
+  hopping to another page. Lot-adding/importing stays on Collection Editor.
 - "Group / breakout by" lets you layer multiple groupings (e.g. Type, then
   Rarity within each type) — each top-level group is a collapsible
   section.
 """
 import sys
 import os
+import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import pandas as pd
 import streamlit as st
 
-from dashboard_lib import db, loaders, formatting as fmt, moxfield_export
+from dashboard_lib import db, loaders, writes, formatting as fmt, moxfield_export
 from dashboard_lib import card_view as cv
+
+
+
+def _parse_iso_date(value):
+    """'YYYY-MM-DD' (or NaN/None/'') -> datetime.date, else None — for
+    seeding the editor's date column from whatever's in the DB."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    text = str(value).strip()
+    if not text or text.lower() == "nan":
+        return None
+    try:
+        return datetime.date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
+def render_edit_table(df):
+    """Editable table over the already-filtered rows; saves only what changed."""
+    if df.empty:
+        st.info("No cards match the current filters.")
+        return
+    df = df.sort_values(by=["name", "set_code"], kind="stable")
+    rows = [
+        {
+            "collection_id": r["collection_id"], "Card": r["name"], "Set": r["set_code"],
+            "Qty": int(r["quantity"]) if pd.notna(r["quantity"]) else None,
+            "Foil": bool(r["foil"]),
+            "Location": r["location"] if pd.notna(r["location"]) else "",
+            "Date": _parse_iso_date(r["date_acquired"]),
+            "Price Paid": float(r["price_paid"]) if pd.notna(r["price_paid"]) else None,
+            "Source": r["source"] if pd.notna(r["source"]) else "",
+            "Delete": False,
+        }
+        for _, r in df.iterrows()
+    ]
+    st.caption(
+        f"{len(rows)} lot(s) shown — edit cells, then save. Changing a sidebar filter "
+        "before saving discards unsaved edits."
+    )
+    # Options: catalog + deck names, plus any Location text these rows already
+    # carry, so editing can never blank out a value the dropdown doesn't know.
+    loc_options = sorted(
+        set(loaders.load_location_options(conn)) | {r["Location"] for r in rows} | {""}
+    )
+    # Keyed by the visible lot ids so a different filter result gets a fresh
+    # widget instead of replaying old edits against different rows by position.
+    ids_hash = hash(tuple(r["collection_id"] for r in rows))
+    edited = st.data_editor(
+        pd.DataFrame(rows),
+        column_config={
+            "Card": st.column_config.TextColumn("Card", disabled=True),
+            "Set": st.column_config.TextColumn("Set", disabled=True),
+            "Qty": st.column_config.NumberColumn("Qty", min_value=0, step=1),
+            "Foil": st.column_config.CheckboxColumn("Foil"),
+            "Location": st.column_config.SelectboxColumn("Location", options=loc_options),
+            "Date": st.column_config.DateColumn("Acquired", format="YYYY-MM-DD"),
+            "Price Paid": st.column_config.NumberColumn("Price Paid", format="$%.2f"),
+            "Source": st.column_config.TextColumn("Source"),
+            "Delete": st.column_config.CheckboxColumn("Delete"),
+        },
+        column_order=["Card", "Set", "Qty", "Foil", "Location", "Date", "Price Paid", "Source", "Delete"],
+        hide_index=True, use_container_width=True,
+        key=f"collection_edit_table_{ids_hash}",
+    )
+    if st.button("💾 Save collection changes", key="collection_edit_save"):
+        updates = {}
+        for _, row in edited.iterrows():
+            row_date = row["Date"]
+            updates[row["collection_id"]] = {
+                "_delete": bool(row["Delete"]),
+                "quantity": int(row["Qty"]) if pd.notna(row["Qty"]) else None,
+                "foil": bool(row["Foil"]),
+                "location": row["Location"] or None,
+                "date_acquired": row_date.isoformat() if pd.notna(row_date) and row_date else None,
+                "price_paid": float(row["Price Paid"]) if pd.notna(row["Price Paid"]) else None,
+                "source": row["Source"] or None,
+            }
+        changed = writes.bulk_update_collection(conn, updates)
+        loaders.invalidate_collection_caches()
+        st.success(f"Updated {changed} lot(s).")
+        st.rerun()
+
 
 cv.setup_page("Collection · MTG Dashboard", "📦")
 
@@ -150,6 +239,14 @@ column_config.update(
         "price_paid": st.column_config.NumberColumn("Paid", format="$%.2f", width="small"),
     }
 )
+
+if st.toggle(
+    "✏️ Edit mode", key="collection_edit_mode",
+    help="Edit quantity / foil / location / date / price / source (or delete) for "
+         "exactly the lots the filters above currently show.",
+):
+    render_edit_table(filtered)
+    st.stop()
 
 cv.render_browser(
     filtered,

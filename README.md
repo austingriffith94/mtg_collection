@@ -33,11 +33,13 @@ mtg_dashboard/
 │   ├── writes.py                     # card tags/deck/decklist/maybeboard/collection/game write layer (no Streamlit dep)
 │   ├── card_resolver.py              # find-or-fetch a card for "add a new card" flows (no Streamlit dep)
 │   ├── moxfield_export.py            # Moxfield format — shared by the CLI script and the dashboard (no Streamlit dep)
+│   ├── deck_printout.py              # one-page Letter-size HTML deck sheet (Decks page → "🖨️ Printable deck sheet"; no Streamlit dep)
 │   ├── refresh.py                    # refresh Reserved List/Game Changer/legality/price by ID, then prune the collection (no Streamlit dep)
 │   ├── game_form.py                  # Commander Game Tracking form resolution/validation (no Streamlit dep, Prompt Pass 7)
 │   ├── db.py                         # cached connection + "no DB yet" guard
 │   ├── loaders.py                    # st.cache_data-wrapped versions of queries.py
 │   └── card_view.py                  # shared table/grid browser + filter UI
+├── tests/                             # pytest suite on an in-memory DB (python -m pytest tests) — see tests/README.md
 ├── data/                              # your source CSVs go here
 │   ├── decks.csv
 │   ├── maybeboard.csv
@@ -179,7 +181,11 @@ The dashboard currently covers:
   Showcase, Borderless, price, mana value), a deck-status toggle (In a
   deck / Not in a deck / Not in a deck OR another location), and
   multi-level "group by" breakouts. Every card links out to its Scryfall
-  page from both views. A "📋 Export to Moxfield (Collection CSV)" panel
+  page from both views. An "✏️ Edit mode" toggle swaps the browser for an
+  editable table of exactly the lots the sidebar filters currently show —
+  change quantity, foil, location (a dropdown), date acquired, price paid,
+  or source, or tick Delete, then save; only rows you actually changed
+  are written. (Changing a filter before saving discards unsaved edits.) A "📋 Export to Moxfield (Collection CSV)" panel
   generates a Moxfield-compatible collection import CSV — Full Collection
   or Owned NOT in a deck — downloadable or saved to `moxfield_exports/`
   (see "Moxfield export" below).
@@ -285,9 +291,9 @@ The dashboard currently covers:
   along with quantity/foil/location/price/a real date picker for Date
   Acquired (defaulting to today)/source, or skip the suggestions entirely
   and enter a Set Code + Collector Number directly for a brand-new card
-  (live Scryfall lookup, same fallback as Mainboard/Maybeboard above). Then
-  search and bulk-edit (Location is a dropdown here too) or remove existing
-  lots.
+  (live Scryfall lookup, same fallback as Mainboard/Maybeboard above).
+  Editing or removing *existing* lots lives on the Collection page's Edit
+  mode instead, so you can filter and edit in the same view.
 - **Card Database** — whole-database, card-name-keyed reference data, not
   scoped to any one deck, no CSV editing required:
   - **Game Changers** — every card that's either Scryfall-flagged or
@@ -535,8 +541,8 @@ until you click "Confirm & apply all queued swaps".
 
 `collection.location` is still free text at the schema level (a box
 label or a deck's own name — see schema.sql's comment on the column),
-but as of Prompt Pass 13 the Collection Editor no longer lets you type it
-freely. A new `location_catalog` table holds your standard, non-deck
+but as of Prompt Pass 13 the Collection Editor and the Collection page's Edit mode no longer let you
+type it freely. A new `location_catalog` table holds your standard, non-deck
 storage locations (seeded with `"Box"` and `"Lands Box"`, manage the rest
 in the Collection Editor's "⚙️ Manage the master Location list" expander); the
 dropdown offered everywhere Location is set or edited is that catalog

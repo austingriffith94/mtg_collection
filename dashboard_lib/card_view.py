@@ -420,6 +420,12 @@ def _image_src(row):
     return None
 
 
+# Public alias for callers outside this module (the deck printout builds
+# card images for its "priciest pickups" fan) — same pattern as
+# deck_image_src() below.
+card_image_src = _image_src
+
+
 def _render_card_tile(row):
     name = html.escape(str(row.get("name") or "Unknown card"))
     url = row.get("scryfall_url")

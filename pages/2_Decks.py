@@ -128,14 +128,19 @@ cv.render_deck_header(deck_name, meta.get("description"), header_img_src, color_
 # ------------------------------------------------------------------
 # Turn 0 stat grid
 # ------------------------------------------------------------------
+def _out_of_5(value):
+    """Bracket and Interaction are both 0-5 scores; show the scale so the number means something."""
+    return "—" if value is None else f"{value} / 5"
+
+
 meta_col1, meta_col2, meta_col3, meta_col4 = st.columns(4)
 meta_col1.markdown(f"**Commander**\n\n{meta.get('commander') or '—'}")
 meta_col2.markdown(f"**Partner**\n\n{meta.get('partner') or '—'}")
 meta_col3.markdown(f"**Colors**\n\n{fmt.deck_color_identity_display(meta.get('color_identity'))}")
-meta_col4.markdown(f"**Bracket**\n\n{meta.get('bracket') if meta.get('bracket') is not None else '—'}")
+meta_col4.markdown(f"**Bracket**\n\n{_out_of_5(meta.get('bracket'))}")
 
 meta_col5, meta_col6, meta_col7, meta_col8 = st.columns(4)
-meta_col5.markdown(f"**Interaction**\n\n{meta.get('interaction') if meta.get('interaction') is not None else '—'}")
+meta_col5.markdown(f"**Interaction**\n\n{_out_of_5(meta.get('interaction'))}")
 meta_col6.markdown(f"**Combos**\n\n{meta.get('combos') or '—'}")
 meta_col7.markdown(f"**Tutors**\n\n{meta.get('tutors') or '—'}")
 meta_col8.markdown(f"**Built**\n\n{meta.get('initially_built') or '—'}")
@@ -201,6 +206,15 @@ with st.expander("🖨️ Printable deck sheet"):
             loaders.load_deck_rank_list(conn, deck_id, "weaknesses"),
             loaders.load_deck_themes(conn, deck_id),
             _showcase,
+            game_changers=[
+                {"name": r["card_name"], "tag": r["custom_tag"]}
+                for _, r in loaders.load_deck_game_changers(conn, deck_id).iterrows()
+            ],
+            mana_tags=loaders.load_deck_mana_tag_summary(conn, deck_id),
+            reserved=[
+                {"name": r["card_name"], "price": r["price"]}
+                for _, r in loaders.load_deck_reserved_list_cards(conn, deck_id).iterrows()
+            ],
         )
         st.download_button(
             "⬇️ Download deck sheet (.html)",

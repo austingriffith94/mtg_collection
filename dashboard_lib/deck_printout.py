@@ -39,6 +39,48 @@ from . import formatting as fmt
 # last "7+" bucket so one 10-drop doesn't stretch the chart.
 CURVE_MAX_CMC = 7
 
+# Row caps for the three "special cards" panels. A panel past its cap ends
+# in "+N more" instead of growing, so a Reserved-List- or Game-Changer-heavy
+# deck can't squeeze the decklist off the page. The panel headings still
+# show the true total.
+SPECIAL_ROW_CAP = 8
+MANA_TAG_CAP = 6          # optimized-mana tags shown
+MANA_TAG_CARD_CAP = 6     # cards listed per tag
+
+# Fit-to-page: if the decklist columns still overflow (e.g. a very long
+# list), shrink the decklist font a step at a time down to a legibility
+# floor. Runs when the page loads, so the browser's print layout (same
+# fixed-size page) matches. The page is a fixed 8.5x11in box, so screen and
+# print layouts agree.
+_FIT_SCRIPT = """
+<script>
+(function () {
+  function fit() {
+    var cards = document.querySelector('.cards');
+    if (!cards) return;
+    var size = 6.4;
+    // Overflowing columns spill sideways, so compare scrollWidth to width.
+    while (cards.scrollWidth > cards.clientWidth + 2 && size > 5.2) {
+      size -= 0.2;
+      cards.style.setProperty('--card-font', size + 'pt');
+    }
+  }
+  window.addEventListener('load', fit);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit);
+})();
+</script>
+"""
+
+
+def _capped(rows, cap):
+    """First `cap` rows, plus how many were left out."""
+    rows = list(rows)
+    return rows[:cap], max(0, len(rows) - cap)
+
+
+def _more(n):
+    return f'<div class="muted more">+{n} more</div>' if n else ""
+
 
 def _esc(value):
     return html.escape(str(value)) if value is not None else ""
@@ -47,14 +89,14 @@ def _esc(value):
 def _stat_tile(label, value):
     return (
         f'<div class="tile"><div class="tile-value">{_esc(value)}</div>'
-        f'<div class="tile-label">{_esc(label)}</div></div>'
+        f'<div class="tile-label">{label}</div></div>'
     )
 
 
 def _curve_svg(nonland_df):
     """Stacked-by-color mana curve as inline SVG (Vega/Streamlit charts
     don't print crisply). Returns (svg, legend_html)."""
-    width, height = 480, 118
+    width, height = 480, 100
     left, right, top, bottom = 8, 8, 16, 22
     if nonland_df.empty:
         return "", ""
@@ -151,10 +193,54 @@ def _color_share_bar(nonland_df):
 
 def _rank_list(title, rows):
     if rows:
-        items = "".join(f"<li>{_esc(r['label'])}</li>" for r in rows)
+        # Label in bold when there's a description beneath it; otherwise the
+        # label is the whole entry (strengths/weaknesses are often just a
+        # sentence stored as the label).
+        items = "".join(
+            f"<li><b>{_esc(r['label'])}</b><span class=\"desc\">{_esc(r['description'])}</span></li>"
+            if r.get("description") else f"<li>{_esc(r['label'])}</li>"
+            for r in rows
+        )
     else:
         items = '<li class="muted">None recorded</li>'
     return f'<div class="panel"><h3>{_esc(title)}</h3><ol>{items}</ol></div>'
+
+
+def _special_panels(game_changers, mana_tags, reserved):
+    """Game Changers / optimized mana / Reserved List panels."""
+    def panel(title, rows_html, empty):
+        body = rows_html or f'<div class="muted">{empty}</div>'
+        return f'<div class="panel"><h3>{title}</h3>{body}</div>'
+
+    gc_rows, gc_extra = _capped(game_changers, SPECIAL_ROW_CAP)
+    gc = "".join(
+        f'<div class="kv"><span>{_esc(g["name"])}</span><em>{_esc(g.get("tag") or "")}</em></div>'
+        for g in gc_rows
+    ) + _more(gc_extra)
+
+    def mana_row(m):
+        # `cards` is a comma-joined list of card names; split it so a long
+        # list can be capped rather than wrapping over many lines.
+        names = [n.strip() for n in str(m["cards"]).split(",") if n.strip()]
+        shown, extra = _capped(names, MANA_TAG_CARD_CAP)
+        tail = f" +{extra} more" if extra else ""
+        return f'<div class="mana-tag"><b>{_esc(m["tag"])}</b> {_esc(", ".join(shown))}{tail}</div>'
+
+    tag_rows, tag_extra = _capped(mana_tags, MANA_TAG_CAP)
+    mana = "".join(mana_row(m) for m in tag_rows) + (
+        f'<div class="muted more">+{tag_extra} more tags</div>' if tag_extra else ""
+    )
+
+    res_rows, res_extra = _capped(reserved, SPECIAL_ROW_CAP)
+    res = "".join(
+        f'<div class="kv"><span>{_esc(r["name"])}</span><em>{fmt.format_money(r.get("price"))}</em></div>'
+        for r in res_rows
+    ) + _more(res_extra)
+    return (
+        panel(f"Game Changers ({len(game_changers)})", gc, "None in this deck")
+        + panel("Optimized mana", mana, "No optimized-mana tags")
+        + panel(f"Reserved List ({len(reserved)})", res, "None in this deck")
+    )
 
 
 def _decklist(main_df, commander_names):
@@ -166,10 +252,12 @@ def _decklist(main_df, commander_names):
 
     def line(row):
         cmc = row.get("cmc")
+        # ★ Game Changer, ◆ Reserved List (key printed beside the title).
+        marks = (" ★" if row.get("is_game_changer") == 1 else "") + (" ◆" if row.get("is_reserved") == 1 else "")
         cmc_txt = "" if pd.isna(cmc) or row.get("is_land") else f'<span class="cmc">{int(cmc)}</span>'
         return (
             f'<div class="card-line"><span class="qty">{int(row["quantity"])}</span>'
-            f'<span class="cname">{_esc(row["name"])}</span>{cmc_txt}</div>'
+            f'<span class="cname">{_esc(row["name"])}{marks}</span>{cmc_txt}</div>'
         )
 
     if not cmd_rows.empty:
@@ -203,22 +291,25 @@ body { background: #d9d9d9; font-family: "Segoe UI", Helvetica, Arial, sans-seri
 .accent { height: 0.14in; flex: none; background: var(--gradient); }
 .hero { flex: none; display: flex; gap: 0.22in; padding: 0.16in 0.35in; color: #fff;
   background: radial-gradient(circle at 80% 0%, rgba(255,255,255,.12), transparent 55%), #14141c; }
-.hero-art { width: 1.3in; height: 1.82in; flex: none; border-radius: 0.09in; object-fit: cover;
+.hero-art { width: 1.15in; height: 1.61in; flex: none; border-radius: 0.09in; object-fit: cover;
   box-shadow: 0 3px 10px rgba(0,0,0,.6); border: 2px solid #000; background: #333; }
 .hero-text { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
-.hero h1 { font-size: 25pt; line-height: 1.05; letter-spacing: .3px; }
+.hero h1 { font-size: 23pt; line-height: 1.05; letter-spacing: .3px; }
 .tagline { margin-top: 6px; font-size: 9.5pt; font-style: italic; color: #cfcfdc; line-height: 1.3; }
-.pips { margin-top: 10px; display: flex; gap: 5px; align-items: center; }
+.hero-themes { margin-top: 8px; }
+.hero-themes .chip { border-color: #8f8fa3; color: #dcdce8; }
+.hero-themes .chip.main { background: #fff; color: #14141c; border-color: #fff; font-weight: 600; }
+.pips { margin-top: 8px; display: flex; gap: 5px; align-items: center; }
 .pips img { width: 0.27in; height: 0.27in; }
-.meta { margin-top: 10px; font-size: 8.5pt; color: #cfcfdc; line-height: 1.5; }
+.meta { margin-top: 8px; font-size: 8pt; color: #cfcfdc; line-height: 1.4; }
 .meta b { color: #fff; }
 .showcase { flex: none; width: 2.0in; position: relative; }
 .showcase-title { font-size: 7pt; text-transform: uppercase; letter-spacing: 1px; color: #aaa; margin-bottom: 4px; }
-.showcase img { position: absolute; width: 0.95in; height: 1.33in; border-radius: 0.06in; object-fit: cover;
+.showcase img { position: absolute; width: 0.9in; height: 1.26in; border-radius: 0.06in; object-fit: cover;
   box-shadow: 0 2px 8px rgba(0,0,0,.6); border: 1px solid #000; background: #333; }
 .showcase img:nth-of-type(1) { left: 0; top: 0.2in; transform: rotate(-6deg); }
-.showcase img:nth-of-type(2) { left: 0.45in; top: 0.45in; transform: rotate(0deg); z-index: 1; }
-.showcase img:nth-of-type(3) { left: 0.92in; top: 0.7in; transform: rotate(6deg); z-index: 2; }
+.showcase img:nth-of-type(2) { left: 0.45in; top: 0.4in; transform: rotate(0deg); z-index: 1; }
+.showcase img:nth-of-type(3) { left: 0.92in; top: 0.6in; transform: rotate(6deg); z-index: 2; }
 .body { flex: 1; min-height: 0; padding: 0.16in 0.35in 0.2in; display: flex; flex-direction: column; gap: 0.12in; }
 .tiles { display: grid; grid-template-columns: repeat(6, 1fr); gap: 0.08in; flex: none; }
 .tile { border: 1px solid #ddd; border-top: 3px solid var(--accent); border-radius: 4px; padding: 5px 4px; text-align: center; }
@@ -226,7 +317,7 @@ body { background: #d9d9d9; font-family: "Segoe UI", Helvetica, Arial, sans-seri
 .tile-label { font-size: 6.5pt; text-transform: uppercase; letter-spacing: .8px; color: #777; margin-top: 2px; }
 .row { display: grid; gap: 0.14in; flex: none; }
 .row.charts { grid-template-columns: 1.5fr 1fr; }
-.row.lists { grid-template-columns: repeat(4, 1fr); }
+.row.lists { grid-template-columns: repeat(3, 1fr); }
 .panel h3, .section-title { font-size: 7.5pt; text-transform: uppercase; letter-spacing: 1px; color: #555;
   border-bottom: 2px solid var(--accent); padding-bottom: 2px; margin-bottom: 5px; }
 .chart { width: 100%; height: auto; display: block; }
@@ -237,13 +328,24 @@ body { background: #d9d9d9; font-family: "Segoe UI", Helvetica, Arial, sans-seri
 .bar-track { flex: 1; height: 8px; background: #eee; border-radius: 4px; overflow: hidden; }
 .bar-fill { display: block; height: 100%; background: var(--gradient); }
 .bar-num { width: 18px; text-align: right; font-weight: 700; }
-.share-bar { display: flex; height: 10px; margin-top: 8px; border: 1px solid #888; border-radius: 3px; overflow: hidden; }
+.share-bar { display: flex; height: 9px; margin-top: 4px; border: 1px solid #888; border-radius: 3px; overflow: hidden; }
 .share-bar span { display: block; height: 100%; }
-ol { padding-left: 15px; font-size: 8pt; line-height: 1.45; }
-.muted { color: #999; list-style: none; margin-left: -15px; }
+ol { padding-left: 15px; font-size: 7.5pt; line-height: 1.35; }
+li { margin-bottom: 2px; }
+.desc { display: block; font-size: 6.6pt; color: #666; line-height: 1.3; }
+.kv { display: flex; justify-content: space-between; gap: 6px; font-size: 7.2pt; line-height: 1.4;
+  border-bottom: 1px dotted #e6e6e6; }
+.mana-tag { font-size: 6.8pt; line-height: 1.3; margin-bottom: 2px; color: #555; }
+.mana-tag b { color: #1c1c1c; }
+.kv em { font-style: normal; color: #666; flex: none; }
+.row.specials { grid-template-columns: repeat(3, 1fr); }
+.hint { text-transform: none; letter-spacing: 0; color: #888; font-size: 6.5pt; float: right; }
+.tile-label small { text-transform: none; letter-spacing: 0; color: #999; }
+.muted { color: #999; list-style: none; margin-left: -15px; font-size: 7pt; }
+.kv + .muted, .panel > .muted { margin-left: 0; }
 .themes { font-size: 8pt; line-height: 1.5; }
 .chip { display: inline-block; border: 1px solid var(--accent); border-radius: 9px; padding: 0 6px; margin: 0 3px 3px 0; font-size: 7pt; }
-.chip.main { background: var(--accent); color: #fff; mix-blend-mode: normal; }
+.chip.main { background: var(--accent); color: #fff; }
 .decklist { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 .cards { flex: 1; min-height: 0; column-count: 4; column-gap: 0.16in; column-rule: 1px solid #e4e4e4;
   column-fill: auto; overflow: hidden; }
@@ -251,7 +353,8 @@ ol { padding-left: 15px; font-size: 8pt; line-height: 1.45; }
 .section-head { break-after: avoid; font-size: 6.5pt; font-weight: 700; text-transform: uppercase;
   letter-spacing: .8px; color: #fff; background: var(--accent-dark); padding: 1px 4px; border-radius: 2px; margin-bottom: 1px; }
 .section-head b { float: right; }
-.card-line { display: flex; gap: 4px; font-size: 6.6pt; line-height: 1.32; border-bottom: 1px dotted #e6e6e6; break-inside: avoid; }
+.muted.more { margin-left: 0; font-style: italic; }
+.card-line { display: flex; gap: 4px; font-size: var(--card-font, 6.4pt); line-height: 1.27; border-bottom: 1px dotted #e6e6e6; break-inside: avoid; }
 .qty { width: 9px; text-align: right; color: #777; flex: none; }
 .cname { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cmc { color: #999; flex: none; }
@@ -263,6 +366,7 @@ ol { padding-left: 15px; font-size: 8pt; line-height: 1.45; }
 def build_deck_printout_html(
     meta, stats, value, main_df, image_src, symbol_urls, accent_gradient, accent_hex,
     win_conditions, strengths, weaknesses, themes, showcase,
+    game_changers=(), mana_tags=(), reserved=(),
 ):
     """Assemble the one-page sheet.
 
@@ -275,6 +379,9 @@ def build_deck_printout_html(
     win_conditions, strengths, weaknesses
                            loaders.load_deck_rank_list() rows
     themes                 loaders.load_deck_themes() rows
+    game_changers          [{name, tag}]; mana_tags [{tag, cards}];
+                           reserved [{name, price}] — the three "special
+                           cards" panels
     showcase               up to 3 dicts {name, src} — the deck's priciest
                            cards, drawn fanned on the right of the banner
     """
@@ -296,7 +403,7 @@ def build_deck_printout_html(
         _stat_tile("Cards", total_cards),
         _stat_tile("Lands", lands),
         _stat_tile("Avg mana value", f"{avg_mv:.2f}" if avg_mv is not None else "—"),
-        _stat_tile("Bracket", bracket if bracket is not None else "—"),
+        _stat_tile("Bracket <small>of 5</small>", bracket if bracket is not None else "—"),
         _stat_tile("Record (W-L)", record + (f" · {win_rate * 100:.0f}%" if win_rate is not None else "")),
         _stat_tile("Value", fmt.format_money(value.get("total_value"))),
     ])
@@ -306,10 +413,17 @@ def build_deck_printout_html(
     meta_bits = []
     if commanders:
         meta_bits.append(f"<b>Commander</b> {_esc(' & '.join(commanders))}")
-    for label, key in (("Interaction", "interaction"), ("Combos", "combos"), ("Tutors", "tutors"), ("Built", "initially_built")):
-        v = meta.get(key)
-        if v is not None and v != "":
-            meta_bits.append(f"<b>{label}</b> {_esc(v)}")
+    if meta.get("combos"):
+        meta_bits.append(f"<b>Combos</b> {_esc(meta['combos'])}")
+    short = []
+    if meta.get("interaction") is not None:
+        # The Deck Editor's Interaction field runs 0-5.
+        short.append(f"<b>Interaction</b> {_esc(meta['interaction'])} / 5")
+    for label, key in (("Tutors", "tutors"), ("Built", "initially_built")):
+        if meta.get(key):
+            short.append(f"<b>{label}</b> {_esc(meta[key])}")
+    if short:
+        meta_bits.append(" &nbsp;·&nbsp; ".join(short))
 
     hero_img = f'<img class="hero-art" src="{_esc(image_src)}" alt="">' if image_src else ""
     pips = "".join(f'<img src="{_esc(u)}" alt="">' for u in symbol_urls)
@@ -343,6 +457,7 @@ def build_deck_printout_html(
       <h1>{_esc(meta.get('name') or 'Deck')}</h1>
       <div class="tagline">{_esc(meta.get('description') or '')}</div>
       <div class="pips">{pips}</div>
+      <div class="hero-themes">{theme_html}</div>
       <div class="meta">{'<br>'.join(meta_bits)}</div>
     </div>
     {showcase_html}
@@ -350,20 +465,21 @@ def build_deck_printout_html(
   <div class="body">
     <div class="tiles">{tiles}</div>
     <div class="row charts">
-      <div class="panel"><h3>Mana curve (non-land)</h3>{curve_svg}<div class="legend">{curve_legend}</div></div>
-      <div class="panel"><h3>Card types</h3>{_type_bars(main_df)}<h3 style="margin-top:8px">Color balance</h3>{_color_share_bar(nonland)}</div>
+      <div class="panel"><h3>Mana curve (non-land) &amp; color balance</h3>{curve_svg}{_color_share_bar(nonland)}</div>
+      <div class="panel"><h3>Card types</h3>{_type_bars(main_df)}</div>
     </div>
     <div class="row lists">
       {_rank_list("Win conditions", win_conditions)}
       {_rank_list("Strengths", strengths)}
       {_rank_list("Weaknesses", weaknesses)}
-      <div class="panel"><h3>Themes</h3><div class="themes">{theme_html}</div></div>
     </div>
+    <div class="row specials">{_special_panels(game_changers, mana_tags, reserved)}</div>
     <div class="decklist">
-      <div class="section-title">Decklist</div>
+      <div class="section-title">Decklist <span class="hint">★ Game Changer &nbsp; ◆ Reserved List &nbsp; · left number = copies, right number = mana value</span></div>
       <div class="cards">{_decklist(main_df, commanders)}</div>
       <div class="footer">Generated {date.today().isoformat()} · MTG Collection Dashboard</div>
     </div>
   </div>
 </div>
+{_FIT_SCRIPT}
 </body></html>"""

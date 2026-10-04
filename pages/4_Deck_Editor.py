@@ -121,7 +121,7 @@ with tab_info:
             key=f"editor_{deck_id}_bracket",
         )
         interaction = interaction_col.number_input(
-            "Interaction", min_value=0, max_value=10, value=int(meta.get("interaction") or 0), step=1,
+            "Interaction", min_value=0, max_value=5, value=int(meta.get("interaction") or 0), step=1,
             key=f"editor_{deck_id}_interaction",
         )
         built = st.text_input(

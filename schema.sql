@@ -91,7 +91,7 @@ CREATE TABLE decks (
     combos            TEXT,
     tutors            TEXT,
     bracket           INTEGER,
-    interaction       INTEGER,
+    interaction       INTEGER,            -- 0-5 scale (same as bracket)
     cover_image_path  TEXT              -- relative path under image_cache/deck_covers/,
                                          -- a user-picked PNG shown as the deck's thumbnail
                                          -- (Editor -> Deck Info); NULL if none set

@@ -263,6 +263,20 @@ st.caption(
     "I typed\" / fill in Set + Collector Number directly for a brand-new card "
     "(resolved via a live Scryfall lookup when you click Add)."
 )
+# After a successful add, clear the per-card fields (name, printing, set/number,
+# qty, foil, price) but keep location/date/source — those usually stay the same
+# when entering a batch of cards from one purchase or box.
+if st.session_state.pop("editor_coll_add_reset", False):
+    for _k in ("editor_coll_add_name", "editor_coll_add_match_pick", "editor_coll_add_set",
+               "editor_coll_add_num", "editor_coll_add_qty", "editor_coll_add_foil",
+               "editor_coll_add_price"):
+        st.session_state.pop(_k, None)
+    for _k in [k for k in st.session_state if k.startswith("editor_coll_add_printing_pick_")]:
+        del st.session_state[_k]
+_flash = st.session_state.pop("editor_coll_add_flash", None)  # shown once, gone on the next interaction
+if _flash:
+    st.success(_flash)
+
 coll_add_name = st.text_input("Card name", key="editor_coll_add_name")
 
 # Prompt Pass 6 — auto-complete dropdown: search the local `cards`
@@ -376,8 +390,20 @@ if st.button("➕ Add to collection", key="editor_coll_add_btn"):
             writes.add_location_to_catalog(conn, coll_add_location.strip())
         loaders.invalidate_collection_caches()
         loaders.invalidate_reference_caches()
-        note = " (fetched fresh from Scryfall)" if was_new else ""
-        st.success(f"Added to collection{note}.")
+        # st.rerun() would wipe any message shown here, so stash it for the
+        # next run, and flag the per-card fields to be cleared (widget keys
+        # can only be reset before their widgets are instantiated, i.e. at
+        # the top of the form on the next run).
+        what = selected_card_name or f"{coll_add_set.strip().upper()} #{coll_add_num.strip()}"
+        if selected_printing:
+            what += f" ({selected_printing['set_code'].upper()} #{selected_printing['collector_number']})"
+        qty_txt = f"{int(coll_add_qty)}× " if coll_add_qty else ""
+        foil_txt = " foil" if coll_add_foil else ""
+        loc_txt = f" → {coll_add_location.strip()}" if coll_add_location.strip() else ""
+        fetched_txt = " (fetched fresh from Scryfall)" if was_new else ""
+        st.session_state["editor_coll_add_flash"] = f"Added {qty_txt}{what}{foil_txt}{loc_txt}{fetched_txt}."
+        st.session_state["editor_coll_add_reset"] = True
+        st.toast(st.session_state["editor_coll_add_flash"], icon="✅")
         st.rerun()
 
 st.divider()

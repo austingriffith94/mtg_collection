@@ -15,9 +15,12 @@ Respects Scryfall's rate-limit guidance (~50-100ms between requests).
 Requires network access and the `requests` package — run this on your
 own machine, not in a sandboxed environment.
 """
+import logging
 import time
 import sys
 import requests
+
+logger = logging.getLogger(__name__)
 
 SCRYFALL_API = "https://api.scryfall.com"
 RATE_LIMIT_SECONDS = 0.1  # be polite; Scryfall asks for 50-100ms between calls
@@ -37,6 +40,7 @@ class ScryfallClient:
         try:
             resp = self.session.get(url, params=params, timeout=15)
         except requests.RequestException as e:
+            logger.warning("Scryfall request failed: %s (%s)", url, e)
             self._miss_log.append((url, f"network error: {e}"))
             return None
         time.sleep(RATE_LIMIT_SECONDS)
@@ -45,6 +49,7 @@ class ScryfallClient:
         try:
             resp.raise_for_status()
         except requests.HTTPError as e:
+            logger.warning("Scryfall request returned %s: %s (%s)", resp.status_code, url, e)
             self._miss_log.append((url, f"http error: {e}"))
             return None
         return resp.json()

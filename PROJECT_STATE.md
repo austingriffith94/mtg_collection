@@ -53,7 +53,8 @@ mtg_dashboard/
 │   ├── 4_Deck_Editor.py               # split from combined 4_Editor.py post-Phase-13 (deck-scoped tabs)
 │   ├── 5_Collection_Editor.py         # split from combined 4_Editor.py post-Phase-13 (Collection tab)
 │   ├── 6_Card_Database.py             # split from combined 4_Editor.py post-Phase-13 (Game Changers/Mana Tags/Card Data)
-│   └── 7_Commander_Game_Tracking.py   # new in Phase 2, renumbered when Editor split above
+│   ├── 7_Commander_Game_Tracking.py   # new in Phase 2, renumbered when Editor split above
+│   └── 8_Workbench.py                 # new in Workbench rework Phase 2 (global pending queue + conflicts)
 ├── dashboard_lib/
 │   ├── formatting.py       # card-type/color/URL/filename helpers  (no Streamlit dep)
 │   ├── queries.py          # read queries + ensure_schema()        (no Streamlit dep)
@@ -132,11 +133,93 @@ Because of this, schema changes can no longer ride in on a re-migration. `querie
 - **Game log autofill (Phase 7):** `queries.distinct_player_names()` / `distinct_untracked_deck_names()` source the Player / Opponent's Deck dropdowns from `game_participants` itself — `distinct_untracked_deck_names()` picks up both decks that were always free-text AND decks that used to be tracked but were later deleted (their `game_participants.deck_id` is NULL post-detach, same query condition either way).
 - **Player ELO / head-to-head (Phase 7):** `queries.player_elo_ratings()` / `player_head_to_head_matrix()` are plain Python functions, not SQL views (ELO needs to process games in chronological order one at a time). Both are scoped to `player_name IS NOT NULL`, same as `player_stats`. ELO uses a multiplayer pairwise-decomposition variant (winner beats every other seat 1-0, non-winners draw 0.5-0.5 pairwise) with all of one game's deltas computed from a ratings snapshot at that game's start and applied together — NOT incrementally pair-by-pair, which would make results depend on player iteration order (a real bug this pass's test suite caught before it shipped). K-factor defaults to 20.
 
+## Commander Spellbook combos
+
+Automatic combo detection per deck, via [Commander Spellbook](https://commanderspellbook.com)'s public `find-my-combos` API. Chosen because it's the one external combo source with a genuinely light integration: no API key, no auth, no bulk download — one small POST per deck (~0.6–1.6s for a 100-card deck), against an endpoint with a published OpenAPI schema at `https://backend.commanderspellbook.com/schema/`.
+
+- **Code:** `dashboard_lib/spellbook.py` (client + pure normalizing helpers; no Streamlit, and `requests` is imported lazily *inside* `SpellbookClient` so the Decks page still loads without it — the ImportError surfaces on the button press instead). `writes.save_deck_combos()`/`clear_deck_combos()`, `queries.deck_combos()`/`deck_combo_sync()`/`deck_combo_sync_all()`/`deck_combo_card_rows()`/`owned_card_quantities()`, `loaders.invalidate_combo_caches()`.
+- **UI:** Decks page "🔗 Combos" panel (per-deck "🔄 Check Spellbook"); Card Database → Card Data "🔗 Check all decks" for the bulk path plus a per-deck overview table.
+- **Cached, not live.** `deck_combos` holds the results; nothing fetches on page load, so the dashboard stays offline-usable. `deck_combo_sync` exists purely so "never checked" and "checked, found nothing" are distinguishable — on their own both are zero rows in `deck_combos`.
+- **Only two of six response buckets are stored:** `included` and `almostIncluded`. The other four (`...ByChangingCommanders`, `...ByAddingColors`, etc.) describe a deck you don't have — a different commander, or a color identity this deck can't legally play — so they aren't actionable and would just be noise.
+- **`missing` is computed locally**, not taken from the API, because it's what drives the "do I already own this card?" lookup. `almostIncluded` does mean exactly one card short (verified empirically: 26/26 almost-combos on a real 94-card deck diffed to exactly 1 missing), but the local diff is what the UI actually ranks on.
+- **Name matching goes through `spellbook.front_face()` on both sides.** The payload sends MDFC front faces; Spellbook echoes back full `"Front // Back"` names. Comparing those raw strings would report a card you're running as missing.
+- **List columns are newline-joined, not comma-joined** (`uses`/`requires`/`missing`/`produces`). Card names routinely contain commas ("Vilis, Broker of Blood") but never newlines, so a comma split would tear one name in two. There's a test for exactly this.
+- **`decks.combos` (hand-typed) was retired outright, UI and all.** The Deck Editor's "Combos" text area and the Decks page's Turn 0 grid display are both removed — this replaced the manual field rather than sitting alongside it, since Spellbook gives a real answer instead of a maintained guess. The column itself is left in the schema untouched (non-destructive policy, same as `cards.edhrec_salt`); `DECK_META_FIELDS` in `writes.py` still lists `"combos"` too, since `scripts/migrate.py` still seeds it from the CSV's `Combos` column on initial import — only the in-app editor/display paths were removed, not the historical data or the one-way CSV import.
+- **A "Check Spellbook" result names the actual combos it found**, not just a count — `spellbook.combo_check_summary()`/`combo_list_text()` build a line like *"4 combo(s) in the deck: Psychosis Crawler + Peer into the Abyss → Near-infinite lifeloss; … · 47 one card away"*. On the Decks page this is stashed in `st.session_state` (keyed per deck) across the `st.rerun()` that refreshes the tabs below, specifically so it survives being shown — an inline `st.success()` right before `st.rerun()` would otherwise be wiped before it's ever seen. The Card Database's bulk "Check all decks" shows the same thing per deck, listed under the overview table.
+- **A decklist edit does NOT delete cached combos.** `loaders.invalidate_deck_caches()` drops the Streamlit read caches only; the rows stay as the last known-good answer and the panel shows its fetch timestamp with a prompt to re-check. A blank panel would be worse than a labelled stale one.
+- **`bracketTag` is shown decoded (Core/Powerful/Spicy/Oddball/Ruthless/Exhibition/Banned) but deliberately NOT mapped onto `decks.bracket`.** Those are Spellbook's editorial categories for a *combo*; `decks.bracket` is a 0–5 score for a *deck*. Inventing an equivalence would be fabricating data.
+- **Per-combo `salt`/`saltVoteCount` exist on the API but are ignored** — they came back empty for all 416 variants across all 12 decks here. Salt tracking generally remains out of scope (see the EDHREC note above).
+- **Fixed in passing:** `deck_swap_queue` was missing from `writes._DECK_SCOPED_TABLES`, so deleting a deck that still had queued swaps would hit a foreign-key failure under `PRAGMA foreign_keys = ON` (`clear_swap_queue()` existed but `delete_deck()` never called it). The two new combo tables carry the same FK, which is how this surfaced.
+
+## Workbench rework (2026-10-04) — all six phases complete
+
+A six-phase rework, now finished — see `IMPLEMENTATION_PLAN.md`, which carries
+the full spec, the per-phase test plan, and the live-database observations
+that motivated each phase. Summary of intent:
+
+1. **Phase 0 (done)** — `deck_changes`, one lifecycle table (`idea` →
+   `planned` → `applied`/`dropped`) superseding `maybeboard` +
+   `deck_swap_queue`, backfilled additively on connect (187 ideas + 44
+   planned on the live database). Legacy tables left intact and unread.
+2. **Phase 1 (done)** — a unified Shortlist tab replacing the Deck Editor's separate
+   Maybeboard and Swap Manager tabs: one-click promotion from idea to staged
+   swap, per-row apply, and the previously-unused `replace_scryfall_id`
+   finally consumed. Repoints all ten readers of `maybeboard` (Moxfield
+   export, `prune_collection` and `scripts/sync_images.py` being the three that
+   fail silently if missed), and logs hand edits to the mainboard as history.
+3. **Phase 2 (done)** — a Workbench page: pending changes across every deck,
+   plus a queue-aware availability allocator (`queries.plan_availability()`)
+   replacing the per-row inventory check, which used to promise the same
+   physical card to two different swaps. Also fixed a bigger live bug it was
+   sent in for: `collection.quantity IS NULL` (untracked/bulk) was being read
+   as zero, so 146 of 231 open rows wrongly read NOT OWNED.
+4. **Phase 3 (done)** — `queries.contention_table()` (demand vs. copies
+   owned, counting mainboard usage too, not just the shortlist queue) and
+   `queries.buy_list()` (unowned ideas + contention shortfalls, priced and
+   de-duplicated across decks), both added to the Workbench page; a new
+   `pages/9_Card_Lookup.py` rolling one card's price, every owned lot, every
+   mainboard/shortlist appearance, and recent applied-change history into
+   one oracle_id-matched view. See IMPLEMENTATION_PLAN.md's "Phase 3 as
+   built" for the live-database numbers (43 contention rows, $158.50 buy
+   total) and what changed from the original spec.
+5. **Phase 4 (done)** — reconciliation: 178 unlocated lots, and per-deck
+   list-vs-physical diffs in both directions (`queries.unlocated_lots()`,
+   `queries.deck_reconciliation()`, `writes.move_lot()`), as the Workbench's
+   Reconcile section.
+6. **Phase 5 (done)** — per-deck change history with games between changes
+   (`queries.deck_change_history()`, Decks page "🕓 Changes"), a 12-deck
+   comparison matrix (`queries.deck_comparison()`, Decks page "📊 Compare
+   all decks"), and home-tile status strips plus a Workbench summary line.
+   See IMPLEMENTATION_PLAN.md's "Phase 5 as built".
+7. **Phase 6 (done)** — deck lifecycle, the two operations the app had no
+   concept of. A **Build Plan** for a brew (`queries.deck_sourcing_plan()`,
+   Decks page): every non-basic copy the list needs allocated to exactly
+   one source — sleeved here / box / location unknown / another deck / not
+   owned — so the buckets sum to the deck's non-basic count instead of
+   double-counting a card that sits in two places. Donor-deck impact
+   warnings ("pulling these leaves Tuvasa 6 short") and a printable pull
+   sheet grouped by location (`deck_printout.build_pull_sheet_html()`).
+   A **dismantle** flow (`queries.deck_dismantle_plan()`,
+   `writes.stage_dismantle()`, Deck Editor beside Delete) that stages
+   removals on the source and adds on the target as ordinary `planned`
+   `deck_changes` rows — so the allocator, the preview-then-apply path and
+   both decks' history all come for free — and moves a shared card's lot
+   source → target in one step rather than dumping it in "Box". Two
+   additive columns: `decks.build_state` (NULL/brewing/dismantled; intent
+   is stored, completion stays derived) and `deck_changes.dest_location`
+   (where a removal's copy goes; NULL = the old "Box" behaviour).
+   `delete_deck()` is unchanged — deleting destroys the record, dismantling
+   keeps the list and history. See IMPLEMENTATION_PLAN.md's "Phase 6 as
+   built" for the live numbers and the five places the build diverged from
+   the spec.
+
 ## Known open items / not built
 
-- **Proxy flag** on the Turn 0 panel — blocked on confirming the Location/Proxy convention with you (never resolved).
-- HTML/CSS print-to-PDF one-pager.
-- EDHREC comparison — explicitly deprioritized as a full comparison view. Note the EDHREC Salt Score field that used to live here as a narrower, hand-entered alternative was itself retired dashboard-wide in Phase 5 (see above) — there is currently no EDHREC-sourced data of any kind in the dashboard.
+- **Proxy flag** on the Turn 0 panel — blocked on confirming the Location/Proxy convention with you (never resolved). This outlasted the whole Workbench rework: Phase 3's contention table and Phase 6's brew sourcing plan are both places where "buy it, or proxy it" is the real decision, and both ship with the binary buy/take instead. A real `proxy` concept is the obvious next thing to decide.
+- `location_catalog` still holds the bare entries `3` and `4` alongside `Box` / `Lands Box` / `Lands`. If those are box numbers, renaming them (e.g. `Box 3`) is cosmetic at the catalog level but needs a deliberate backfill for the 8 existing lots that reference them. Flagged in IMPLEMENTATION_PLAN.md's open questions and never actioned.
+- Per-card *take it / leave it* checkboxes on a Build Plan's donor lines, and per-row selection in the Dismantle panel. The write API takes the selection (`stage_dismantle(transfer_oracle_ids=..., box_oracle_ids=...)`) and is tested directly; only the per-row widgets are missing, because `AppTest` can't drive `data_editor` checkbox state and a UI built on them would be untestable here — the same limitation Phases 1 and 4 hit.
+- EDHREC comparison — explicitly deprioritized as a full comparison view. Note the EDHREC Salt Score field that used to live here as a narrower, hand-entered alternative was itself retired dashboard-wide in Phase 5 (see above) — there is currently no EDHREC-sourced data of any kind in the dashboard. (Commander Spellbook combo data, added later, is a separate external source — see below — and is not EDHREC.)
+- ~~Combos were hand-typed free text only (`decks.combos`), with no external data source~~ — resolved by the Commander Spellbook integration (see above), which replaced the manual field/editor outright rather than sitting alongside it.
 - A "browse the full official Game Changers list" discovery view (owned vs. not-yet-owned) — the Phase 2 Game Changers tab only shows cards already in your database (owned, or run in a deck), not WotC's full official list irrespective of ownership.
 - Rule 0 tags still have no dedicated data source — the Card Tags tab supports a "rule0" tag_type like any other, but nothing populates it automatically yet.
 - ~~Mana tags (`mana_tags.csv` / `mana_tags` table) had no in-dashboard editor~~ — resolved in Phase 12 (Card Database → Mana Tags tab).
@@ -149,6 +232,8 @@ No live Streamlit or network access exists in the build sandbox. Everything was 
 Phase 2 specifically added: a test that builds a synthetic pre-Phase-2-shaped database and runs `ensure_schema()` against it, confirming every new column/table/view appears, the two catalogs seed correctly from pre-existing `deck_themes`/`game_changer_tags` data, and a second `ensure_schema()` call is idempotent and doesn't clobber catalog edits made in between; direct unit tests for every new `writes.py`/`queries.py` function (theme/category catalog CRUD, game-changer tag assignment, salt scores, deck cover image, rank-list replace semantics, `create_game`/`delete_game`, the price/salt top-10 and win-rate queries); unit tests for `scryfall_lookup.to_card_row()`'s new Showcase/Borderless parsing (plain card, showcase-only, borderless-only, both, MDFC front-face fallback, and fields missing entirely); an end-to-end mocked `refresh_all_cards()` run confirming the new flags actually get written; and — importantly — a full re-run of the project's own real `_test_migrate_offline.py` harness against your actual CSVs (not synthetic data) to catch the fresh-install catalog-seeding gap described above before it shipped.
 
 **None of this has been run against real Streamlit or real network access** — first actual use (launching the real dashboard, clicking through the new tabs and the new page, running a real Card Data refresh against live Scryfall) is the real-world validation still outstanding.
+
+**That caveat no longer applies to the Commander Spellbook work**, which was the first change in this project built with both real network access and a real Streamlit install available. It was validated against the live API (every one of the 12 real decks queried successfully; the response shapes the parser handles were captured from real responses, not guessed), end-to-end against a *copy* of the real `mtg_collection.db` (confirming `ensure_schema()` upgrades the real pre-feature database, and that the full fetch → save → read path produces sensible output — e.g. Vilis correctly reports 4 assembled combos and 47 one-card-away, with "Phyrexian Altar completes 2, already owned and free" surfacing on Tuvasa), and — unlike every prior phase — the actual Streamlit pages were **executed**, not just `py_compile`d, via `streamlit.testing.v1.AppTest`: both modified pages render exception-free, the expected buttons exist, and with a seeded cache the combo panel's tabs, card lists, produced results, template requirements, steps and permalinks all render. `scripts/_test_spellbook_offline.py` (75 checks) remains the offline regression harness, and the full existing suite (7 pytest tests + all 12 other `_test_*_offline.py` harnesses) was re-run green afterward. Still outstanding: clicking the real buttons in a browser.
 
 **Phase 6 testing specifically:** `queries.search_card_names()`/`card_printings_by_name()` were unit-tested against a hand-built scratch database (prefix-vs-contains ranking, case-insensitivity, blank-input and no-match edge cases), then re-run directly against the real shipped `mtg_collection.db` as a sanity pass (a "sol ring" search correctly surfaces just "Sol Ring", and its printing selector correctly lists all 6 real owned/known printings). `writes.auto_add_to_collection()`/`collection_has_card()` were unit-tested for first-add-creates-a-lot, second-call-is-a-no-op, and the "a different printing of the same-named card still gets its own lot" scoping rule, then exercised end-to-end against a scratch copy of the real database (added a real untracked card to a real deck, confirmed a starter lot was created with the deck's name as Location, confirmed calling it again was a no-op). The Moxfield Collection CSV exporter's `COLLECTION_CSV_HEADERS` was asserted to match `moxfield_samples/moxfield_collection.csv`'s real header row exactly (not just visually eyeballed), and its aggregation math was tested against hand-built multi-lot/multi-foil/in-deck/untracked-bulk-lot scenarios covering every column rule in the prompt spec, then re-run against the real shipped `mtg_collection.db` as a final sanity pass (1,196 printing/foil rows exported from the full collection, an 829/367 in-deck/not-in-deck split, 63 foil rows). `card_resolver.fetch_additional_printings()` was tested against a mocked `ScryfallClient.get_all_printings()` (a name with one already-known and one genuinely-new printing, re-running it a second time confirming idempotency, an unknown name, and a blank name never reaching the network at all). All of the above, plus a full re-run of `_test_phase4_offline.py`, `_test_prompt_pass5_offline.py`, and `_test_migrate_offline.py`, are in `scripts/_test_prompt_pass6_offline.py`. **As with every prior phase, none of this reaches the actual Streamlit widgets themselves** (`streamlit` isn't installed in this sandbox, so the new autocomplete/printing-selector UI in `pages/4_Editor.py` and the new export panel in `pages/1_Collection.py` could only be `py_compile`d, not executed) — clicking through the real autocomplete dropdown, the printing selector, the "check Scryfall for other printings" button, and the Collection CSV download/save buttons in a real running dashboard is real-world-validation-outstanding, same caveat as everything else in this project.
 

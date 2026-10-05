@@ -1,13 +1,22 @@
 """
 Deck Editor page — add, rename, and remove deck-level things directly in
 the database: deck names/metadata, whole new decks, themes, card tags,
-mainboard and maybeboard cards (including brand-new cards, via a live
-Scryfall lookup when needed), and planned card swaps. No CSV editing or
-re-migration required for any of this.
+mainboard cards (including brand-new cards, via a live Scryfall lookup
+when needed), and the Shortlist — ideas for the deck, the swaps staged from
+them, and the history of what was applied. No CSV editing or re-migration
+required for any of this.
 
 Card Tags (bulk-editing any tag_type across a deck's mainboard) lives
 here too, moved from the earlier standalone Tag Editor page. Deck-level
-tags were removed entirely — use description/combos/tutors instead.
+tags were removed entirely — use description/tutors instead.
+
+The old hand-typed "Combos" field (and its text_area here) was removed
+outright — it only ever held a manual guess at what combos existed.
+Real combo detection now lives on the Decks page's Commander Spellbook
+panel instead (see dashboard_lib/spellbook.py). decks.combos itself is
+left in the schema, untouched, per this project's non-destructive column
+policy (same treatment as cards.edhrec_salt) — any value entered before
+this change isn't lost, there's just no editor for it here anymore.
 
 Collection/inventory management lives in Collection Editor, and
 whole-database reference data (Game Changers, Mana Tags, Card Data
@@ -70,8 +79,8 @@ with st.sidebar.expander("➕ Create a new deck"):
                 st.session_state["editor_deck_select"] = cn_name.strip()
                 st.rerun()
 
-(tab_info, tab_themes, tab_cardtags, tab_main, tab_maybe, tab_swap) = st.tabs(
-    ["Deck Info", "Themes", "Card Tags", "Mainboard", "Maybeboard", "Swap Manager"]
+(tab_info, tab_themes, tab_cardtags, tab_main, tab_shortlist) = st.tabs(
+    ["Deck Info", "Themes", "Card Tags", "Mainboard", "Shortlist"]
 )
 
 # ------------------------------------------------------------------
@@ -129,7 +138,6 @@ with tab_info:
             key=f"editor_{deck_id}_built",
         )
         description = st.text_area("Description", value=meta.get("description") or "", key=f"editor_{deck_id}_description")
-        combos = st.text_area("Combos", value=meta.get("combos") or "", key=f"editor_{deck_id}_combos")
         tutors = st.text_area("Tutors", value=meta.get("tutors") or "", key=f"editor_{deck_id}_tutors")
 
         if st.button("💾 Save deck details", key=f"editor_{deck_id}_savemeta"):
@@ -143,7 +151,6 @@ with tab_info:
                 interaction=interaction or None,
                 initially_built=built.strip() or None,
                 description=description.strip() or None,
-                combos=combos.strip() or None,
                 tutors=tutors.strip() or None,
             )
             loaders.invalidate_deck_caches()
@@ -215,18 +222,184 @@ with tab_info:
             st.rerun()
 
         st.divider()
+        # ------------------------------------------------------------------
+        # Dismantle (deck lifecycle, Phase 6)
+        #
+        # The other path out of a deck, next to Delete below: dismantling
+        # keeps the list and the history and feeds the cards somewhere
+        # useful, where deleting destroys the record and dumps every lot
+        # into "Box". It sits here, beside Delete, because the two are the
+        # same decision made differently — and because the Workbench is
+        # framed as the global pending queue, not a per-deck operation.
+        #
+        # Nothing here writes to the mainboard or the collection: it stages
+        # planned deck_changes rows, which then preview and apply through
+        # the Workbench like every other change.
+        # ------------------------------------------------------------------
+        st.markdown("#### 🔧 Dismantle this deck")
+        st.caption(
+            "Takes the deck apart and (optionally) feeds another deck with it. Cards on "
+            "both lists move **card-to-card**, skipping the box entirely; the rest goes "
+            "back to storage. The deck's list and change history are kept, so you can see "
+            "what it was and rebuild it later — unlike Delete below, which destroys the "
+            "record. Everything is staged as **planned** changes and applied from the "
+            "Workbench, so nothing moves until you confirm it."
+        )
+
+        _dis_targets = {
+            r["name"]: int(r["deck_id"])
+            for _, r in decks_df.iterrows()
+            if int(r["deck_id"]) != deck_id
+        }
+        _dis_target_name = st.selectbox(
+            "Feed into", ["— nothing, return everything to storage —", *_dis_targets],
+            key=f"editor_{deck_id}_dismantle_target",
+            help="A deck to hand this one's cards to. Only cards the target's list "
+                 "actually runs transfer; the rest goes back to the box.",
+        )
+        _dis_target_id = _dis_targets.get(_dis_target_name)
+        _dis_dest = st.selectbox(
+            "Everything else goes to", loaders.load_location_options(conn),
+            index=(
+                loaders.load_location_options(conn).index(writes.DEFAULT_LOCATION)
+                if writes.DEFAULT_LOCATION in loaders.load_location_options(conn) else 0
+            ),
+            key=f"editor_{deck_id}_dismantle_dest",
+        )
+
+        _dis = q.deck_dismantle_plan(conn, deck_id, _dis_target_id)
+        if _dis is None or not (_dis["direct_transfer"] or _dis["to_box"] or _dis["strays"]):
+            st.caption(
+                "Nothing is physically sleeved in this deck, so there's nothing to "
+                "dismantle. (Set the cards' Location to this deck's name first — the "
+                "Workbench's Reconcile tab does it in bulk.)"
+            )
+        else:
+            st.caption(
+                f"**{_dis['sleeved_copies']}** card(s) sleeved here · "
+                f"{fmt.format_money(_dis['value'])}"
+            )
+
+            if _dis["direct_transfer"]:
+                with st.expander(
+                    f"↔️ Direct transfer to {_dis['target_deck_name']} "
+                    f"({len(_dis['direct_transfer'])}) — in both lists",
+                    expanded=True,
+                ):
+                    st.caption("These move straight into the target's sleeves — no stop at the box.")
+                    st.dataframe(
+                        pd.DataFrame([
+                            {"Card": c["card"], "Copies": c["copies"], "Type": c["card_type"]}
+                            for c in _dis["direct_transfer"]
+                        ]),
+                        hide_index=True, use_container_width=True,
+                    )
+
+            if _dis["to_box"]:
+                with st.expander(
+                    f"📦 Back to {_dis_dest} ({len(_dis['to_box'])}) — on this deck's list only"
+                ):
+                    st.dataframe(
+                        pd.DataFrame([
+                            {"Card": c["card"], "Copies": c["copies"], "Type": c["card_type"]}
+                            for c in sorted(_dis["to_box"], key=lambda r: (r["card_type"], r["card"]))
+                        ]),
+                        hide_index=True, use_container_width=True,
+                    )
+
+            if _dis["strays"]:
+                with st.expander(
+                    f"🧹 Sleeved here but not on the list ({len(_dis['strays'])})"
+                ):
+                    st.caption(
+                        "Leftovers of past swaps — real cards in the sleeves with no list "
+                        "entry behind them. They aren't list changes, so they're moved "
+                        "directly rather than staged as planned changes."
+                    )
+                    st.dataframe(
+                        pd.DataFrame([
+                            {"Card": c["card"], "Copies": c["copies"]} for c in _dis["strays"]
+                        ]),
+                        hide_index=True, use_container_width=True,
+                    )
+
+            if _dis["target_needs"]:
+                with st.expander(
+                    f"🔎 {_dis['target_deck_name']} would still need "
+                    f"({len(_dis['target_needs'])})"
+                ):
+                    st.caption(
+                        "Not covered by this dismantle — resolve from the box, another "
+                        "deck, or the buy list."
+                    )
+                    st.dataframe(
+                        pd.DataFrame([
+                            {"Card": n["card"], "Short": n["short"]}
+                            for n in _dis["target_needs"]
+                        ]),
+                        hide_index=True, use_container_width=True,
+                    )
+
+            _dis_move_strays = st.checkbox(
+                f"Also move the {len(_dis['strays'])} stray lot(s) to {_dis_dest}",
+                value=True, key=f"editor_{deck_id}_dismantle_strays",
+                disabled=not _dis["strays"],
+            )
+            _dis_mark = st.checkbox(
+                "Mark this deck as dismantled once the changes are applied",
+                value=True, key=f"editor_{deck_id}_dismantle_mark",
+                help="Keeps the list and history but labels the deck as taken apart. "
+                     "Clear it later from the deck's Build Plan.",
+            )
+            if st.button(
+                "📋 Stage as planned changes", key=f"editor_{deck_id}_dismantle_stage",
+                type="primary",
+            ):
+                staged = writes.stage_dismantle(
+                    conn, deck_id, target_deck_id=_dis_target_id, dest_location=_dis_dest,
+                )
+                if _dis_move_strays and _dis["strays"]:
+                    moved = writes.move_dismantle_strays(conn, deck_id, dest_location=_dis_dest)
+                    st.info(f"Moved {moved} stray lot(s) to {_dis_dest}.")
+                if _dis_mark:
+                    writes.set_build_state(conn, deck_id, "dismantled")
+                loaders.invalidate_deck_caches()
+                loaders.invalidate_collection_caches()
+                if staged["removed"] or staged["added"]:
+                    st.success(
+                        f"Staged {len(staged['removed'])} removal(s) and "
+                        f"{len(staged['added'])} addition(s) as planned changes. "
+                        "Review and apply them on the **Workbench**."
+                    )
+                else:
+                    st.warning("Nothing was staged.")
+                for card, reason in staged["skipped"]:
+                    st.caption(f"Skipped **{card}** — {reason}.")
+
+        if meta.get("build_state") == "dismantled":
+            st.info(
+                "This deck is marked as **dismantled**. Its list and history are intact.",
+                icon="🔧",
+            )
+            if st.button("↩️ No longer dismantled", key=f"editor_{deck_id}_undismantle"):
+                writes.set_build_state(conn, deck_id, None)
+                loaders.invalidate_deck_caches(deck_id)
+                st.rerun()
+
+        st.divider()
         st.markdown("#### ⚠️ Delete this deck")
         st.caption(
-            "Permanently removes the deck, its mainboard, maybeboard, tags, and themes. "
+            "Permanently removes the deck, its mainboard, shortlist and change history, tags, and themes. "
             "Historical games stay in the game log but are detached from this deck (the "
             "same shape an untracked opponent's deck already has). **This cannot be undone.**"
         )
         del_stats = loaders.load_deck_stats(conn, deck_id)
         del_value = loaders.load_deck_value(conn, deck_id)
-        del_mb_count = len(loaders.load_maybeboard_df(conn, deck_id))
+        del_sl_count = len(loaders.load_deck_changes_df(conn, deck_id, ("idea", "planned")))
         st.caption(
             f"This deck currently has **{del_value.get('total_cards') or 0}** mainboard card(s), "
-            f"**{del_mb_count}** maybeboard card(s), and **{del_stats['games_played']}** logged game(s)."
+            f"**{del_sl_count}** shortlist row(s) (ideas and planned changes), and "
+            f"**{del_stats['games_played']}** logged game(s)."
         )
         del_clear_loc = st.checkbox(
             f"Also reassign collection Locations that matched this deck's name back to '{writes.DEFAULT_LOCATION}'",
@@ -428,7 +601,7 @@ with tab_main:
                     # Location defaulted to this deck's name) rather than
                     # letting the deck and the collection quietly drift
                     # apart. A no-op if a lot for this printing already
-                    # exists. Deliberately NOT done for maybeboard adds
+                    # exists. Deliberately NOT done for shortlist adds
                     # (see writes.auto_add_to_collection's docstring).
                     deck_name = loaders.load_deck_meta(conn, deck_id).get("name")
                     auto_added_id = writes.auto_add_to_collection(
@@ -480,232 +653,395 @@ with tab_main:
                 st.rerun()
 
 # ------------------------------------------------------------------
-# Maybeboard
+# Shortlist (Workbench rework, Phase 1) — replaces the separate Maybeboard
+# and Swap Manager tabs, which were two halves of one workflow: a card
+# you're considering, and the swap that would bring it in. Backed by the
+# deck_changes table (schema.sql), one row moving through
+#
+#   idea  ->  planned  ->  applied          (or dropped, from idea/planned)
+#
+# so promoting an idea to a staged swap is one click instead of retyping
+# the card name into a second tab, and applying it leaves a history row
+# instead of vanishing. Nothing touches deck_cards/collection until a
+# planned row is applied (writes.apply_change -> execute_swap).
 # ------------------------------------------------------------------
-with tab_maybe:
-    if deck_id is None:
-        st.info("Create a deck in the sidebar to get started.")
-    else:
-        st.markdown("**Add a card**")
-        st.caption("Set code + collector number picks an exact printing; leave them blank to match by name.")
-        mc1, mc2, mc3 = st.columns([3, 1, 1])
-        mb_add_name = mc1.text_input("Card name", key=f"editor_{deck_id}_mb_add_name")
-        mb_add_set = mc2.text_input("Set", key=f"editor_{deck_id}_mb_add_set")
-        mb_add_num = mc3.text_input("Number", key=f"editor_{deck_id}_mb_add_num")
-        mb_add_notes = st.text_input("Notes (optional)", key=f"editor_{deck_id}_mb_add_notes")
-        if st.button("➕ Add to maybeboard", key=f"editor_{deck_id}_mb_add_btn"):
-            if not mb_add_name.strip() and not (mb_add_set.strip() and mb_add_num.strip()):
-                st.warning("Enter a card name, or a set code + collector number.")
+NO_TARGET = "— none yet —"
+
+
+def _clean_text(value):
+    """data_editor hands back None/NaN for an emptied text cell."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _availability_text(availability, change_id):
+    """The Owned / Availability column: queries.plan_availability()'s
+    verdict for one row, prefixed with an icon so the state reads at a
+    glance.
+
+    This replaced a per-row card_inventory_status() call (Phase 2). The
+    difference matters within one deck too: two ideas here both wanting
+    your single Blood Crypt used to be told "in storage" twice. The
+    allocation is over THIS deck's open rows only — cross-deck collisions
+    are the Workbench page's view, over the same function."""
+    verdict = availability.get(change_id, {})
+    icon = {
+        "available": "✅", "claimed_by": "⚠️", "in_other_deck": "📦",
+        "not_owned": "🛒", "already_here": "↩️", "no_add": "—",
+    }.get(verdict.get("verdict"), "")
+    return f"{icon} {verdict.get('text', '')}".strip()
+
+
+def _replace_options(main_df):
+    """The 'Replaces' dropdown: every mainboard card, as
+    {label: (scryfall_id, name)} plus reverse lookups. Labels carry the
+    quantity, and the printing too when two rows share a name (basic lands
+    in several printings), so every label is unique and maps to one row."""
+    by_label, by_sid, by_name = {}, {}, {}
+    if main_df.empty:
+        return by_label, by_sid, by_name
+    counts = main_df["name"].str.lower().value_counts()
+    for _, r in main_df.sort_values("name", key=lambda c: c.str.lower()).iterrows():
+        label = f"{r['name']} (x{int(r['quantity'])})"
+        if counts[r["name"].lower()] > 1:
+            label = f"{r['name']} [{str(r['set_code']).upper()} {r['collector_number']}] (x{int(r['quantity'])})"
+        by_label[label] = (r["scryfall_id"], r["name"])
+        by_sid[r["scryfall_id"]] = label
+        by_name.setdefault(r["name"].lower(), label)
+    return by_label, by_sid, by_name
+
+
+def _initial_replace_label(row, by_sid, by_name):
+    """What an idea's Replaces cell should show: its linked card if that card
+    is still in the mainboard, else a match on the stored text, else none."""
+    sid = row["remove_scryfall_id"]
+    if pd.notna(sid) and sid in by_sid:
+        return by_sid[sid]
+    name = row["remove_card"]
+    if isinstance(name, str) and name.lower() in by_name:
+        return by_name[name.lower()]
+    return NO_TARGET
+
+
+def _apply_flash(results):
+    """apply_changes() results -> the ✅/❌ lines shown after the rerun."""
+    lines = []
+    for r in results:
+        if r["ok"]:
+            outcome = r["outcome"] or {}
+            fetch = " (fetched fresh from Scryfall)" if r["was_new"] else ""
+            if outcome.get("created_lot"):
+                lot = " — created a new starter collection lot"
+            elif outcome.get("assigned_lot_id"):
+                lot = " — reassigned an existing owned copy"
             else:
-                sid, was_new, err = card_resolver.resolve_or_fetch_card(
-                    conn, name=mb_add_name.strip() or None,
-                    set_code=mb_add_set.strip() or None, collector_number=mb_add_num.strip() or None,
-                )
-                if err:
-                    st.error(err)
-                else:
-                    writes.add_maybeboard_card(conn, deck_id, sid, notes=mb_add_notes.strip() or None)
-                    loaders.invalidate_deck_caches()
-                    note = " (fetched fresh from Scryfall)" if was_new else ""
-                    st.success(f"Added {mb_add_name.strip() or sid} to the maybeboard{note}.")
-                    st.rerun()
-
-        st.divider()
-        st.markdown("**Edit / remove maybeboard cards**")
-        mb_df = loaders.load_maybeboard_df(conn, deck_id)
-        if mb_df.empty:
-            st.caption("Maybeboard is empty.")
+                lot = ""
+            lines.append(f"✅ Added {r['add_name']}{fetch}, replaced {r['remove_name']}{lot}.")
         else:
-            mb_rows = [
-                {
-                    "scryfall_id": r["scryfall_id"], "Card": r["name"],
-                    "Review?": bool(r["review_flag"]),
-                    "Replaces": r["replace_target"] if pd.notna(r.get("replace_target")) else "",
-                    "Notes": r["notes"] if pd.notna(r.get("notes")) else "",
-                    "Delete": False,
-                }
-                for _, r in mb_df.iterrows()
-            ]
-            mb_editor_df = pd.DataFrame(mb_rows)
-            mb_edited = st.data_editor(
-                mb_editor_df,
-                column_config={
-                    "Card": st.column_config.TextColumn("Card", disabled=True),
-                    "Review?": st.column_config.CheckboxColumn("Review?"),
-                    "Replaces": st.column_config.TextColumn("Replaces (free text)"),
-                    "Notes": st.column_config.TextColumn("Notes"),
-                    "Delete": st.column_config.CheckboxColumn("Delete"),
-                },
-                column_order=["Card", "Review?", "Replaces", "Notes", "Delete"],
-                hide_index=True, use_container_width=True,
-                key=f"editor_{deck_id}_mb_editor",
-            )
-            if st.button("💾 Save maybeboard changes", key=f"editor_{deck_id}_mb_save"):
-                mb_updates = {}
-                for _, row in mb_edited.iterrows():
-                    mb_updates[row["scryfall_id"]] = {
-                        "_delete": bool(row["Delete"]),
-                        "review_flag": bool(row["Review?"]),
-                        "replace_card_name": row["Replaces"] or None,
-                        "notes": row["Notes"] or None,
-                    }
-                changed = writes.bulk_update_maybeboard(conn, deck_id, mb_updates)
-                loaders.invalidate_deck_caches()
-                st.success(f"Updated {changed} card(s).")
-                st.rerun()
+            lines.append(f"❌ {r['add_name']}: {r['error']}")
+    return lines
 
-# ------------------------------------------------------------------
-# Swap Manager (Prompt Pass 13 / prompt6.txt) — queue up planned
-# mainboard swaps ("Add Card A -> Replace Card B"), see real-time
-# collection availability for each candidate before committing anything,
-# then apply the whole queue at once. writes.execute_swap() does the
-# actual work per swap: updates deck_cards (remove B, add A), moves any
-# collection lot for B that's sleeved in THIS deck back to storage, and
-# sleeves A here (reusing an available owned lot, or creating a starter
-# one if it isn't owned/available). The queue is persisted in the
-# deck_swap_queue table (writes.queue_swap/list_swap_queue/etc.) so it
-# survives closing the dashboard between sessions — nothing is written
-# to deck_cards/collection until "Confirm & apply" is clicked.
-# ------------------------------------------------------------------
-with tab_swap:
+
+with tab_shortlist:
     if deck_id is None:
         st.info("Create a deck in the sidebar to get started.")
     else:
-        swap_deck_name = loaders.load_deck_meta(conn, deck_id).get("name")
-        swap_main_df = loaders.load_deck_cards_df(conn, deck_id)
-        result_key = f"editor_{deck_id}_swap_last_result"
+        deck_name = loaders.load_deck_meta(conn, deck_id).get("name")
+        main_df = loaders.load_deck_cards_df(conn, deck_id)
+        # One allocation pass over the deck's ideas AND planned rows
+        # together, so the Ideas and Planned tables below can't each claim
+        # the same physical copy. Not cached: it must reflect collection
+        # writes made earlier in this same page run.
+        deck_open_df = q.open_changes_dataframe(conn, ("planned", "idea"), deck_id=deck_id)
+        availability = q.plan_availability(conn, deck_open_df)
+        replace_map, label_by_sid, label_by_name = _replace_options(main_df)
+        replace_choices = [NO_TARGET] + list(replace_map)
+
+        # Part of every data_editor key below and bumped after each write.
+        # A data_editor keeps its pending edits by ROW POSITION under a fixed
+        # key, so once a promoted/dropped row leaves the table, the next
+        # render would replay those edits onto whichever row slid into its
+        # slot. A fresh key per write starts it clean.
+        ver_key = f"editor_{deck_id}_shortlist_ver"
+        ver = st.session_state.get(ver_key, 0)
+        result_key = f"editor_{deck_id}_shortlist_result"
+
+        def _refresh(collection=False):
+            st.session_state[ver_key] = ver + 1
+            loaders.invalidate_deck_caches()
+            if collection:
+                loaders.invalidate_collection_caches()
+            st.rerun()
 
         if st.session_state.get(result_key):
             for line in st.session_state[result_key]:
                 (st.success if line.startswith("✅") else st.error)(line)
             del st.session_state[result_key]
 
-        st.markdown("**Swap Builder**")
         st.caption(
-            "Build a list of planned swaps below — nothing is written to the database "
-            "until you review and confirm it in Execution Confirmation."
+            "A card moves **idea → planned → applied**, or gets **dropped**. Ideas can be cards "
+            "you own or don't, and needn't name what they'd replace yet. Nothing touches the "
+            "deck or your collection until you apply a planned change."
         )
-        if swap_main_df.empty:
-            st.info("This deck has no mainboard cards yet — add some in the Mainboard tab first.")
-        else:
-            sw1, sw2, sw3 = st.columns([2, 2, 1])
-            swap_add_name = sw1.text_input(
-                "Add (card name)", key=f"editor_{deck_id}_swap_add_name",
-                help="The exact printing is resolved locally, or fetched fresh from "
-                     "Scryfall if needed, when you confirm the swap below.",
-            )
-            swap_remove_options = {
-                f"{r['name']} (x{int(r['quantity'])})": r for _, r in swap_main_df.iterrows()
-            }
-            swap_remove_label = sw2.selectbox(
-                "Replace (current mainboard card)", list(swap_remove_options.keys()),
-                key=f"editor_{deck_id}_swap_remove_pick",
-            )
-            swap_remove_row = swap_remove_options[swap_remove_label]
-            swap_qty = sw3.number_input(
-                "Qty", min_value=1, value=int(swap_remove_row["quantity"]), step=1,
-                key=f"editor_{deck_id}_swap_qty",
-            )
-            if st.button("➕ Queue this swap", key=f"editor_{deck_id}_swap_queue_btn"):
-                if not swap_add_name.strip():
-                    st.warning("Enter a card name to add.")
-                else:
-                    writes.queue_swap(
-                        conn, deck_id,
-                        add_name=swap_add_name.strip(),
-                        remove_scryfall_id=swap_remove_row["scryfall_id"],
-                        remove_name=swap_remove_row["name"],
-                        quantity=int(swap_qty),
-                    )
-                    st.rerun()
 
-        st.divider()
-        st.markdown("**Queued swaps**")
-        swap_queue = writes.list_swap_queue(conn, deck_id)
-        if not swap_queue:
-            st.caption("Nothing queued yet.")
-        else:
-            # Inventory Checking: live availability for each candidate
-            # "Add" card, recomputed on every render (not cached) so it
-            # always reflects the current collection state.
-            queue_rows = []
-            for item in swap_queue:
-                status = q.card_inventory_status(conn, item["add_name"], deck_name=swap_deck_name)
-                if status["owned_qty"] == 0:
-                    availability = "Not owned — a starter lot will be created"
-                elif status["available_lots"]:
-                    best = status["available_lots"][0]
-                    availability = f"Available in storage ({best['location'] or 'no location set'})"
-                elif status["in_other_decks"]:
-                    others = ", ".join(f"{d} (x{n})" for d, n in status["in_other_decks"].items())
-                    availability = f"Owned, but every copy is already sleeved in: {others}"
+        # ---------------- Add an idea ----------------
+        st.markdown("**Add an idea**")
+        st.caption("Set code + collector number picks an exact printing; leave them blank to match by name.")
+        with st.form(f"editor_{deck_id}_shortlist_add_form", clear_on_submit=True):
+            f1, f2, f3 = st.columns([3, 1, 1])
+            sl_name = f1.text_input("Card name", key=f"editor_{deck_id}_sl_add_name")
+            sl_set = f2.text_input("Set", key=f"editor_{deck_id}_sl_add_set")
+            sl_num = f3.text_input("Number", key=f"editor_{deck_id}_sl_add_num")
+            f4, f5 = st.columns([2, 3])
+            sl_replace = f4.selectbox("Replaces (optional)", replace_choices, key=f"editor_{deck_id}_sl_add_replace")
+            sl_notes = f5.text_input("Notes (optional)", key=f"editor_{deck_id}_sl_add_notes")
+            sl_submit = st.form_submit_button("➕ Add to shortlist")
+        if sl_submit:
+            if not sl_name.strip() and not (sl_set.strip() and sl_num.strip()):
+                st.warning("Enter a card name, or a set code + collector number.")
+            else:
+                sid, was_new, err = card_resolver.resolve_or_fetch_card(
+                    conn, name=sl_name.strip() or None,
+                    set_code=sl_set.strip() or None, collector_number=sl_num.strip() or None,
+                )
+                if err:
+                    st.error(err)
                 else:
-                    availability = "Already sleeved in this deck"
-                queue_rows.append({
-                    "#": item["queue_id"],
-                    "Add": item["add_name"],
-                    "Owned": status["owned_qty"],
-                    "Availability": availability,
-                    "Replace": item["remove_name"],
-                    "Qty": item["quantity"],
-                    "Remove from queue": False,
-                })
-            queue_edited = st.data_editor(
-                pd.DataFrame(queue_rows),
-                column_config={
-                    "#": st.column_config.NumberColumn("#", disabled=True, width="small"),
-                    "Add": st.column_config.TextColumn("Add", disabled=True),
-                    "Owned": st.column_config.NumberColumn("Owned", disabled=True, width="small"),
-                    "Availability": st.column_config.TextColumn("Availability", disabled=True),
-                    "Replace": st.column_config.TextColumn("Replace", disabled=True),
-                    "Qty": st.column_config.NumberColumn("Qty", disabled=True, width="small"),
-                    "Remove from queue": st.column_config.CheckboxColumn("Remove from queue"),
-                },
-                column_order=["Add", "Owned", "Availability", "Replace", "Qty", "Remove from queue"],
-                hide_index=True, use_container_width=True,
-                key=f"editor_{deck_id}_swap_queue_editor",
-            )
-            qbtn1, qbtn2 = st.columns(2)
-            if qbtn1.button("🗑️ Remove checked from queue", key=f"editor_{deck_id}_swap_queue_remove_btn"):
-                remove_ids = [row["#"] for _, row in queue_edited.iterrows() if row["Remove from queue"]]
-                writes.remove_swap_queue_items(conn, remove_ids)
-                st.rerun()
-            if qbtn2.button("🧹 Clear entire queue", key=f"editor_{deck_id}_swap_queue_clear_btn"):
-                writes.clear_swap_queue(conn, deck_id)
-                st.rerun()
-
-            st.divider()
-            st.markdown("**Execution Confirmation**")
-            st.caption(
-                "Applies every queued swap at once: updates this deck's mainboard, moves "
-                "the replaced card's collection lot(s) that are sleeved here back to "
-                "storage, and sleeves the added card here (an available owned copy if one "
-                "exists, otherwise a brand-new starter lot)."
-            )
-            if st.button("✅ Confirm & apply all queued swaps", key=f"editor_{deck_id}_swap_execute_btn"):
-                results = []
-                for item in swap_queue:
-                    sid, was_new, err = card_resolver.resolve_or_fetch_card(conn, name=item["add_name"])
-                    if err:
-                        results.append(f"❌ {item['add_name']}: {err}")
-                        continue
-                    outcome = writes.execute_swap(
-                        conn, deck_id, swap_deck_name,
-                        remove_scryfall_id=item["remove_scryfall_id"], remove_card_name=item["remove_name"],
-                        add_scryfall_id=sid, add_card_name=item["add_name"], quantity=item["quantity"],
-                    )
-                    fetch_note = " (fetched fresh from Scryfall)" if was_new else ""
-                    if outcome["created_lot"]:
-                        lot_note = " — created a new starter collection lot"
-                    elif outcome["assigned_lot_id"]:
-                        lot_note = " — reassigned an existing owned copy"
+                    resolved_name = conn.execute(
+                        "SELECT name FROM cards WHERE scryfall_id=?", (sid,)
+                    ).fetchone()[0]
+                    target = replace_map.get(sl_replace)
+                    try:
+                        writes.add_change(
+                            conn, deck_id, add_scryfall_id=sid, add_name=resolved_name,
+                            remove_scryfall_id=target[0] if target else None,
+                            remove_name=target[1] if target else None,
+                            notes=_clean_text(sl_notes),
+                        )
+                    except ValueError as exc:
+                        st.warning(str(exc))
                     else:
-                        lot_note = ""
-                    results.append(
-                        f"✅ Added {item['add_name']}{fetch_note}, replaced {item['remove_name']}{lot_note}."
+                        fetched = " (fetched fresh from Scryfall)" if was_new else ""
+                        st.session_state[result_key] = [f"✅ Added {resolved_name} to the shortlist{fetched}."]
+                        _refresh()
+
+        # ---------------- Ideas ----------------
+        st.divider()
+        ideas_df = loaders.load_deck_changes_df(conn, deck_id, ("idea",))
+        st.markdown(f"**Ideas ({len(ideas_df)})**")
+        if ideas_df.empty:
+            st.caption("No ideas yet.")
+        else:
+            idea_rows, initial_labels = [], {}
+            for _, r in ideas_df.iterrows():
+                card = r["add_card"] if isinstance(r["add_card"], str) else None
+                label = _initial_replace_label(r, label_by_sid, label_by_name)
+                initial_labels[int(r["change_id"])] = label
+                idea_rows.append({
+                    "change_id": int(r["change_id"]),
+                    "Card": card or "(removal only)",
+                    "Owned": _availability_text(availability, int(r["change_id"])),
+                    "Price": float(r["price"]) if pd.notna(r["price"]) else None,
+                    "Replaces": label,
+                    "Review?": bool(r["review_flag"]),
+                    "Notes": r["notes"] if isinstance(r["notes"], str) else "",
+                    "→ Plan": False,
+                    "Drop": False,
+                })
+            ideas_edited = st.data_editor(
+                pd.DataFrame(idea_rows),
+                column_config={
+                    "Card": st.column_config.TextColumn("Card", disabled=True),
+                    "Owned": st.column_config.TextColumn("Owned?", disabled=True),
+                    "Price": st.column_config.NumberColumn("Price", format="$%.2f", disabled=True, width="small"),
+                    "Replaces": st.column_config.SelectboxColumn("Replaces", options=replace_choices, required=True),
+                    "Review?": st.column_config.CheckboxColumn("Review?", width="small"),
+                    "Notes": st.column_config.TextColumn("Notes"),
+                    "→ Plan": st.column_config.CheckboxColumn(
+                        "→ Plan", width="small",
+                        help="Stage this as a swap. Needs a card in 'Replaces'."),
+                    "Drop": st.column_config.CheckboxColumn(
+                        "Drop", width="small",
+                        help="Reject it. Kept in History rather than deleted."),
+                },
+                column_order=["Card", "Owned", "Price", "Replaces", "Review?", "Notes", "→ Plan", "Drop"],
+                hide_index=True, width="stretch",
+                key=f"editor_{deck_id}_sl_ideas_{ver}",
+            )
+            if st.button("💾 Save changes / run checked actions", key=f"editor_{deck_id}_sl_ideas_save_{ver}"):
+                updates, to_plan, to_drop, flash = {}, [], [], []
+                for _, row in ideas_edited.iterrows():
+                    cid = int(row["change_id"])
+                    edit = {"review_flag": bool(row["Review?"]), "notes": _clean_text(row["Notes"])}
+                    # Only touch the pairing if the dropdown actually moved. A row
+                    # whose stored target isn't in the mainboard any more shows
+                    # "none yet", and saving must not wipe that out as a side effect.
+                    if row["Replaces"] != initial_labels[cid]:
+                        target = replace_map.get(row["Replaces"])
+                        edit["remove_scryfall_id"], edit["remove_name"] = target if target else (None, None)
+                    updates[cid] = edit
+                    if row["Drop"]:
+                        to_drop.append((cid, row))
+                    elif row["→ Plan"]:
+                        to_plan.append((cid, row))
+                edited_n = writes.bulk_update_changes(conn, deck_id, updates)
+                planned_n = dropped_n = 0
+                for cid, row in to_plan:
+                    target = replace_map.get(row["Replaces"])
+                    if not target:
+                        flash.append(f"❌ {row['Card']}: pick a card for it to replace before planning it.")
+                        continue
+                    try:
+                        writes.promote_change(conn, cid, remove_scryfall_id=target[0], remove_name=target[1])
+                        planned_n += 1
+                    except ValueError as exc:
+                        flash.append(f"❌ {row['Card']}: {exc}")
+                for cid, row in to_drop:
+                    try:
+                        writes.drop_change(conn, cid)
+                        dropped_n += 1
+                    except ValueError as exc:
+                        flash.append(f"❌ {row['Card']}: {exc}")
+                flash.insert(0, f"✅ Saved {edited_n} edit(s), planned {planned_n}, dropped {dropped_n}.")
+                st.session_state[result_key] = flash
+                _refresh()
+
+        # ---------------- Planned ----------------
+        st.divider()
+        planned_df = loaders.load_deck_changes_df(conn, deck_id, ("planned",))
+        if not planned_df.empty:
+            planned_df = planned_df.sort_values(["planned_at", "change_id"])
+        st.markdown(f"**Planned ({len(planned_df)})**")
+        if planned_df.empty:
+            st.caption("Nothing planned. Tick **→ Plan** on an idea above.")
+        else:
+            main_qty = dict(zip(main_df["scryfall_id"], main_df["quantity"]))
+            planned_rows = []
+            net_cards = 0
+            for _, r in planned_df.iterrows():
+                card = r["add_card"] if isinstance(r["add_card"], str) else None
+                cut_qty = main_qty.get(r["remove_scryfall_id"])
+                net_cards += int(r["quantity"]) - int(cut_qty or 0)
+                planned_rows.append({
+                    "change_id": int(r["change_id"]),
+                    "Add": card or "",
+                    "Availability": _availability_text(availability, int(r["change_id"])),
+                    "Replaces": r["remove_card"] if isinstance(r["remove_card"], str) else "",
+                    "Qty": int(r["quantity"]),
+                    "Check": "" if cut_qty is not None else "⚠ cut card isn't in the mainboard any more",
+                    "Apply": False,
+                    "← Idea": False,
+                    "Drop": False,
+                })
+            if net_cards:
+                st.warning(
+                    f"Applying everything planned changes this deck's card count by {net_cards:+d}. "
+                    "A swap replaces the cut card's whole row, so cutting a basic that's in the deck "
+                    "×5 for one card removes all five — set Qty to match."
+                )
+            planned_edited = st.data_editor(
+                pd.DataFrame(planned_rows),
+                column_config={
+                    "Add": st.column_config.TextColumn("Add", disabled=True),
+                    "Availability": st.column_config.TextColumn("Availability", disabled=True),
+                    "Replaces": st.column_config.TextColumn("Replaces", disabled=True),
+                    "Qty": st.column_config.NumberColumn("Qty", min_value=1, step=1, width="small"),
+                    "Check": st.column_config.TextColumn("Check", disabled=True),
+                    "Apply": st.column_config.CheckboxColumn("Apply", width="small"),
+                    "← Idea": st.column_config.CheckboxColumn(
+                        "← Idea", width="small", help="Un-stage it, keeping what it replaces."),
+                    "Drop": st.column_config.CheckboxColumn("Drop", width="small"),
+                },
+                column_order=["Add", "Availability", "Replaces", "Qty", "Check", "Apply", "← Idea", "Drop"],
+                hide_index=True, width="stretch",
+                key=f"editor_{deck_id}_sl_planned_{ver}",
+            )
+
+            def _save_quantities():
+                """Qty edits made in the table, written before any action runs
+                so Apply never uses a stale quantity."""
+                qty_updates = {
+                    int(row["change_id"]): {"quantity": max(1, int(row["Qty"])) if pd.notna(row["Qty"]) else 1}
+                    for _, row in planned_edited.iterrows()
+                }
+                return writes.bulk_update_changes(conn, deck_id, qty_updates)
+
+            def _apply(ids):
+                results = writes.apply_changes(
+                    conn, ids,
+                    resolve_add=lambda name: card_resolver.resolve_or_fetch_card(conn, name=name),
+                )
+                st.session_state[result_key] = _apply_flash(results)
+                _refresh(collection=True)
+
+            pb1, pb2, pb3 = st.columns(3)
+            if pb1.button("💾 Save Qty / run checked actions", key=f"editor_{deck_id}_sl_planned_save_{ver}"):
+                qty_n = _save_quantities()
+                flash, demoted_n, dropped_n = [], 0, 0
+                for _, row in planned_edited.iterrows():
+                    cid = int(row["change_id"])
+                    try:
+                        if row["Drop"]:
+                            writes.drop_change(conn, cid)
+                            dropped_n += 1
+                        elif row["← Idea"]:
+                            writes.demote_change(conn, cid)
+                            demoted_n += 1
+                    except ValueError as exc:
+                        flash.append(f"❌ {row['Add']}: {exc}")
+                flash.insert(0, f"✅ Saved {qty_n} quantity edit(s), moved {demoted_n} back to ideas, dropped {dropped_n}.")
+                st.session_state[result_key] = flash
+                _refresh()
+            if pb2.button("✅ Apply checked", key=f"editor_{deck_id}_sl_planned_apply_checked_{ver}"):
+                _save_quantities()
+                checked = [int(row["change_id"]) for _, row in planned_edited.iterrows() if row["Apply"]]
+                if checked:
+                    _apply(checked)
+                else:
+                    st.warning("Tick **Apply** on at least one row first.")
+            if pb3.button("✅ Apply all planned", key=f"editor_{deck_id}_sl_planned_apply_all_{ver}"):
+                _save_quantities()
+                _apply([int(row["change_id"]) for _, row in planned_edited.iterrows()])
+
+        # ---------------- History ----------------
+        history_df = loaders.load_deck_changes_df(conn, deck_id, ("applied", "dropped"))
+        with st.expander(f"History ({len(history_df)})"):
+            if history_df.empty:
+                st.caption("Nothing applied or dropped yet.")
+            else:
+                st.caption(
+                    "Swaps you applied here, cards added or removed on the Mainboard tab, and ideas "
+                    "you dropped. Times are UTC."
+                )
+                hist = history_df.sort_values(["resolved_at", "change_id"], ascending=False)
+                st.dataframe(
+                    pd.DataFrame({
+                        "When (UTC)": hist["resolved_at"],
+                        "What": hist["status"].map({"applied": "Applied", "dropped": "Dropped"}),
+                        "Added": hist["add_card"],
+                        "Removed": hist["remove_card"],
+                        "Qty": hist["quantity"],
+                        "Notes": hist["notes"],
+                    }),
+                    hide_index=True, width="stretch",
+                )
+                dropped_df = hist[hist["status"] == "dropped"]
+                if not dropped_df.empty:
+                    restore_options = {
+                        f"{r['add_card'] or r['remove_card']} (#{int(r['change_id'])})": int(r["change_id"])
+                        for _, r in dropped_df.iterrows()
+                    }
+                    restore_pick = st.selectbox(
+                        "Restore a dropped idea", list(restore_options),
+                        key=f"editor_{deck_id}_sl_restore_pick_{ver}",
                     )
-                writes.clear_swap_queue(conn, deck_id)
-                st.session_state[result_key] = results
-                loaders.invalidate_deck_caches()
-                loaders.invalidate_collection_caches()
-                st.rerun()
+                    if st.button("↩️ Restore as idea", key=f"editor_{deck_id}_sl_restore_btn_{ver}"):
+                        try:
+                            writes.reopen_change(conn, restore_options[restore_pick])
+                        except ValueError as exc:
+                            st.warning(str(exc))
+                        else:
+                            st.session_state[result_key] = [f"✅ Restored {restore_pick.rsplit(' (#', 1)[0]} as an idea."]
+                            _refresh()

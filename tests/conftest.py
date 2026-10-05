@@ -27,12 +27,27 @@ def conn():
 
 @pytest.fixture
 def add_card(conn):
-    """add_card('Sol Ring') -> scryfall_id of a minimal card row."""
-    def _add(name, set_code="cmd", collector_number="1"):
+    """add_card('Sol Ring') -> scryfall_id of a minimal card row.
+
+    `oracle_id` defaults to one derived from the name, so two printings
+    added under the same name group together the way real Scryfall data
+    does — that grouping is the join key the inventory allocator uses
+    (queries.oracle_ids_for_card). Pass it explicitly to model the cases
+    where name and oracle identity come apart: two printings of one card
+    whose names differ (a modal double-faced card referred to by one
+    face), or two genuinely different cards sharing a name. Pass
+    oracle_id=False for a card with no oracle_id at all, which is what a
+    row added before the field was synced looks like."""
+    def _add(name, set_code="cmd", collector_number="1", oracle_id=None):
         sid = f"{name}-{set_code}-{collector_number}"
+        if oracle_id is None:
+            oracle_id = f"oracle-{name.casefold()}"
+        elif oracle_id is False:
+            oracle_id = None
         conn.execute(
-            "INSERT INTO cards (scryfall_id, name, set_code, collector_number) VALUES (?,?,?,?)",
-            (sid, name, set_code, collector_number),
+            "INSERT INTO cards (scryfall_id, name, set_code, collector_number, oracle_id)"
+            " VALUES (?,?,?,?,?)",
+            (sid, name, set_code, collector_number, oracle_id),
         )
         conn.commit()
         return sid

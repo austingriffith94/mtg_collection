@@ -25,6 +25,7 @@ import pandas as pd
 import streamlit as st
 
 from . import formatting as fmt
+from .log import setup_logging
 
 PAGE_SIZE_OPTIONS = [12, 24, 48, 96]
 SORT_FIELDS = {
@@ -74,6 +75,7 @@ def setup_page(page_title, page_icon, layout="wide"):
     two-line pair copy-pasted in all 8 files into one call. Each page
     still needs its own sys.path.insert(...) BEFORE this can even be
     imported, so that part stays per-file."""
+    setup_logging()
     st.set_page_config(page_title=page_title, page_icon=page_icon, layout=layout)
     inject_nav_caps_css()
 
@@ -528,7 +530,38 @@ def deck_image_src(row):
     return None
 
 
-def render_deck_landing_grid(decks_df, deck_page_path="Decks", columns_per_row=4):
+def deck_status_strip(row):
+    """One-line status for a deck tile from a deck_comparison() row:
+    "🔨 brewing · 9 planned · 18 ideas · 1-2 · 4% built". Parts that don't
+    apply are left out (no "0 planned"), the record shows only once a game
+    is logged, and build status only while the deck isn't fully sleeved — a
+    finished deck's 100% would be noise on 11 of 12 tiles. Empty string when
+    nothing applies.
+
+    The lifecycle flag (Phase 6) leads, because it changes how to read
+    everything after it: 4% built is alarming on a deck you thought was
+    finished and expected on one you're still assembling."""
+    def n(key):
+        v = row.get(key)
+        return 0 if v is None or pd.isna(v) else int(v)
+
+    parts = []
+    state = row.get("build_state")
+    if isinstance(state, str) and state:
+        parts.append({"brewing": "🔨 brewing", "dismantled": "🔧 dismantled"}.get(state, state))
+    if n("planned"):
+        parts.append(f"{n('planned')} planned")
+    if n("ideas"):
+        parts.append(f"{n('ideas')} idea{'s' if n('ideas') != 1 else ''}")
+    if n("games"):
+        parts.append(f"{n('wins')}-{n('losses')}")
+    pct = row.get("build_pct")
+    if pct is not None and not pd.isna(pct) and pct < 100:
+        parts.append(f"{pct:.0f}% built")
+    return " · ".join(parts)
+
+
+def render_deck_landing_grid(decks_df, deck_page_path="Decks", columns_per_row=4, status_df=None):
     """Home-page landing grid: one image-backed tile per deck. Clicking
     a tile navigates (plain <a> href, same tab) straight to the Decks
     page with `?deck_id=<id>` in the URL, which that page reads on load
@@ -539,10 +572,21 @@ def render_deck_landing_grid(decks_df, deck_page_path="Decks", columns_per_row=4
         st.info("No decks found yet.")
         return
 
+    # Phase 5: optional per-deck status line (queries.deck_comparison()
+    # rows) under each name; tiles render exactly as before without it.
+    strips = {}
+    if status_df is not None and not status_df.empty:
+        strips = {r["deck_id"]: deck_status_strip(r) for _, r in status_df.iterrows()}
+
     cols = st.columns(columns_per_row)
     for i, (_, row) in enumerate(decks_df.iterrows()):
         name = html.escape(str(row.get("name") or "Deck"))
         deck_id = row.get("deck_id")
+        strip = html.escape(strips.get(deck_id, ""))
+        strip_html = (
+            f'<div style="text-align:center;font-size:0.8rem;opacity:0.7;line-height:1.3;">{strip}</div>'
+            if strip else ""
+        )
         href = f"{deck_page_path}?deck_id={deck_id}"
         src = deck_image_src(row)
 
@@ -563,6 +607,7 @@ def render_deck_landing_grid(decks_df, deck_page_path="Decks", columns_per_row=4
             f"{img_html}"
             f'<div style="text-align:center;font-size:0.95rem;margin-top:6px;line-height:1.3;'
             f'font-weight:600;">{name}</div>'
+            f"{strip_html}"
             f"</a>"
         )
         with cols[i % columns_per_row]:

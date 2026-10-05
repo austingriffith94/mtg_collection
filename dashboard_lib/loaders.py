@@ -49,9 +49,37 @@ def load_deck_library_df(_conn, deck_id):
     return cv.add_derived_columns(q.deck_library_dataframe(_conn, deck_id))
 
 
-@st.cache_data(show_spinner="Loading maybeboard…")
-def load_maybeboard_df(_conn, deck_id):
-    return cv.add_derived_columns(q.maybeboard_dataframe(_conn, deck_id))
+@st.cache_data(show_spinner="Loading shortlist…")
+def load_shortlist_df(_conn, deck_id):
+    return cv.add_derived_columns(q.shortlist_dataframe(_conn, deck_id))
+
+
+@st.cache_data(show_spinner=False)
+def load_deck_changes_df(_conn, deck_id, statuses=("idea", "planned")):
+    """`statuses` must be a tuple (st.cache_data hashes the arguments)."""
+    return q.deck_changes_dataframe(_conn, deck_id, statuses)
+
+
+@st.cache_data(show_spinner="Loading the change queue…")
+def load_open_changes_df(_conn, statuses=("planned",), deck_id=None):
+    """Every deck's open changes, for the Workbench's global queue.
+    `statuses` must be a tuple (st.cache_data hashes the arguments)."""
+    return q.open_changes_dataframe(_conn, statuses, deck_id)
+
+
+@st.cache_data(show_spinner=False)
+def load_deck_change_history(_conn, deck_id):
+    return q.deck_change_history(_conn, deck_id)
+
+
+@st.cache_data(show_spinner="Comparing decks…")
+def load_deck_comparison(_conn):
+    return q.deck_comparison(_conn)
+
+
+@st.cache_data(show_spinner=False)
+def load_unlocated_lot_summary(_conn):
+    return q.unlocated_lot_summary(_conn)
 
 
 @st.cache_data(show_spinner=False)
@@ -213,6 +241,41 @@ def load_player_head_to_head(_conn):
     return q.player_head_to_head_matrix(_conn)
 
 
+# ------------------------------------------------------------------
+# Commander Spellbook combo cache (deck_combos / deck_combo_sync). These
+# read the local cache only — the network fetch itself is never cached,
+# it's an explicit button press (see dashboard_lib/spellbook.py).
+# ------------------------------------------------------------------
+@st.cache_data(show_spinner=False)
+def load_deck_combos(_conn, deck_id, category):
+    return q.deck_combos(_conn, deck_id, category)
+
+
+@st.cache_data(show_spinner=False)
+def load_deck_combo_sync(_conn, deck_id):
+    return q.deck_combo_sync(_conn, deck_id)
+
+
+@st.cache_data(show_spinner=False)
+def load_deck_combo_sync_all(_conn):
+    return q.deck_combo_sync_all(_conn)
+
+
+@st.cache_data(show_spinner=False)
+def load_owned_card_quantities(_conn):
+    return q.owned_card_quantities(_conn)
+
+
+def invalidate_combo_caches():
+    """Clear the combo cache reads after a Spellbook refresh (per-deck on
+    the Decks page, or all decks from Card Database -> Card Data)."""
+    load_deck_combos.clear()
+    load_deck_combo_sync.clear()
+    load_deck_combo_sync_all.clear()
+    load_owned_card_quantities.clear()
+    load_deck_comparison.clear()  # its "combos found" column
+
+
 def invalidate_reference_caches():
     """Clear caches for the name-keyed / global reference data touched by
     the Editor's Themes, Game Changers, and Mana Tags (Prompt Pass 12)
@@ -247,11 +310,15 @@ def invalidate_game_tracking_caches():
     load_known_untracked_deck_names.clear()
     load_player_elo_ratings.clear()
     load_player_head_to_head.clear()
+    # W-L columns of the comparison matrix / tile strips, and the games-
+    # between-changes lines of every deck's change history.
+    load_deck_comparison.clear()
+    load_deck_change_history.clear()
 
 
 def invalidate_deck_caches(deck_id=None):
     """Clear every cached read a deck-scoped write (card tags, deck
-    metadata, mainboard, maybeboard, themes, create/rename/delete) could
+    metadata, mainboard, shortlist, themes, create/rename/delete) could
     have changed — including the deck list itself, since a rename/create/
     delete changes what every page's deck picker shows. deck_id is
     accepted for readability at call sites but unused: st.cache_data.clear()
@@ -264,6 +331,11 @@ def invalidate_deck_caches(deck_id=None):
     load_deck_meta.clear()
     load_deck_cards_df.clear()
     load_deck_library_df.clear()
+    load_shortlist_df.clear()
+    load_deck_changes_df.clear()
+    load_open_changes_df.clear()
+    load_deck_change_history.clear()
+    load_deck_comparison.clear()
     load_deck_strategy_tag_counts.clear()
     load_deck_mana_curve.clear()
     load_deck_game_changers.clear()
@@ -286,6 +358,16 @@ def invalidate_deck_caches(deck_id=None):
     # A create/rename/delete changes the deck-name half of the Location
     # dropdown's option set (Prompt Pass 13).
     load_location_options.clear()
+    # A decklist edit can invalidate cached Spellbook combos (a removed
+    # card can break an "included" combo; an added one can complete an
+    # "almost"). The cached ROWS are deliberately left in place rather
+    # than deleted — they're still the last known-good answer, and the
+    # Decks page shows the fetch timestamp plus a warning when the deck
+    # has been edited since, so a stale read is visible rather than
+    # silently wrong. Only the Streamlit read caches are dropped here.
+    load_deck_combos.clear()
+    load_deck_combo_sync.clear()
+    load_deck_combo_sync_all.clear()
 
 
 def invalidate_collection_caches():
@@ -297,3 +379,9 @@ def invalidate_collection_caches():
     load_in_deck_sleeved_count.clear()
     load_dashboard_summary.clear()
     load_game_changers_overview.clear()  # "owned qty" there is collection-derived
+    # The combo list's "you already own the missing card" flag is
+    # collection-derived too (queries.owned_card_quantities).
+    load_owned_card_quantities.clear()
+    # The Workbench's unlocated-lot count is a straight collection read.
+    load_unlocated_lot_summary.clear()
+    load_deck_comparison.clear()  # its build-status column reads collection locations

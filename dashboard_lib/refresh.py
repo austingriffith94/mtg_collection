@@ -11,7 +11,7 @@ Changers or Reserved List over time, or as prices/legality change.
 As of Phase 1, this also automatically prunes the collection afterward
 (dashboard_lib.writes.prune_collection): any collection lot with no
 location, a quantity of 0/none, and not present in any deck's mainboard
-or maybeboard is deleted. This is the only thing here that touches your
+or open shortlist is deleted. This is the only thing here that touches your
 collection rather than just `cards` — everything else (decklists, tags)
 is untouched.
 
@@ -20,10 +20,13 @@ same client migrate.py and card_resolver.py use). Shared by
 scripts/refresh_card_data.py (CLI) and the Editor page's "Card Data" tab.
 """
 import datetime
+import logging
 import os
 import sys
 
 from . import writes as w
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS_DIR = os.path.join(BASE_DIR, "scripts")
@@ -49,6 +52,8 @@ def refresh_all_cards(conn, progress_callback=None):
     rows = conn.execute("SELECT scryfall_id, name, is_reserved, is_game_changer FROM cards ORDER BY name").fetchall()
     total = len(rows)
     today = datetime.date.today().isoformat()
+
+    logger.info("Starting card data refresh: %d cards to check", total)
 
     summary = {
         "checked": 0,
@@ -91,5 +96,15 @@ def refresh_all_cards(conn, progress_callback=None):
     pruned = w.prune_collection(conn)
     summary["pruned_count"] = len(pruned)
     summary["pruned_cards"] = [name for _, name in pruned]
+
+    if summary["unresolved"]:
+        logger.warning("Card data refresh: %d card(s) unresolved on Scryfall: %s",
+                        len(summary["unresolved"]), ", ".join(summary["unresolved"]))
+    logger.info(
+        "Card data refresh done: checked=%d updated=%d newly_reserved=%d "
+        "newly_game_changer=%d unresolved=%d pruned=%d",
+        summary["checked"], summary["updated"], len(summary["newly_reserved"]),
+        len(summary["newly_game_changer"]), len(summary["unresolved"]), summary["pruned_count"],
+    )
 
     return summary

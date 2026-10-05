@@ -92,13 +92,21 @@ CREATE TABLE decks (
     tutors            TEXT,
     bracket           INTEGER,
     interaction       INTEGER,            -- 0-5 scale (same as bracket)
-    cover_image_path  TEXT              -- relative path under image_cache/deck_covers/,
+    cover_image_path  TEXT,             -- relative path under image_cache/deck_covers/,
                                          -- a user-picked PNG shown as the deck's thumbnail
                                          -- (Editor -> Deck Info); NULL if none set
+    build_state       TEXT              -- NULL | 'brewing' | 'dismantled' (Phase 6).
+                                         -- NULL means a normal built deck. 'brewing' = the
+                                         -- list exists but the cards are still elsewhere;
+                                         -- 'dismantled' = taken apart, list + history kept.
+                                         -- Build *completion* is derived, not stored (see
+                                         -- queries.BUILD_STATES); only intent lives here.
     -- Note: there is no "retired"/active distinction — every tracked deck
     -- is assumed active. (Phase 1 removed the earlier is_active/
     -- successor_deck_id columns; see delete_deck() in writes.py for how a
-    -- deck that's genuinely gone is removed instead.)
+    -- deck that's genuinely gone is removed instead.) build_state above is
+    -- NOT a revival of that: it is a transient build-workflow flag you
+    -- clear by marking the deck built, not a permanent active/retired axis.
 );
 
 -- Ranked (1-3) win conditions / strengths / weaknesses, each "Label: Description"
@@ -185,6 +193,121 @@ CREATE TABLE deck_swap_queue (
     remove_name        TEXT NOT NULL,
     quantity           INTEGER NOT NULL DEFAULT 1,
     queued_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ------------------------------------------------------------
+-- Deck change lifecycle (Workbench rework, Phase 0 — see
+-- IMPLEMENTATION_PLAN.md).
+--
+-- ONE table for what used to be three separate concerns, because they are
+-- the same row at three points in its life:
+--
+--   status='idea'     a card I'm considering for this deck   (was: maybeboard)
+--   status='planned'  paired with a cut and staged to apply  (was: deck_swap_queue)
+--   status='applied'  executed; immutable history            (was: nothing — lost)
+--   status='dropped'  considered and rejected, kept on purpose
+--
+-- The old `maybeboard` and `deck_swap_queue` tables above are deliberately
+-- left in place and untouched as a frozen pre-rework backup, per this
+-- project's additive/non-destructive schema policy — but nothing reads or
+-- writes them any more.
+--
+-- 'dropped' exists so a rejected idea isn't deleted: without it, the same
+-- card gets re-evaluated from scratch next month with no memory of why it
+-- lost last time.
+--
+-- An 'idea' may have no remove target (an unpaired thought) and may name a
+-- card you don't own (a brew/wishlist entry resolved against Scryfall) —
+-- hence both halves being nullable, with the CHECK below ensuring a row
+-- still does *something*. add_name/remove_name are free-text fallbacks for
+-- when printing resolution failed, mirroring the convention the old
+-- deck_swap_queue.add_name and maybeboard.replace_card_name used.
+-- ------------------------------------------------------------
+CREATE TABLE deck_changes (
+    change_id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    deck_id             INTEGER NOT NULL REFERENCES decks(deck_id),
+    status              TEXT NOT NULL DEFAULT 'idea'
+                        CHECK(status IN ('idea','planned','applied','dropped')),
+    add_scryfall_id     TEXT REFERENCES cards(scryfall_id),  -- NULL for a pure removal
+    add_name            TEXT,
+    remove_scryfall_id  TEXT REFERENCES cards(scryfall_id),  -- NULL while unpaired
+    remove_name         TEXT,
+    quantity            INTEGER NOT NULL DEFAULT 1,
+    review_flag         BOOLEAN DEFAULT 0,
+    notes               TEXT,
+    created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    planned_at          TIMESTAMP,   -- set on idea -> planned
+    resolved_at         TIMESTAMP,   -- set on -> applied / dropped
+    dest_location       TEXT,        -- Phase 6: where a removal's physical copy goes.
+                                     -- NULL = back to storage ("Box"), the original and
+                                     -- still-default behaviour. A dismantle feeding
+                                     -- another deck sets it to that deck's name, so the
+                                     -- lot moves source -> target with no stop in the box.
+    -- A row must add a card, remove one, or both — never neither.
+    CHECK(add_scryfall_id IS NOT NULL OR add_name IS NOT NULL
+          OR remove_scryfall_id IS NOT NULL)
+);
+
+-- Every query here filters by deck, usually by status too (the Shortlist
+-- tab splits on it, the Workbench selects 'planned' across all decks).
+CREATE INDEX idx_deck_changes_deck_status ON deck_changes(deck_id, status);
+
+-- ------------------------------------------------------------
+-- Commander Spellbook combo cache (see dashboard_lib/spellbook.py).
+--
+-- Combos detected in a deck by https://commanderspellbook.com's public
+-- find-my-combos API, cached here rather than fetched on page load: the
+-- dashboard is mostly-offline by design, and combo data only changes when
+-- the decklist changes or Spellbook adds a combo. Refreshed on demand from
+-- the Decks page (per deck) or Card Database -> Card Data (all decks),
+-- exactly like Scryfall card data is.
+--
+-- This does NOT replace decks.combos — that free-text field stays, for the
+-- things an external database can't know (which line you actually pilot
+-- toward, house rules, synergies nobody has submitted to Spellbook).
+-- Generated data and hand-written notes deliberately live apart.
+--
+-- `category` is 'included' (every card is in the deck right now) or
+-- 'almost' (exactly one card short — Spellbook's own definition, verified
+-- empirically; see spellbook.py). The four other response buckets
+-- Spellbook returns are not cached: they describe a deck with a different
+-- commander or an illegal color identity, so they aren't actionable here.
+--
+-- uses/requires/missing/produces are NEWLINE-separated lists, not
+-- comma-separated: card names routinely contain commas ("Vilis, Broker of
+-- Blood") but never newlines, so comma-joining would be ambiguous.
+-- `requires` holds generic TEMPLATE requirements (e.g. 'Permanent with
+-- "You don''t lose the game..."') which can't be matched to a card name.
+--
+-- No extra index: the primary key is already led by deck_id, so SQLite's
+-- automatic PK index serves every lookup here (all of them filter by deck).
+-- ------------------------------------------------------------
+CREATE TABLE deck_combos (
+    deck_id          INTEGER NOT NULL REFERENCES decks(deck_id),
+    combo_id         TEXT NOT NULL,     -- Spellbook variant id, e.g. "1561-2384"
+    category         TEXT NOT NULL CHECK(category IN ('included','almost')),
+    uses             TEXT,              -- newline-sep card names in the combo
+    requires         TEXT,              -- newline-sep template requirements
+    missing          TEXT,              -- newline-sep; empty for 'included'
+    produces         TEXT,              -- newline-sep results ("Infinite colored mana")
+    description      TEXT,              -- Spellbook's step-by-step combo text
+    prerequisites    TEXT,              -- notable + easy prerequisites, newline-sep
+    mana_needed      TEXT,              -- e.g. "{4}{B}{B}{B}"
+    popularity       INTEGER,           -- how many Spellbook decks run it; ranking signal
+    bracket_tag      TEXT,              -- Core/Powerful/Spicy/Oddball/Ruthless/Exhibition/Banned
+    commander_legal  BOOLEAN DEFAULT 1,
+    PRIMARY KEY (deck_id, combo_id, category)
+);
+
+-- One row per deck that has ever been synced, so the UI can tell "never
+-- fetched" apart from "fetched, and this deck genuinely has no combos" —
+-- a distinction deck_combos alone can't express (both are zero rows).
+CREATE TABLE deck_combo_sync (
+    deck_id        INTEGER PRIMARY KEY REFERENCES decks(deck_id),
+    fetched_at     TIMESTAMP,
+    identity       TEXT,                -- color identity Spellbook resolved, e.g. "BRG"
+    included_count INTEGER,
+    almost_count   INTEGER
 );
 
 -- ------------------------------------------------------------

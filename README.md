@@ -4,8 +4,10 @@ The foundation layer (SQLite schema + migration scripts converting your CSV
 exports into a real relational database) is complete and validated. The
 Streamlit dashboard is built out across seven pages — Collection, Decks &
 Maybeboard, Land & Color Probability, Deck Editor, Collection Editor, Card
-Database, and Commander Game Tracking (see "Running the dashboard" below).
-The print-to-PDF deck report is the remaining next phase.
+Database, Commander Game Tracking, Workbench, and Card Lookup (see
+"Running the dashboard" below). Printable sheets are built: a one-page deck
+report and, for a deck you're assembling, a pull sheet grouped by where
+each card is (see "Deck lifecycle" below).
 
 ## What's here
 
@@ -25,15 +27,17 @@ mtg_dashboard/
 │   ├── 4_Deck_Editor.py
 │   ├── 5_Collection_Editor.py
 │   ├── 6_Card_Database.py
-│   └── 7_Commander_Game_Tracking.py
+│   ├── 7_Commander_Game_Tracking.py
+│   ├── 8_Workbench.py
+│   └── 9_Card_Lookup.py
 ├── dashboard_lib/                     # shared library code behind the pages
 │   ├── formatting.py                 # card-type/color/URL/filename helpers (no Streamlit dep)
 │   ├── queries.py                    # read-only sqlite3+pandas queries (no Streamlit dep)
 │   ├── probability.py                # hypergeometric draw math (no Streamlit dep)
-│   ├── writes.py                     # card tags/deck/decklist/maybeboard/collection/game write layer (no Streamlit dep)
+│   ├── writes.py                     # card tags/deck/decklist/shortlist-and-history/collection/game write layer (no Streamlit dep)
 │   ├── card_resolver.py              # find-or-fetch a card for "add a new card" flows (no Streamlit dep)
 │   ├── moxfield_export.py            # Moxfield format — shared by the CLI script and the dashboard (no Streamlit dep)
-│   ├── deck_printout.py              # one-page Letter-size HTML deck sheet (Decks page → "🖨️ Printable deck sheet"; no Streamlit dep)
+│   ├── deck_printout.py              # one-page Letter-size HTML deck sheet, incl. the Turn 0 combo panel (Decks page → "🖨️ Printable deck sheet"; no Streamlit dep)
 │   ├── refresh.py                    # refresh Reserved List/Game Changer/legality/price by ID, then prune the collection (no Streamlit dep)
 │   ├── game_form.py                  # Commander Game Tracking form resolution/validation (no Streamlit dep, Prompt Pass 7)
 │   ├── db.py                         # cached connection + "no DB yet" guard
@@ -189,23 +193,25 @@ The dashboard currently covers:
   generates a Moxfield-compatible collection import CSV — Full Collection
   or Owned NOT in a deck — downloadable or saved to `moxfield_exports/`
   (see "Moxfield export" below).
-- **Decks** (still covers the maybeboard, via the Board toggle near the
-  bottom) — pick any deck (or arrive pre-selected from a home-page tile)
+- **Decks** (still covers the old maybeboard — now the deck's Shortlist — via
+  the Board toggle near the bottom) — pick any deck (or arrive pre-selected from a home-page tile)
   for a "Turn 0" summary: commander/partner, colors, bracket, interaction,
-  combos, tutors, win/loss record, deck value, and how many of its cards
+  tutors, win/loss record, deck value, and how many of its cards
   are physically sleeved in it; an optional custom cover-image thumbnail;
   win conditions/strengths/weaknesses; directly under that, optimized-mana
   summary, a Game Changers table showing your own category tag (drift vs.
   Scryfall highlighted), and a Reserved List table showing each card's
   current price; then themes, mana curve (grouped/colored W, U, B, R, G,
-  Multi-color, Colorless), type breakdown, strategy tag breakdown; then
+  Multi-color, Colorless), type breakdown, strategy tag breakdown; a
+  **Combos** panel backed by Commander Spellbook (see "Commander Spellbook
+  combos" below) with an "In this deck" / "One card away" split; then
   Top 10 Most Expensive (unit price plus what you actually paid for your
   copy, if logged) list (the Top 10 Saltiest card list that used to sit
   alongside it, backed by hand-maintained EDHREC salt data, was removed —
   see "EDHREC Salt Score" below); and an in-panel Moxfield export
   (copy-to-clipboard code box, or save a `.txt` file, mainboard-only or
-  with maybeboard). Below that, the same table/grid browser as Collection,
-  scoped to Mainboard, Maybeboard, or both at once.
+  with shortlist). Below that, the same table/grid browser as Collection,
+  scoped to Mainboard, Shortlist (ideas and staged swaps), or both at once.
 - **Land & Color Probability** — per-deck hypergeometric draw math: the
   probability of lands showing up in your opening 7, an estimate of
   hitting your land drop each of the first 5 turns (plus the
@@ -231,11 +237,11 @@ The dashboard currently covers:
   - **Deck Info** — rename a deck (with an option to also update any
     `collection.location` rows that matched the old name, so "sleeved in
     this deck" tracking stays correct), edit commander/partner/colors/
-    bracket/interaction/description/combos/tutors, upload a custom PNG as
+    bracket/interaction/description/tutors, upload a custom PNG as
     the deck's cover image, edit Win Conditions/Strengths/Weaknesses (up
     to 3 ranked entries each), create a brand new deck from scratch
     (sidebar), or **permanently delete a deck** — removes its
-    mainboard/maybeboard/card tags/themes, reassigns any collection
+    mainboard/shortlist and change history/card tags/themes, reassigns any collection
     Locations that matched its name back to the default "Box" storage
     location (Prompt Pass 13 — it used to clear them to blank instead),
     and detaches (rather than deletes) its rows in past games so the rest
@@ -248,32 +254,26 @@ The dashboard currently covers:
   - **Card Tags** — bulk-edit a whole deck's mainboard tags for any
     tag_type in one table (create new tag types on the fly, e.g. Rule 0
     categories). There's no deck-level tags feature — use the Deck Info
-    tab's description/combos/tutors fields for anything deck-wide instead.
-  - **Mainboard** / **Maybeboard** — add a card (by name, or an exact set +
-    collector number — resolves against your existing `cards` table first,
-    falling back to a live Scryfall lookup only for a card the dashboard
-    hasn't seen before), then bulk-edit quantities/review flags/notes or
-    remove cards in one table, same pattern as Card Tags. Adding a card to
-    the **Mainboard** that isn't tracked in your collection under that
-    exact printing yet automatically creates a starter collection lot for
-    it (quantity matching what you just added, Location set to the deck's
-    name) — Deck Building Auto-Add, so the collection can't silently drift
-    out of sync with what your decks actually run. Maybeboard adds don't
-    trigger this (a maybeboard card is still just under consideration).
-  - **Swap Manager** (Prompt Pass 13) — a deck-scoped tool for planning
-    and applying mainboard upgrades. Build a queue of "Add [Card A] ->
-    Replace [Card B]" entries (nothing is written to the database until
-    you confirm); each queued entry shows live inventory availability for
-    the card being added — whether you own it, whether a copy is sitting
-    free in storage, or whether every copy you own is already sleeved in
-    another one of your decks. Confirming the queue updates this deck's
-    mainboard for every swap AND reconciles `collection.location`: the
-    replaced card's lot(s) sleeved in this deck move back to "Box", and
-    the added card is sleeved here — reusing an available owned copy if
-    one exists, otherwise creating a brand-new starter lot (tagged
-    "Auto-added (swap manager)", same auditability convention as Deck
-    Building Auto-Add below) rather than ever pulling a physical copy out
-    of another deck's box.
+    tab's description/tutors fields for anything deck-wide instead.
+  - **Mainboard** — add a card (by name, or an exact set + collector
+    number — resolves against your existing `cards` table first, falling
+    back to a live Scryfall lookup only for a card the dashboard hasn't
+    seen before), then bulk-edit quantities or remove cards in one table,
+    same pattern as Card Tags. Adding a card that isn't tracked in your
+    collection under that exact printing yet automatically creates a
+    starter collection lot for it (quantity matching what you just added,
+    Location set to the deck's name) — Deck Building Auto-Add, so the
+    collection can't silently drift out of sync with what your decks
+    actually run. Shortlist adds don't trigger this (a shortlisted card is
+    still just under consideration). Every card added to or removed from
+    the list here is also recorded in the deck's change history.
+  - **Shortlist** (Workbench rework, Phase 1 — replaces the separate
+    Maybeboard and Swap Manager tabs) — one place for everything you're
+    considering for the deck, whether or not you own it. Add an idea,
+    optionally naming the card it would replace; tick **→ Plan** to stage
+    it as a swap (no retyping — the replacement it already names is
+    enough); then apply the planned swaps. See "Deck shortlist and swaps"
+    below for the full workflow.
 - **Collection Editor** — manage the physical collection directly, no CSV
   editing required. Not deck-scoped — there's no "choose a deck" sidebar
   here, unlike Deck Editor. Import a marketplace purchase-order CSV to add
@@ -308,7 +308,7 @@ The dashboard currently covers:
     price — without the wipe-and-rebuild `migrate.py` does. Afterward it
     also automatically prunes the collection: any lot with no assigned
     location, a quantity of 0/none, and not present in any deck's
-    mainboard or maybeboard is deleted. Same underlying logic (and same
+    mainboard or open shortlist is deleted. Same underlying logic (and same
     CLI-vs-dashboard sharing pattern) as Moxfield export — see
     `scripts/refresh_card_data.py` / `dashboard_lib/refresh.py`.
 - **Commander Game Tracking** — log a game with up to 4 seats, each either
@@ -327,24 +327,88 @@ The dashboard currently covers:
   name is new as of Phase 2 — games logged before it existed simply don't
   count toward anything scoped to player (by-player win rate, ELO,
   head-to-head).
+- **Workbench** — every deck's pending shortlist work in one place. The
+  Deck Editor's Shortlist tab answers "what's planned for *this* deck";
+  nothing answered "what's planned at all", so swaps staged across ten
+  decks sat invisible behind pick-a-deck. Sections, in order:
+  - **Conflicts** first, because they're the rows that *can't all*
+    succeed: two or more open changes wanting one card, between them
+    wanting more copies than are free in storage. Each shows who's
+    competing and what each would get; tick **Keep** on the deck that
+    wins and the rest are dropped (kept in History, restorable).
+  - **Planned changes, by deck** — the same table as the Shortlist tab,
+    with Apply checked / Apply all per deck. Quantity is read-only here
+    on purpose: changing how many cards a swap cuts wants the Shortlist
+    tab's mainboard context to decide safely.
+  - **Ideas needing a decision** — every idea flagged for review, across
+    all decks, so the decisions happen in one sitting.
+  - **Contention** (Phase 3) — demand vs. supply per card, counting
+    *mainboard* usage (`deck_cards`) as well as the shortlist queue, so a
+    card that's simply over-subscribed across decks — no idea or planned
+    row needed at all — still surfaces. "Drop from deck N" removes it from
+    that deck's real mainboard on the spot (logged to history like any
+    hand edit, via the existing `writes.remove_deck_card`).
+  - **Buy list** (Phase 3) — every open idea with zero owned copies,
+    grouped across decks so wanting one card on three shortlists prices it
+    once, plus one row per Contention shortfall. Exportable as plain text.
+  - **Reconcile** (Phase 4) — unlocated lots (editable, bulk-assignable,
+    priciest first) and each deck's list-vs-physical diff in both
+    directions: *to pull* (in the mainboard, no lot located to the deck) and
+    *to put away* (a lot located to the deck that the mainboard no longer
+    runs). "Sleeved here" splits a lot when only some copies move.
+
+  The availability column here is **queue-aware**: one allocation pass
+  over every open change claims your actual copies in a fixed order
+  (`queries.plan_availability`), so the second plan wanting your single
+  Blood Crypt is told which earlier change took it. The per-row check it
+  replaced answered each row against current database state and so told
+  both of them "available in storage" — true of either alone, impossible
+  together. The Shortlist tab calls the same function with one deck's
+  rows, so the two views can't disagree.
+- **Deck history, comparison and tile strips** (Phase 5):
+  - The **Decks** page has a collapsed **🕓 Changes** section: every applied
+    and dropped change for the deck, newest first (hand edits to the
+    mainboard included — they're logged as applied rows too), with the
+    deck's game record between changes. Games are matched by *day*, and a
+    game on the day of a change counts toward the older list, since a date
+    can't say which side of the change it fell on. Dropped changes never
+    split a period — rejecting a card doesn't change the deck.
+  - **📊 Compare all decks** sits at the top of the Decks page: one row per
+    deck (bracket, interaction, avg CMC, value, W-L, Game Changers, combos,
+    planned, ideas, build %), sortable by column header. *Combos* is blank,
+    not 0, for a deck never checked against Spellbook. Avg CMC excludes
+    lands (including MDFC land faces), like the mana curve.
+  - **Home tiles** carry a status line under each deck name —
+    `9 planned · 18 ideas · 1-2` — plus `N% built` while a deck isn't fully
+    sleeved, and a Workbench summary line sits above the grid. Both read
+    `queries.deck_comparison()`, so the tiles and the matrix can't disagree.
+- **Card Lookup** (Phase 3) — one card, everything about it: price/rarity
+  from a representative printing, every owned lot, every deck it's
+  mainboarded or shortlisted in, and its recent applied-change history.
+  Matched by `oracle_id` (`queries.card_lookup`) so two printings of one
+  card, or either face of an MDFC, roll up into a single answer — no other
+  page does this; the Collection/Decks/Workbench pages are each scoped to
+  one slice (lots, one deck, the open queue) rather than one card.
 
 Not yet in the dashboard: the Proxy flag on the Turn 0 panel (see "Open
-items" below), a discovery view of the *full* official Game Changers list
-(owned vs. not-yet-owned — the Game Changers tab only shows cards already
-in your database), and print-to-PDF — those remain later-phase work.
+items" below) and a discovery view of the *full* official Game Changers
+list (owned vs. not-yet-owned — the Game Changers tab only shows cards
+already in your database). Those remain later-phase work. (Printable
+output is no longer on this list: the deck sheet and the brew pull sheet
+both ship as self-contained HTML you print or save as PDF from a browser.)
 
 ### Migration is one-way: CSV → database, not the reverse
 
 `migrate.py` is meant for your **initial import only**. It always wipes
 and rebuilds `mtg_collection.db` from scratch from the CSVs — there's no
 attempt to preserve anything you've since edited in the dashboard (card
-tags, deck metadata, mainboard/maybeboard, themes, collection lots). If
+tags, deck metadata, mainboard/shortlist, themes, collection lots). If
 you re-run it after you've started managing things in the dashboard, it
 will silently overwrite those edits back to whatever the CSVs say, and
 it'll print a one-line warning to that effect right before it does.
 
 **The rule going forward: once you've moved your data over, don't run
-`migrate.py` again.** Manage decks, card tags, mainboard/maybeboard,
+`migrate.py` again.** Manage decks, card tags, mainboard/shortlist,
 themes, and the collection directly in the dashboard's Deck Editor and
 Collection Editor pages from then on — that's now the source of truth,
 and there's no CSV round-trip needed for any of it.
@@ -370,6 +434,11 @@ theme and category assignments show up as dropdown options immediately
 rather than starting from an empty list. Any future schema addition would
 follow the same pattern (see `_SCHEMA_UPGRADES` / `_SCHEMA_TABLE_UPGRADES`
 / `_SCHEMA_VIEW_UPGRADES` in `queries.py`).
+
+The same path added `deck_changes` — the unified idea → planned → applied
+change lifecycle described under "Deck change lifecycle" below — seeding it
+from your existing maybeboard and swap-queue rows on first connect, so
+nothing had to be retyped and no re-migration was needed.
 
 I tested every menu path against a mocked environment: normal exit,
 blocked options before migration, invalid input, and the missing-package
@@ -509,33 +578,185 @@ WHERE d.name = 'Vilis, Blood ATM';
 -- Ritual         | Dark Ritual
 ```
 
-## Deck Swap Manager
+## Deck shortlist and swaps
 
-Added in Prompt Pass 13 (Deck Editor page, **Swap Manager** tab, deck-scoped)
-to make upgrading a deck a deliberate, reviewable batch action instead of
-adding/removing cards one at a time and separately remembering to fix up
-`collection.location` afterward. Workflow:
+The Deck Editor's **Shortlist** tab (Workbench rework, Phase 1) replaced
+the separate Maybeboard tab and Swap Manager tab (Prompt Pass 13) — they
+were two halves of one workflow, a card you're considering and the swap
+that would bring it in, and moving between them meant retyping a card name.
+It's deck-scoped, backed by the `deck_changes` table (see "Deck change
+lifecycle" below), and has four parts:
 
-1. **Swap Builder** — pick a card currently in the deck's mainboard to
-   replace, and type the name of the card you want to add instead. Queue
-   as many of these `Add [Card A] -> Replace [Card B]` entries as you
-   want before touching the database.
-2. **Inventory Checking** — each queued entry shows a live read of
-   `collection` for the card being added: not owned at all, owned and
-   sitting free in storage, or owned but every copy is already sleeved
-   in one of your OTHER decks (named, so you know exactly where it is).
-3. **Execution Confirmation** — one button applies the whole queue.
-   `deck_cards` is updated for every swap, and `collection.location` is
-   reconciled for both sides: the replaced card's lot(s) sleeved in this
-   deck move back to `"Box"`, and the added card gets a lot sleeved in
-   this deck — an existing available copy if you have one, otherwise a
-   fresh starter lot (`source = "Auto-added (swap manager)"`, same
-   auditability convention as the Mainboard tab's Deck Building
-   Auto-Add). It will never silently move a card out of another deck's
-   box to satisfy this one.
+1. **Add an idea** — by name or exact set + collector number, resolved the
+   same way as the Mainboard tab (local `cards` table first, a live
+   Scryfall lookup for a card the dashboard hasn't seen). An idea can be a
+   card you don't own, and doesn't have to name what it would replace yet.
+2. **Ideas** — a table with each idea's availability (not owned / in
+   storage, and where / sleeved in this deck / only in another deck), its
+   price, the mainboard card it would replace (a dropdown), a Review flag
+   and notes. Tick **→ Plan** to stage it as a swap, or **Drop** to reject
+   it, then save. Planning needs a card in *Replaces*; if you haven't
+   picked one you're told, and the idea stays an idea.
+3. **Planned** — the staged swaps, each with live inventory availability
+   for the card being added and an editable quantity. Apply the ticked
+   ones, or all of them. Applying updates this deck's mainboard AND
+   reconciles `collection.location`: the replaced card's lot(s) sleeved in
+   this deck move back to "Box", and the added card is sleeved here —
+   reusing an available owned copy if one exists, otherwise creating a
+   brand-new starter lot (tagged "Auto-added (swap manager)") rather than
+   ever pulling a physical copy out of another deck's box. A planned swap
+   whose cut card has already left the mainboard is refused rather than
+   applied, since it would add a card without removing one. A warning
+   appears if applying everything would change the deck's card count: a
+   swap replaces the cut card's *whole row*, so cutting a basic that's in
+   the deck ×5 for one card removes all five — set Qty to match.
+4. **History** — what you applied, what you added or removed on the
+   Mainboard tab, and what you dropped, newest first. A dropped idea can be
+   restored.
 
-The queue itself only lives in the page session — nothing is written
-until you click "Confirm & apply all queued swaps".
+Dropping is deliberate: a rejected idea is kept rather than deleted, so a
+card that lost last month isn't re-evaluated from scratch.
+
+Nothing touches `deck_cards`/`collection` until you apply a planned swap,
+and the whole list lives in the database, so it survives closing the
+dashboard.
+
+One limit worth knowing: each row's availability is checked on its own, so
+if two planned swaps (in this deck or different ones) both want your single
+copy of a card, both will read "available". Checking them against each
+other is the next phase of the Workbench rework (see `IMPLEMENTATION_PLAN.md`).
+
+## Deck change lifecycle
+
+The maybeboard, the swap queue, and "what did I change in this deck last
+month" turned out to be the same row at three points in its life, so as of
+the Workbench rework they share one table, `deck_changes`:
+
+| Status | Means | Previously |
+|---|---|---|
+| `idea` | a card you're considering for a deck — owned or not, paired with a cut or not | the `maybeboard` table |
+| `planned` | paired with a card to cut and staged to execute; nothing written yet | the `deck_swap_queue` table |
+| `applied` | executed against `deck_cards`/`collection`; immutable history | *nothing — it was lost on apply* |
+| `dropped` | considered and rejected, kept on purpose so it isn't re-evaluated from scratch | *nothing — it was deleted* |
+
+This is what lets an idea become a staged swap in one click without
+retyping a card name, lets pending work across every deck be seen in one
+place, and gives each deck a real change history to line up against its
+win/loss record.
+
+The superseded `maybeboard` and `deck_swap_queue` tables are deliberately
+left in place and untouched as a frozen pre-rework backup, per the
+additive/non-destructive schema policy above — nothing reads or writes them
+any more. See `IMPLEMENTATION_PLAN.md` for the phase-by-phase plan and
+`schema.sql` for the full table comment.
+
+## Deck lifecycle: brewing and dismantling
+
+Two things the dashboard had no concept of until the Workbench rework's
+last phase: **building a deck whose cards are still elsewhere**, and
+**taking a deck apart to feed another one**. Before this, a brew was
+indistinguishable from a broken deck, and dismantling meant
+`delete_deck()` — which dumped every lot into "Box" and threw away the one
+thing you actually wanted to know: which cards should go straight into the
+next deck.
+
+### `decks.build_state` — the one bit that had to be stored
+
+| Value | Means |
+|---|---|
+| `NULL` | a normal built deck (every deck starts here, so nothing needed a backfill) |
+| `brewing` | the list exists, the cards are still elsewhere |
+| `dismantled` | taken apart — list and change history deliberately kept |
+
+Build **completion** is *not* stored. It's derived as "share of the
+non-basic mainboard physically located in this deck" (the same number
+Reconcile reports), so it self-corrects as you sleeve cards instead of
+rotting. But *intent* isn't derivable — a deck at 4% located could be a
+brew in progress or a built deck whose Locations were never recorded — so
+intent is the only part written down.
+
+This is **not** a revival of the `is_active`/`successor_deck_id` columns
+removed earlier in the rework. Those encoded a permanent active/retired
+axis; this is a transient build-workflow flag that "Mark as built" clears
+back to `NULL`.
+
+### Build Plan (Decks page)
+
+For any deck, and open by default for one marked `brewing`: where every
+non-basic copy the list needs would come from, in the order you'd work it.
+
+```
+🔨 Build Plan — 83 non-basics · 4% sleeved
+
+  ✅ Already sleeved here        3
+  📦 From the box               13     [printable pull sheet]
+  ❓ Owned, location unknown     54     → Reconcile
+  🃏 From another deck          13
+       Tuvasa, Prequel to Threevasa   6   ⚠ leaves Tuvasa 6 short
+       Wulfgar, the Pain-Harmonicon   3   ⚠ leaves Wulfgar 3 short
+       Marchesa Thatcher              2   ⚠ leaves Marchesa 2 short
+       Nalia, Bring your +1 to the Party  2   ⚠ leaves Nalia 2 short
+  🛒 Not owned                   0     → buy list
+```
+
+**Every needed copy lands in exactly one bucket.** That's the point, not a
+detail: a card with one lot in the box *and* one sleeved in another deck is
+one requirement, and counting it as both "in the box" and "in deck X"
+would double-count it. Copies are claimed from storage first, and only the
+genuine shortfall is attributed to a donor deck — so the buckets always
+sum to the deck's non-basic count.
+
+The **donor-impact warning** is the part that exists nowhere else: pulling
+six cards out of Tuvasa silently breaks Tuvasa, and the plan says so before
+you sleeve anything. It counts only copies the donor's own list actually
+runs — raiding a leftover lot sitting in a deck that no longer plays the
+card costs that deck nothing, and is reported as such.
+
+**Printable pull sheet** — a checklist grouped by *where each card is*
+rather than by card type, because you work the box in location order. One
+walk through storage collects everything. It's a sibling of the deck sheet
+(`build_pull_sheet_html` next to `build_deck_printout_html`), not a flag on
+it: different document, different ordering, different job. Unlike the deck
+sheet it flows across as many pages as it needs — clipping an 85-card list
+would defeat the entire purpose.
+
+### Dismantle (Deck Editor → Deck Info, beside Delete)
+
+```
+🔧 Dismantle this deck — Vilis, Blood ATM        74 cards sleeved · $431
+
+Feed into:  [ Gisa, Zombie Gardener ▾ ]    Everything else goes to: [ Box ▾ ]
+
+  ↔️ Direct transfer (9)   in both lists — move card-to-card, skip the box
+  📦 Back to Box (65)      on this deck's list only
+  🧹 Sleeved here, not on the list (0)   leftovers of past swaps
+  🔎 Gisa would still need (N)           → box / other decks / buy list
+
+  [📋 Stage as planned changes]  →  review and apply on the Workbench
+```
+
+**This needed no new tables.** A dismantle is a batch of `deck_changes`
+rows — removals against the source, adds against the target — and that one
+decision buys everything:
+
+- the allocator already refuses to promise one copy to two decks;
+- it stages as `planned` and previews before anything is written, exactly
+  like every other change;
+- it lands in **both** decks' change history automatically.
+
+A direct transfer moves the physical lot source → target in one step, with
+no stop in the box: the removal row carries a destination
+(`deck_changes.dest_location`), which is what the new column is for. Rows
+name the printing belonging to *their own* deck's list, since the sleeved
+lot's printing, the source list's and the target list's can all differ.
+
+Only copies the target can **use** transfer. A target already holding its
+copy needs nothing, so overlap is not the same as demand — feeding a
+fully-sleeved deck correctly transfers nothing.
+
+`delete_deck()` keeps its old meaning for a deck that's genuinely gone.
+Dismantling is the other path: **deleting destroys the record, dismantling
+keeps it**, so you can see what the deck was and rebuild it later.
 
 ## Collection Location — now a dropdown
 
@@ -577,8 +798,8 @@ neither can drift from the other.
 **In the dashboard** (Decks page → "📋 Export to Moxfield"
 expander, under the deck value line): shows the formatted list in a code
 box with a one-click copy-to-clipboard icon (hover the box, click the
-icon in the corner), plus a checkbox to include the maybeboard as a
-separate section, and a "💾 Save to file" button that writes a `.txt` file
+icon in the corner), plus a checkbox to include the shortlist (ideas and
+staged swaps) as a separate `// Maybeboard` section, and a "💾 Save to file" button that writes a `.txt` file
 into `moxfield_exports/` in the project folder (named after the deck,
 with " (with maybeboard)" appended when that box is checked, so the two
 variants never overwrite each other).
@@ -682,7 +903,7 @@ python sync_images.py --force      # re-download everything, even if cached
 ```
 
 **Pruning** removes cached files for any printing no longer referenced
-by your collection, any decklist, or any maybeboard — e.g. after you cut
+by your collection, any decklist, or any open shortlist row — e.g. after you cut
 a card from a deck and it isn't sitting anywhere else. It clears
 `local_image_path` back to NULL for those rows too (not the whole
 `cards` row — card metadata is cheap to keep; images are the heavy part),
@@ -724,13 +945,84 @@ dashboard from then on.
   official list
 - An in-tool editor for mana tags (currently CSV-only, unlike Game
   Changer categories which got one in this update)
-- HTML/CSS print-to-PDF one-pager, styled after your existing deck
-  summary PDFs
 - EDHREC comparison — on the backburner per your call. The narrower
   hand-entered salt-score field that used to live in the Editor (now Card
   Database) as a stand-in for this was itself retired — see "EDHREC Salt
   Score" below —
   so there's currently no EDHREC-sourced data anywhere in the dashboard.
+  (Commander Spellbook combo data, added since, is a *different* external
+  source — see below. It isn't EDHREC and doesn't carry salt scores.)
+
+## Commander Spellbook combos
+
+The Decks page's **Combos** panel and the Card Database's "Check all
+decks" button pull real combo data from
+[Commander Spellbook](https://commanderspellbook.com)'s public
+`find-my-combos` API — the one external combo database with a genuinely
+lightweight integration path (no API key, no auth, no bulk download, one
+small POST per deck, ~0.6–1.6s for a 100-card deck).
+
+Two things get cached per deck, in `deck_combos`:
+
+- **In this deck** — combos where every card is in the mainboard *right
+  now*, including ones you assembled without meaning to. Each one expands
+  to its cards, what it produces, the mana needed, its prerequisites,
+  Spellbook's step-by-step writeup, and a link to the full page.
+- **One card away** — combos exactly one card short. The main view here
+  groups by the *missing* card and ranks by how many combos each one
+  would complete, so it reads as a shopping list ("adding Phyrexian Altar
+  completes 2 combos") rather than a wall of near-misses. Because this
+  dashboard already tracks your collection, each missing card is flagged
+  ✅ own it (free) / 🔶 own it (sleeved in another deck) / — don't own.
+
+**This replaced the old hand-typed `decks.combos` field outright.** The
+Deck Editor's "Combos" text area and its Turn 0 grid display are gone —
+real combo detection instead of a manually-maintained guess at what
+combos existed. `decks.combos` itself is left in the schema untouched
+(same non-destructive treatment as `cards.edhrec_salt`), so any value
+entered before this change isn't lost, there's just no editor or display
+for it left in the dashboard.
+
+A "🔄 Check Spellbook" result names the actual combos it found right in
+its success message (`spellbook.combo_check_summary()`), e.g. *"4 combo(s)
+in the deck: Psychosis Crawler + Peer into the Abyss → Near-infinite
+lifeloss; … · 47 one card away"* — not just a bare count. That message is
+stashed in `st.session_state` across the rerun that refreshes the tabs
+below, so it's actually seen rather than flashed and lost. The Card
+Database's bulk "Check all decks" does the same per deck it found
+anything in.
+
+Notes and limits worth knowing:
+
+- **Zero combos found is a real answer, not a gap.** Spellbook only knows
+  combos someone has submitted, so an unusual deck can legitimately come
+  back empty.
+- **Cached, never fetched on page load**, so the dashboard stays usable
+  offline. The panel shows when it last checked and asks you to re-check
+  after a decklist change; stale rows are kept and labelled rather than
+  silently deleted, since the last known-good answer beats a blank panel.
+  `deck_combo_sync` exists so "never checked" and "checked, found nothing"
+  can't be confused — on their own both are zero rows.
+- **Combos can require a generic template** (e.g. 'Permanent with "You
+  don't lose the game due to having 0 or less life"') rather than a named
+  card. Those are shown as "Also needs" instead of being silently dropped,
+  so a combo listed as assembled may still hinge on one.
+- Each combo also carries Spellbook's own **bracket tag** (Core, Powerful,
+  Spicy, Oddball, Ruthless, Exhibition, Banned). It's shown as-is and
+  deliberately *not* mapped onto this project's own 0–5 `decks.bracket`
+  score — they're Spellbook's editorial categories for a combo, not WotC
+  bracket numbers for a deck, and inventing an equivalence would be making
+  up data. Still useful: a "Ruthless" combo in a deck you've marked
+  bracket 2 is worth a look before Rule 0.
+- Spellbook's per-combo `salt` field exists on the API but came back empty
+  for all 416 variants across every deck here, so it's ignored. Salt
+  tracking generally is still out of scope — see below.
+
+Implementation: `dashboard_lib/spellbook.py` (API client and pure
+normalizing helpers, no Streamlit, `requests` imported lazily so a machine
+without it can still load the page), `deck_combos` / `deck_combo_sync` in
+`schema.sql`, and `scripts/_test_spellbook_offline.py` for the offline
+test harness (canned copies of real API responses).
 
 ## EDHREC Salt Score (retired)
 

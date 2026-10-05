@@ -56,12 +56,13 @@ Use the sidebar to jump to:
   breakouts (color, type, rarity, set, location, Showcase/Borderless, and
   more), plus a one-click link out to each card's Scryfall page.
 - **🃏 Decks** — pick a deck (or click its tile below) to see its "Turn 0"
-  summary (colors, bracket, combos/tutors), win conditions/strengths/
+  summary (colors, bracket, tutors), win conditions/strengths/
   weaknesses, optimized mana, Game Changers, and Reserved List right
-  underneath, then themes, mana curve, type breakdown, strategy tags,
-  a Top 10 Most Expensive cards panel, and an optional custom cover
-  image, before browsing its mainboard and/or maybeboard the same
-  way as the Collection page.
+  underneath, then themes, mana curve, type breakdown, strategy tags, a
+  Commander Spellbook Combos panel (real combo detection — what's fully
+  assembled, and what's one card away), a Top 10 Most Expensive cards
+  panel, and an optional custom cover image, before browsing its
+  mainboard and/or shortlist the same way as the Collection page.
 - **🎲 Land & Color Probability** — for any deck: probability of drawing
   lands (or any specific card) in your opening 7, an estimate of hitting
   your land drop each of the first 5 turns, and the probability of having
@@ -72,7 +73,7 @@ Use the sidebar to jump to:
   Weaknesses), whole new decks, themes (from a master dropdown you manage),
   card tags (bulk-edit any tag_type across a whole deck's mainboard in one
   table — create new tag types on the fly, e.g. Rule 0 categories),
-  mainboard and maybeboard cards (including brand-new cards via a live
+  mainboard and shortlist cards (including brand-new cards via a live
   Scryfall lookup when needed), collection lots (with a real date picker
   for Date Acquired), Game Changer categories with art and owned/in-deck
   counters, and a "Card Data" refresh that also prunes stale collection
@@ -90,8 +91,23 @@ st.divider()
 st.subheader("Your decks")
 st.caption("Click a deck to jump straight to its page.")
 
-decks_with_covers = loaders.load_decks_with_covers(conn)
-cv.render_deck_landing_grid(decks_with_covers)
+comparison = loaders.load_deck_comparison(conn)
 
-if summary["maybeboard_rows"]:
-    st.caption(f"{summary['maybeboard_rows']} maybeboard rows across all decks.")
+# Workbench summary above the grid (Phase 5): pending work visible from the
+# landing page rather than three clicks deep. Counts come from the same
+# comparison rows as the tile strips, so the two can't disagree.
+planned_total = int(comparison["planned"].sum())
+decks_with_plans = int((comparison["planned"] > 0).sum())
+unlocated = loaders.load_unlocated_lot_summary(conn)
+workbench_bits = []
+if planned_total:
+    workbench_bits.append(f"**{planned_total}** planned change(s) across {decks_with_plans} deck(s)")
+if summary["idea_rows"]:
+    workbench_bits.append(f"**{summary['idea_rows']}** shortlist idea(s)")
+if unlocated["lots"]:
+    workbench_bits.append(f"**{unlocated['lots']}** lot(s) with no location")
+if workbench_bits:
+    st.markdown("🔧 " + " · ".join(workbench_bits) + " — open **Workbench** in the sidebar.")
+
+decks_with_covers = loaders.load_decks_with_covers(conn)
+cv.render_deck_landing_grid(decks_with_covers, status_df=comparison)

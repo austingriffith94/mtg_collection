@@ -17,6 +17,13 @@ deletion, and a new Deck Swap/Upgrade Manager tool):
      queue at once (writes.execute_swap()) — updates the deck's
      mainboard AND reconciles collection.location for both cards.
 
+NOTE: both features have since been reworked, and the page-level checks at
+the bottom of this file were repointed rather than deleted — the Swap
+Manager tab became the Shortlist tab (Workbench rework Phase 1), and its
+per-row inventory check became the queue-aware allocator
+(queries.plan_availability, Phase 2). The guarantees asserted here are the
+original ones; only the code providing them moved.
+
 Covers:
   A. schema.sql — a fresh database already has location_catalog (empty,
      no seed rows needed on a from-scratch schema-only build).
@@ -317,12 +324,26 @@ def main():
     with open(deck_editor_path, encoding="utf-8") as f:
         deck_editor_text = f.read()
 
-    check("Deck Editor's tab tuple now includes tab_swap", "tab_swap" in deck_editor_text and "st.tabs(" in deck_editor_text)
-    check("Deck Editor's tab labels now include 'Swap Manager'", '"Swap Manager"' in deck_editor_text)
-    check("Deck Editor has a 'with tab_swap:' block", "with tab_swap:" in deck_editor_text)
-    check("Swap Manager tab checks live inventory via card_inventory_status", "q.card_inventory_status(conn" in deck_editor_text)
-    check("Swap Manager tab executes queued swaps via writes.execute_swap", "writes.execute_swap(" in deck_editor_text)
-    check("Swap Manager tab persists its queue via writes.list_swap_queue/queue_swap (not just session state)", "writes.list_swap_queue(conn" in deck_editor_text and "writes.queue_swap(" in deck_editor_text)
+    # The Swap Manager tab was folded into the Shortlist tab by the Workbench
+    # rework (Phase 1): an idea is promoted to a staged swap in place instead
+    # of being retyped into a second tab. These checks keep the original
+    # guarantees — live inventory checking, execution through the swap path,
+    # and a queue persisted in the database rather than in session state —
+    # pointed at the code that now provides them.
+    check("Deck Editor's tab tuple includes tab_shortlist", "tab_shortlist" in deck_editor_text and "st.tabs(" in deck_editor_text)
+    check("Deck Editor's tab labels include 'Shortlist' and no longer 'Swap Manager'",
+          '"Shortlist"' in deck_editor_text and '"Swap Manager"' not in deck_editor_text)
+    check("Deck Editor has a 'with tab_shortlist:' block", "with tab_shortlist:" in deck_editor_text)
+    # Phase 2 moved this off the per-row card_inventory_status() and onto the
+    # queue-aware allocator — same guarantee (live inventory, reflecting
+    # writes made earlier in the same page run), stronger answer: it can see
+    # that two of the deck's own shortlist rows want the same physical copy.
+    check("Shortlist tab checks live inventory via the queue-aware allocator",
+          "q.plan_availability(conn" in deck_editor_text
+          and "q.open_changes_dataframe(conn" in deck_editor_text)
+    check("Shortlist tab executes staged swaps via writes.apply_changes (-> execute_swap)", "writes.apply_changes(" in deck_editor_text)
+    check("the staged queue is persisted via deck_changes (writes.promote_change), not just session state",
+          "writes.promote_change(" in deck_editor_text and "writes.queue_swap(" not in deck_editor_text)
     check(
         "Deck Info's delete-deck checkbox now references writes.DEFAULT_LOCATION rather than 'clear'",
         "writes.DEFAULT_LOCATION" in deck_editor_text,

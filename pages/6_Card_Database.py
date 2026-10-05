@@ -3,6 +3,12 @@ Card Database page — whole-database, card-name-keyed reference data that
 isn't scoped to any one deck: Game Changer categories, optimized-mana
 tags, and a Scryfall data refresh across every card already tracked.
 
+The Card Data tab also carries the bulk "Check all decks" Commander
+Spellbook combo refresh — the per-deck version lives on the Decks page,
+where the results are actually read; this is the "I've been editing
+decklists, re-check everything" path, sitting next to the Scryfall refresh
+for the same reason. See dashboard_lib/spellbook.py.
+
 Split out from the original combined Editor page — deck-level editing
 lives in Deck Editor, and collection/inventory management lives in
 Collection Editor.
@@ -21,6 +27,7 @@ import pandas as pd
 import streamlit as st
 
 from dashboard_lib import db, loaders, writes, refresh, card_resolver, formatting as fmt, queries as q
+from dashboard_lib import spellbook
 from dashboard_lib import card_view as cv
 
 cv.setup_page("Card Database · MTG Dashboard", "🗄️")
@@ -276,7 +283,7 @@ with tab_carddata:
         "to run anytime, as often as you like. Needs network access and the `requests` "
         "package. Afterward, it also automatically prunes your collection: any lot with no "
         "assigned location, a quantity of 0/none, and not present in any deck's mainboard or "
-        "maybeboard is deleted."
+        "shortlist is deleted."
     )
     total_cards = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
     st.caption(f"{total_cards} card(s) in your database.")
@@ -306,11 +313,93 @@ with tab_carddata:
         if summary["pruned_count"]:
             st.info(
                 f"Pruned {summary['pruned_count']} collection lot(s) with no location, no "
-                f"quantity, and not in any deck's mainboard/maybeboard: "
+                f"quantity, and not in any deck's mainboard/shortlist: "
                 + ", ".join(summary["pruned_cards"])
             )
         else:
             st.caption("Nothing to prune from the collection this time.")
+
+    st.divider()
+
+    # ------------------------------------------------------------------
+    # Commander Spellbook combos — all decks at once. The per-deck version
+    # of this lives on the Decks page (where the results are actually
+    # read); this is the "I've been editing decklists, re-check everything"
+    # path, alongside the Scryfall refresh above for the same reason.
+    # ------------------------------------------------------------------
+    st.markdown("**Refresh Commander Spellbook combos**")
+    st.caption(
+        "Re-checks every deck against commanderspellbook.com's public combo database: which "
+        "combos are fully assembled in each deck right now, and which are exactly one card "
+        "short. Results are cached in the database and shown per deck on the Decks page — "
+        "this only refreshes them in bulk. One request per deck, and it never touches your "
+        "decklists or tags. Needs network access and the `requests` package."
+    )
+
+    combo_sync_df = loaders.load_deck_combo_sync_all(conn)
+    never_synced = int(combo_sync_df["fetched_at"].isna().sum())
+    st.caption(
+        f"{len(combo_sync_df)} deck(s) tracked · {never_synced} never checked."
+        if never_synced
+        else f"All {len(combo_sync_df)} tracked deck(s) have been checked at least once."
+    )
+
+    if not card_resolver.scryfall_available():
+        # Same `requests` dependency as the Scryfall refresh above, so the
+        # same availability check answers for both.
+        st.warning("The `requests` package isn't installed — run `pip install requests` to enable this.")
+    elif st.button("🔗 Check all decks", key="carddb_refresh_combos_btn"):
+        combo_progress = st.progress(0.0)
+        combo_status = st.empty()
+
+        def _combo_progress(done, total, deck_name):
+            combo_progress.progress(done / total if total else 1.0)
+            combo_status.caption(f"{done}/{total} — {deck_name}")
+
+        deck_inputs = [
+            (row["deck_id"], row["name"], row["commander"], row["partner"],
+             q.deck_combo_card_rows(conn, row["deck_id"]))
+            for _, row in loaders.load_decks_df(conn).iterrows()
+        ]
+
+        combo_totals = {"included": 0, "almost": 0}
+        combo_failures = []
+        # Per-deck findings (what was actually found, not just a count) —
+        # shown below the overview table so "Check all decks" answers
+        # "what are they", the same as the Decks page's own per-deck check.
+        combo_findings = []
+        for deck_id, deck_name, result, error in spellbook.fetch_many(
+            deck_inputs, progress_callback=_combo_progress
+        ):
+            if error:
+                combo_failures.append(f"{deck_name} ({error})")
+                continue
+            n_inc, n_alm = writes.save_deck_combos(conn, deck_id, result)
+            combo_totals["included"] += n_inc
+            combo_totals["almost"] += n_alm
+            if n_inc:
+                combo_findings.append((deck_name, spellbook.combo_list_text(result["included"], limit=6)))
+
+        loaders.invalidate_combo_caches()
+        st.success(
+            f"Checked {len(deck_inputs)} deck(s): {combo_totals['included']} assembled combo(s) "
+            f"found, {combo_totals['almost']} one card away."
+        )
+        if combo_findings:
+            st.markdown("**Combos found:**")
+            for deck_name, line in combo_findings:
+                st.markdown(f"- **{deck_name}** — {line}")
+        if combo_failures:
+            st.warning("Couldn't check: " + "; ".join(combo_failures))
+
+    combo_overview = combo_sync_df.rename(columns={
+        "deck_name": "Deck", "fetched_at": "Last checked",
+        "included_count": "Combos in deck", "almost_count": "One card away",
+    })
+    st.dataframe(
+        combo_overview[["Deck", "Last checked", "Combos in deck", "One card away"]],
+        hide_index=True, use_container_width=True,
+    )
 
     # The "Salt Scores (EDHREC)" sub-editor that used to live here was
     # removed dashboard-wide in Prompt Pass 5: no lightweight public API

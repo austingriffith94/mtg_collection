@@ -90,7 +90,7 @@ def download_missing(conn, session, force=False, verbose=True):
 
 def prune_orphaned(conn, verbose=True):
     """Delete cached image files for printings no longer referenced by
-    your collection, any decklist, or any maybeboard — but leave the
+    your collection, any decklist, or any open shortlist row — but leave the
     `cards` metadata row alone (cheap to keep, just clears local_image_path
     so a future re-reference would re-download rather than serve a stale
     dangling path)."""
@@ -98,7 +98,9 @@ def prune_orphaned(conn, verbose=True):
         sid for (sid,) in conn.execute(
             """SELECT scryfall_id FROM collection
                UNION SELECT scryfall_id FROM deck_cards
-               UNION SELECT scryfall_id FROM maybeboard"""
+               UNION SELECT add_scryfall_id FROM deck_changes
+                     WHERE status IN ('idea', 'planned')
+                       AND add_scryfall_id IS NOT NULL"""
         )
     )
 
@@ -121,7 +123,7 @@ def prune_orphaned(conn, verbose=True):
     conn.commit()
     if verbose:
         print(f"  Pruned {removed} orphaned image(s) "
-              f"(no longer in collection, any decklist, or any maybeboard).")
+              f"(no longer in collection, any decklist, or any open shortlist row).")
     return removed
 
 

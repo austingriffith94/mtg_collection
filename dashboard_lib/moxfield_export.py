@@ -8,7 +8,7 @@ Shared by scripts/export_moxfield.py (CLI) and the Decks
 page's in-dashboard export section, so both always produce identical
 output. No Streamlit dependency — plain sqlite3, unit-testable directly.
 
-Uses the exact printing stored in deck_cards/maybeboard, which migrate.py
+Uses the exact printing stored in deck_cards/deck_changes, which migrate.py
 (and the Editor page's card_resolver) prefer your OWNED collection
 printing for wherever you have a copy — that's what makes the pasted-in
 art match what you actually have.
@@ -48,18 +48,22 @@ def export_deck_lines(conn, deck_id, include_maybeboard=False):
         lines.append(format_line(name, set_code, collector_number, qty))
 
     if include_maybeboard:
+        # Moxfield's own name for the section stays "Maybeboard"; what goes
+        # in it is the deck's open shortlist (ideas and staged swaps). A row
+        # not yet linked to a printing has no set/number to write, so it
+        # can't be exported and is skipped.
         mb_rows = conn.execute(
-            """SELECT c.name, c.set_code, c.collector_number
-               FROM maybeboard mb JOIN cards c ON c.scryfall_id = mb.scryfall_id
-               WHERE mb.deck_id = ?
+            """SELECT c.name, c.set_code, c.collector_number, dc.quantity
+               FROM deck_changes dc JOIN cards c ON c.scryfall_id = dc.add_scryfall_id
+               WHERE dc.deck_id = ? AND dc.status IN ('idea', 'planned')
                ORDER BY c.name""",
             (deck_id,),
         ).fetchall()
         if mb_rows:
             lines.append("")
             lines.append("// Maybeboard")
-            for name, set_code, collector_number in mb_rows:
-                lines.append(format_line(name, set_code, collector_number, 1))
+            for name, set_code, collector_number, qty in mb_rows:
+                lines.append(format_line(name, set_code, collector_number, qty))
 
     return lines
 
@@ -165,6 +169,23 @@ def collection_csv_row(row, timestamp):
         "Proxy": "FALSE",
         "Purchase Price": f"{paid:.2f}" if paid is not None else "",
     }
+
+
+def export_buy_list_text(buy_list_result):
+    """Plain-text rendering of queries.buy_list()'s result, matching the
+    project's existing plain-text-export convention (export_deck_text()
+    above) rather than inventing a CSV format for a list that's really
+    just a shopping list to paste somewhere. One line per card, a blank
+    line, then the running total."""
+    lines = []
+    for row in buy_list_result["rows"]:
+        price = f"${row['price']:.2f} ea" if row["price"] is not None else "price unknown"
+        why = "unowned idea" if row["reason"] == "idea" else "contention shortfall"
+        decks = ", ".join(row["decks"])
+        lines.append(f"{row['quantity']}x {row['card']} — {price} ({why}; {decks})")
+    lines.append("")
+    lines.append(f"Total: ${buy_list_result['total']:,.2f}")
+    return "\n".join(lines)
 
 
 def export_collection_csv_text(conn, only_not_in_deck=False, now=None):

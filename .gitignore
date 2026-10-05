@@ -4,3 +4,17 @@
 # Python bytecode caches
 __pycache__/
 .pytest_cache/
+
+# App/debug log (dashboard_lib/log.py) — rotating local log file, not
+# meant to be versioned.
+/logs/
+
+# SQLite databases — these churn on every run (card data refreshes,
+# combo checks, collection edits) and aren't meant to be versioned.
+# mtg_collection.db is rebuilt from scratch via migrate.py + your CSVs;
+# _test_mtg_collection.db is the offline test harnesses' scratch copy.
+*.db
+
+# Editor settings
+.vscode/
+

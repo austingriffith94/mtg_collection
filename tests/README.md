@@ -29,6 +29,10 @@ plus pytest (`pip install -r requirements-dev.txt`):
 - `test_deck_history.py` — change history, the deck comparison matrix and
   tile status strips (Phase 5): timeline ordering, the games-between-changes
   day rule, dropped rows not starting a period, and per-deck counts.
+- `test_advisor.py` — advisor grounding layer (see
+  `dashboard_lib/advisor/README.md`): role heuristics, candidate pool, guard
+  validation and the retry loop, offline via `FakeProvider`. The `test_eval_*`
+  cases are the starter eval set (fabricated name, misquote, wrong role...).
 - `test_deck_lifecycle.py` — brewing and dismantling (Phase 6): the
   sourcing plan's buckets being mutually exclusive and summing to the
   non-basic count, donor-deck impact (including the leftover lot that costs

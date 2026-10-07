@@ -46,6 +46,22 @@ def front_face(name):
     return (name or "").split(" // ")[0].strip().casefold()
 
 
+def lookup_card_text(conn, name):
+    """(name, type_line, oracle_text) for the database's representative
+    printing of `name`, matching the front face so MDFCs resolve regardless
+    of which face is named (the DB stores them as "Front // Back"). None if
+    nothing matches. Shared by tools.get_card (chat mode) and
+    guard.check_chat_answer so both resolve a bare name the same way."""
+    name = (name or "").strip()
+    if not name:
+        return None
+    row = conn.execute(
+        "SELECT name, type_line, oracle_text FROM cards "
+        "WHERE name = ? COLLATE NOCASE OR name LIKE ? COLLATE NOCASE LIMIT 1",
+        (name, f"{name} // %")).fetchone()
+    return dict(zip(("name", "type_line", "oracle_text"), row)) if row else None
+
+
 def mechanical_roles(oracle_text, type_line):
     """Set of ROLES the card plausibly fills, from its own text. Lands are
     only 'land' (a mana-producing land is not counted as ramp)."""

@@ -14,11 +14,18 @@ Checks, per suggested card (cut or add):
 Items with violations are kept but marked unverified; they are never
 dropped, so the UI can show them collapsed under a badge. `retry_prompt`
 turns the violations into the single corrective follow-up message.
+
+`check_chat_answer` is the chat-mode (Phase 3) counterpart: no cut/add
+structure, no pre-filtered pool — name, quote and roles are all checked
+against the whole database via context.lookup_card_text instead of one
+deck's pool. Same caveat as analysis mode's role check: `mechanical_roles`
+is a regex heuristic, not a card database, so an occasional disagreement is
+our miss, not the model's.
 """
 import re
 from dataclasses import dataclass, field
 
-from .context import front_face
+from .context import front_face, lookup_card_text, mechanical_roles
 
 
 def _norm(text):
@@ -103,6 +110,60 @@ def check_analysis(parsed, ctx):
         weaknesses=[str(s) for s in parsed.get("weaknesses") or []],
         items=items,
     )
+
+
+@dataclass
+class CheckedMention:
+    data: dict                    # {"card": ..., "evidence_quote": ...}
+    violations: list = field(default_factory=list)
+
+    @property
+    def verified(self):
+        return not self.violations
+
+
+@dataclass
+class CheckedChat:
+    answer: str
+    mentions: list                # CheckedMention
+
+    @property
+    def violations(self):
+        return [(m, v) for m in self.mentions for v in m.violations]
+
+
+def _check_mention(conn, item):
+    """Violations for one restated chat mention: the name must resolve to a
+    real card (front-face match, any card in the DB — chat has no
+    pre-filtered pool); a given quote must be a real substring of its oracle
+    text (empty quote allowed: not every mention is a textual claim); any
+    claimed roles must be in context.mechanical_roles(oracle_text, type_line)
+    for that card."""
+    name = item.get("card")
+    found = lookup_card_text(conn, name) if name else None
+    if found is None:
+        return [f"unknown card '{name}' (no matching printing in the database)"]
+    v = []
+    quote = _norm(item.get("evidence_quote"))
+    if quote and quote not in _norm(found["oracle_text"]):
+        v.append(f"quote not found in {found['name']}'s oracle text: \"{item.get('evidence_quote')}\"")
+    claimed = set(item.get("roles") or [])
+    actual_roles = mechanical_roles(found["oracle_text"], found["type_line"])
+    extra = claimed - actual_roles
+    if extra:
+        actual = ", ".join(sorted(actual_roles)) or "none"
+        v.append(f"claims role(s) {', '.join(sorted(extra))} for {found['name']}, "
+                 f"but its text computes to: {actual}")
+    return v
+
+
+def check_chat_answer(conn, parsed):
+    """Validate a chat turn's restated mentions against the database. Never
+    raises on bad model output, same as check_analysis."""
+    parsed = parsed if isinstance(parsed, dict) else {}
+    mentions = [CheckedMention(raw, _check_mention(conn, raw))
+                for raw in parsed.get("mentions") or [] if isinstance(raw, dict)]
+    return CheckedChat(str(parsed.get("answer") or ""), mentions)
 
 
 def retry_prompt(checked):

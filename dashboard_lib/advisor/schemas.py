@@ -53,3 +53,34 @@ def analysis_schema(ctx):
         },
         "required": ["summary", "strengths", "weaknesses", "cuts", "adds"],
     }
+
+
+def chat_answer_schema():
+    """JSON schema for restating a finished chat turn (chat.RESTATE_PROMPT)
+    so its card mentions can be checked. No enum on `card`: chat is
+    open-ended, so there is no small pre-filtered pool to constrain names
+    the way analysis_schema does. guard.check_chat_answer instead checks
+    each mention's name, quote and claimed roles against the whole database
+    (context.lookup_card_text, context.mechanical_roles)."""
+    return {
+        "type": "OBJECT",
+        "properties": {
+            "answer": _s(description="Your last answer to the user, unchanged."),
+            "mentions": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "card": _s(),
+                        "evidence_quote": _s(description="Exact substring of that card's oracle text you "
+                                                           "quoted or relied on; empty string if none."),
+                        "roles": {"type": "ARRAY", "items": _s(enum=_CLAIMABLE_ROLES),
+                                  "description": "Roles (ramp/draw/removal/...) you claimed this card fills; "
+                                                  "empty if you made no such claim."},
+                    },
+                    "required": ["card", "evidence_quote", "roles"],
+                },
+            },
+        },
+        "required": ["answer", "mentions"],
+    }

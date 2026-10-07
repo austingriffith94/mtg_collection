@@ -1,9 +1,10 @@
 # Advisor Plan — Grounded MTG Chat with a Swappable Model
 
-Status: **Phase 0 and Phase 1 done** (analysis mode on Gemini, page
-`pages/10_Advisor.py`; see `dashboard_lib/advisor/README.md`). Phase 2 (Ollama)
-is skipped for now; Phase 3 (chat mode) is next. The Gemini adapter already
-lives in `providers.py`, so Phase 5 only adds a sibling adapter.
+Status: **Phase 0, 1 and 3 done** (analysis mode and tool-based chat, both on
+Gemini; page `pages/10_Advisor.py`; see `dashboard_lib/advisor/README.md`).
+Phase 2 (Ollama) is skipped for now. Phase 4 (more skills) is next. The
+Gemini adapter already lives in `providers.py` and now implements tool
+calling, so Phase 5 only adds a sibling adapter.
 
 ## Goal
 
@@ -135,9 +136,31 @@ adapter and the toggle. Install Ollama with ROCm support and pull the model
 a 14B model on CPU will be slow). Compare Gemini vs local on the same deck
 using the starter eval set.
 
-**Phase 3 — Chat mode.** Tools, name flagging, conversation loop. Evaluate
-tool-call reliability per provider and gate chat mode where a provider is too
-flaky.
+**Phase 3 — Chat mode. Done (2026-10-06).** `tools.py` (get_card, search_cards,
+list_decks, get_deck — read-only, dispatch never raises), `chat.py` (tool-call
+loop, iteration + token budget, then one schema-only restate call so
+`guard.check_chat_answer` can check every mention against the whole
+database — chat has no small enough pool to enum names against up front, so
+the check happens after the fact). Gemini's adapter now implements function
+calling (`capabilities.tools = True`); the page gates the Chat tab off for
+any provider that doesn't declare it. Tool-call reliability hasn't been
+evaluated against a second provider yet (Gemini is still the only live
+one) — revisit the gate once Ollama or Anthropic lands.
+
+Two issues surfaced by a live call against the real API, not caught by the
+offline `FakeProvider` tests, both fixed before calling the phase done:
+- `gemini-3.5-flash` is a thinking model and 400s on the turn after a tool
+  call if the prior `functionCall` part is replayed without the
+  `thoughtSignature` Gemini attached to it. `providers.py` now round-trips
+  `id`/`thoughtSignature` on each tool call unmodified through chat.py's
+  loop (opaque to everything except the Gemini adapter).
+- The restate step (ask the model to list every card it mentioned, so
+  `guard.check_chat_answer` can check it) is not reliable: one live answer
+  quoted Sol Ring's oracle text directly but came back with an empty
+  `mentions` list. `chat.py` now also folds in every card actually resolved
+  via a successful `get_card` call this turn, regardless of what the
+  restate step reports — that lookup is already ground truth from the
+  database, so it needs no model cooperation to trust.
 
 **Phase 4 — More skills + eval set.** Upgrade finder, build-from-collection,
 cut advisor (can use game-tracking win rates). Grow the starter eval set to

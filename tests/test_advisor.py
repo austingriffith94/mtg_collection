@@ -1,5 +1,6 @@
-"""Advisor grounding layer (Phase 1): context building, guard validation and
-the analysis loop, all offline with a scripted FakeProvider.
+"""Advisor grounding layer: context building, guard validation and the
+analysis loop (Phase 1), plus tools and the chat loop (Phase 3) — all
+offline with a scripted FakeProvider.
 
 The five EVAL_* tests are the starter eval set: each feeds the guard a
 specific kind of bad model output (fabricated name, misquoted text, wrong
@@ -7,8 +8,8 @@ mechanical role, bad `replaces`, commander cut) and checks it is flagged.
 """
 import pytest
 
-from dashboard_lib.advisor import analysis, context, guard
-from dashboard_lib.advisor.providers import FakeProvider, ProviderError
+from dashboard_lib.advisor import analysis, chat, context, guard, tools
+from dashboard_lib.advisor.providers import Capabilities, FakeProvider, ProviderError, ProviderResponse
 from dashboard_lib.advisor.schemas import analysis_schema
 
 SOL_RING = "{T}: Add {C}{C}."
@@ -172,3 +173,197 @@ def test_provider_error_and_bad_json_are_reported(deck):
     # A failing retry falls back to the first (flagged) answer.
     res = analysis.run_analysis(FakeProvider([_answer(adds=[_add(card="X")])]), deck)
     assert res.retried and res.checked.violations
+
+
+# ---- context.lookup_card_text (Phase 3: shared name resolution) -----------
+
+def test_lookup_card_text_matches_front_face(conn, add_card):
+    add_card("Front // Back")
+    conn.execute("UPDATE cards SET oracle_text='Do a thing.', type_line='Creature' "
+                 "WHERE name='Front // Back'")
+    conn.commit()
+    found = context.lookup_card_text(conn, "front")
+    assert found == {"name": "Front // Back", "type_line": "Creature", "oracle_text": "Do a thing."}
+    assert context.lookup_card_text(conn, "Nope") is None
+    assert context.lookup_card_text(conn, "") is None
+
+
+# ---- tools (Phase 3: chat-mode tools) --------------------------------------
+
+def test_get_card_known_and_unknown(conn, deck):
+    r = tools.get_card(conn, "Sol Ring")
+    assert r["oracle_text"] == SOL_RING and r["mainboard_in"] == ["Test"]
+    assert "No card named" in tools.get_card(conn, "Nonexistent Card")["error"]
+
+
+def test_get_card_matches_front_face(conn, add_card):
+    sid = add_card("Front // Back")
+    conn.execute("UPDATE cards SET oracle_text='Do a thing.' WHERE scryfall_id=?", (sid,))
+    conn.commit()
+    r = tools.get_card(conn, "Front")
+    assert r["name"] == "Front // Back" and r["oracle_text"] == "Do a thing."
+
+
+def test_search_cards(conn, deck):
+    assert "Sol Ring" in tools.search_cards(conn, "sol")["names"]
+    assert tools.search_cards(conn, "")["names"] == []
+
+
+def test_list_decks(conn, deck):
+    names = {d["name"] for d in tools.list_decks(conn)["decks"]}
+    assert names == {"Test", "Other"}
+
+
+def test_get_deck_by_name_and_id(conn, deck):
+    by_name, by_id = tools.get_deck(conn, "Test"), tools.get_deck(conn, "1")
+    assert by_name == by_id
+    assert by_name["commander"] == "Rakdos"
+    assert {c["name"] for c in by_name["cards"]} == \
+        {"Rakdos", "Sol Ring", "Arcane Signet", "Lightning Bolt", "Blood Crypt"}
+    assert "Read the Bones" in by_name["owned_not_in_deck"]
+    assert "error" in tools.get_deck(conn, "Nope")
+
+
+def test_dispatch_unknown_tool_and_bad_args(conn, deck):
+    assert "unknown tool" in tools.dispatch(conn, "delete_everything", {})["error"]
+    assert "bad arguments" in tools.dispatch(conn, "get_card", {"bogus": 1})["error"]
+
+
+# ---- guard.check_chat_answer (Phase 3: open-ended name/quote/role check) -
+
+def test_check_chat_answer_valid_and_fabricated(deck, conn):
+    ok = guard.check_chat_answer(
+        conn, {"answer": "a", "mentions": [{"card": "Sol Ring", "evidence_quote": "Add {C}{C}", "roles": ["ramp"]}]})
+    assert not ok.violations
+    bad = guard.check_chat_answer(
+        conn, {"answer": "a", "mentions": [{"card": "Made Up Card", "evidence_quote": ""}]})
+    assert "unknown card" in bad.violations[0][1]
+
+
+def test_check_chat_answer_empty_quote_allowed(deck, conn):
+    ok = guard.check_chat_answer(
+        conn, {"answer": "a", "mentions": [{"card": "Sol Ring", "evidence_quote": ""}]})
+    assert not ok.violations
+
+
+def test_check_chat_answer_wrong_role_is_flagged(deck, conn):
+    bad = guard.check_chat_answer(
+        conn, {"answer": "a", "mentions": [{"card": "Sol Ring", "evidence_quote": "", "roles": ["draw"]}]})
+    assert "claims role(s) draw" in bad.violations[0][1]
+
+
+def test_check_chat_answer_malformed_is_safe(conn):
+    assert guard.check_chat_answer(conn, {"mentions": "oops"}).mentions == []
+    assert guard.check_chat_answer(conn, None).mentions == []
+
+
+# ---- providers: Gemini message translation (pure, no network) ------------
+
+def test_to_gemini_contents_translates_tool_calls_and_results():
+    from dashboard_lib.advisor.providers import _to_gemini_contents
+    msgs = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "tool_calls": [{"name": "get_card", "args": {"name": "Sol Ring"}}]},
+        {"role": "tool", "name": "get_card", "content": {"oracle_text": "Add {C}{C}."}},
+        {"role": "assistant", "content": "Sol Ring taps for colorless mana."},
+    ]
+    contents = _to_gemini_contents(msgs)
+    assert contents[0] == {"role": "user", "parts": [{"text": "hi"}]}
+    assert contents[1]["role"] == "model"
+    assert contents[1]["parts"][0]["functionCall"] == {"name": "get_card", "args": {"name": "Sol Ring"}}
+    assert contents[2] == {"role": "function", "parts": [
+        {"functionResponse": {"name": "get_card", "response": {"oracle_text": "Add {C}{C}."}}}]}
+    assert contents[3] == {"role": "model", "parts": [{"text": "Sol Ring taps for colorless mana."}]}
+
+
+# ---- chat mode (Phase 3: tool loop + mention check) -----------------------
+
+TOOLS_CAP = Capabilities(tools=True)
+
+
+def _tool_call(name, args):
+    return ProviderResponse(text="", tool_calls=[{"name": name, "args": args}], input_tokens=10, output_tokens=5)
+
+
+def test_chat_gated_off_for_tool_incapable_provider(conn):
+    p = FakeProvider([], capabilities=Capabilities(tools=False))
+    res = chat.run_chat_turn(p, conn, [{"role": "user", "content": "hi"}])
+    assert "does not support tool calling" in res.error
+    assert p.calls == []
+
+
+def test_chat_calls_tool_then_answers_and_checks_mention(conn, deck):
+    p = FakeProvider([
+        _tool_call("get_card", {"name": "Sol Ring"}),
+        ProviderResponse(text="Sol Ring taps for {C}{C}.", input_tokens=20, output_tokens=15),
+        {"answer": "Sol Ring taps for {C}{C}.",
+         "mentions": [{"card": "Sol Ring", "evidence_quote": "Add {C}{C}"}]},
+    ], capabilities=TOOLS_CAP)
+    res = chat.run_chat_turn(p, conn, [{"role": "user", "content": "What does Sol Ring do?"}])
+    assert not res.error
+    assert res.tool_log == [{"name": "get_card", "args": {"name": "Sol Ring"},
+                              "result": tools.get_card(conn, "Sol Ring")}]
+    assert res.checked.answer == "Sol Ring taps for {C}{C}."
+    assert res.checked.mentions[0].verified
+    assert (res.input_tokens, res.output_tokens) == (10 + 20 + 100, 5 + 15 + 50)
+
+
+def test_chat_mention_violation_is_flagged_not_hidden(conn, deck):
+    p = FakeProvider([
+        ProviderResponse(text="Rhystic Study draws you cards.", input_tokens=5, output_tokens=5),
+        {"answer": "Rhystic Study draws you cards.",
+         "mentions": [{"card": "Rhystic Study", "evidence_quote": ""}]},
+    ], capabilities=TOOLS_CAP)
+    res = chat.run_chat_turn(p, conn, [{"role": "user", "content": "tell me about rhystic study"}])
+    assert not res.checked.mentions[0].verified
+    assert "unknown card" in res.checked.mentions[0].violations[0]
+    assert res.checked.answer == "Rhystic Study draws you cards."      # shown, not hidden
+
+
+def test_chat_gives_up_after_max_tool_iterations(conn):
+    replies = [_tool_call("list_decks", {}) for _ in range(chat.MAX_TOOL_ITERATIONS)]
+    p = FakeProvider(replies, capabilities=TOOLS_CAP)
+    res = chat.run_chat_turn(p, conn, [{"role": "user", "content": "hi"}])
+    assert "Gave up after" in res.error
+    assert len(p.calls) == chat.MAX_TOOL_ITERATIONS
+
+
+def test_chat_provider_error_is_reported(conn):
+    res = chat.run_chat_turn(FakeProvider([], capabilities=TOOLS_CAP), conn, [{"role": "user", "content": "hi"}])
+    assert "no more scripted" in res.error
+
+
+def test_chat_tool_resolved_card_is_verified_even_if_restate_omits_it(conn, deck):
+    """A live check against the real API showed the model can quote a card
+    plainly in its answer but return an empty `mentions` list on restate;
+    the card it actually looked up must still come back verified."""
+    p = FakeProvider([
+        _tool_call("get_card", {"name": "Sol Ring"}),
+        ProviderResponse(text="Sol Ring taps for {C}{C}.", input_tokens=20, output_tokens=15),
+        {"answer": "Sol Ring taps for {C}{C}.", "mentions": []},
+    ], capabilities=TOOLS_CAP)
+    res = chat.run_chat_turn(p, conn, [{"role": "user", "content": "What does Sol Ring do?"}])
+    assert not res.error
+    assert len(res.checked.mentions) == 1
+    assert res.checked.mentions[0].data == {"card": "Sol Ring", "evidence_quote": "", "roles": []}
+    assert res.checked.mentions[0].verified
+
+
+def test_chat_restate_failure_still_shows_answer(conn):
+    p = FakeProvider([
+        ProviderResponse(text="Just chatting, no cards.", input_tokens=5, output_tokens=5),
+        "not json",
+    ], capabilities=TOOLS_CAP)
+    res = chat.run_chat_turn(p, conn, [{"role": "user", "content": "hi"}])
+    assert not res.error
+    assert res.checked.answer == "Just chatting, no cards." and res.checked.mentions == []
+
+
+def test_chat_failed_get_card_lookup_is_not_added_as_a_mention(conn):
+    p = FakeProvider([
+        _tool_call("get_card", {"name": "Not A Real Card"}),
+        ProviderResponse(text="No such card.", input_tokens=5, output_tokens=5),
+        {"answer": "No such card.", "mentions": []},
+    ], capabilities=TOOLS_CAP)
+    res = chat.run_chat_turn(p, conn, [{"role": "user", "content": "tell me about Not A Real Card"}])
+    assert res.checked.mentions == []      # the lookup errored, so nothing was "resolved"

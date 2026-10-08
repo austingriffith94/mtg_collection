@@ -2,9 +2,13 @@
 analysis loop (Phase 1), plus tools and the chat loop (Phase 3) — all
 offline with a scripted FakeProvider.
 
-The five EVAL_* tests are the starter eval set: each feeds the guard a
-specific kind of bad model output (fabricated name, misquoted text, wrong
-mechanical role, bad `replaces`, commander cut) and checks it is flagged.
+The test_eval_* tests are the eval set (Phase 1: 5 cases; Phase 4: grown to
+~10): each feeds the guard a specific kind of bad model output (fabricated
+name, misquoted text, wrong mechanical role, bad `replaces`, commander cut)
+on both cuts and adds, plus a multi-violation answer, and checks it is
+flagged. They are guard-level, not a live-model comparison harness; running
+the same questions against a real provider and scoring the result is still
+manual.
 """
 import pytest
 
@@ -130,6 +134,43 @@ def test_eval_replaces_unknown_or_commander(deck):
 def test_eval_commander_cut_is_flagged(deck):
     checked = guard.check_analysis(_answer([_cut(card="Rakdos", quote="Haste", roles=())]), deck)
     assert "unknown card 'Rakdos'" in checked.violations[0][1]
+
+
+def test_eval_fabricated_name_in_cut(deck):
+    """Fabricated names are checked on cuts too, not just adds."""
+    checked = guard.check_analysis(_answer([_cut(card="Rhystic Study")]), deck)
+    assert "unknown card 'Rhystic Study'" in checked.violations[0][1]
+
+
+def test_eval_misquoted_text_in_add(deck):
+    """Misquoting is checked on adds too, not just cuts."""
+    checked = guard.check_analysis(_answer(adds=[_add(quote="Draw three cards")]), deck)
+    assert "quote not found" in checked.violations[0][1]
+
+
+def test_eval_wrong_mechanical_role_in_add(deck):
+    """Wrong role claims are checked on adds too, not just cuts."""
+    checked = guard.check_analysis(_answer(adds=[_add(roles=("draw", "removal"))]), deck)
+    assert "claims role(s) removal" in checked.violations[0][1]
+
+
+def test_eval_multiple_violations_in_one_answer_are_all_reported(deck):
+    """A single answer with more than one bad item surfaces every violation,
+    not just the first — the UI needs all of them to mark each item."""
+    checked = guard.check_analysis(
+        _answer([_cut(card="Made Up Card")], [_add(card="Also Made Up")]), deck)
+    assert len(checked.violations) == 2
+    assert not any(i.verified for i in checked.items)
+
+
+def test_all_skills_load_and_restate_the_guardrail_rules():
+    """Every registered skill (including the Phase 4 additions) is a
+    non-empty prompt that still states the core guardrails, so a new skill
+    file can't silently drop them."""
+    for name in analysis.SKILLS:
+        text = analysis.load_skill(name)
+        assert text.strip()
+        assert "evidence_quote" in text and "commander cannot be cut" in text
 
 
 def test_quote_matching_ignores_case_whitespace_and_curly_quotes(deck):

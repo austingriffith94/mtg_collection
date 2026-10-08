@@ -4,7 +4,7 @@ Grounded MTG deck analysis and chat with a swappable model. Design and
 phasing live in [ADVISOR_PLAN.md](../../ADVISOR_PLAN.md); this file
 describes what is built.
 
-**Status: Phase 3** — analysis mode (deck doctor) and tool-based chat, both
+**Status: Phase 4** — analysis mode (four skills) and tool-based chat, both
 on Gemini. No Ollama/Anthropic adapters yet. Read-only: nothing here writes
 to the database.
 
@@ -50,8 +50,15 @@ Gated off per provider: the page only offers the Chat tab when
 | `providers.py` | `GeminiProvider` (REST, `x-goog-api-key` header, backoff on 429/5xx, function calling), `FakeProvider` for tests. |
 | `analysis.py` | Analysis mode: prompt building and the validate/retry loop. |
 | `chat.py` | Chat mode: the tool-call loop, its iteration/token budget, and the restate-then-check step. |
-| `skills/deck_doctor.md` | System prompt for the deck-doctor analysis skill. Add skills here and register in `analysis.SKILLS`. |
+| `skills/deck_doctor.md` | System prompt: general health check, up to 5 cuts and 5 adds. |
+| `skills/upgrade_finder.md` | System prompt: assumes the deck's plan is fine, looks only for single-for-single power upgrades. |
+| `skills/build_from_collection.md` | System prompt: maximise the deck using only owned cards, weighted toward thin computed roles and available (not sleeved) candidates. |
+| `skills/cut_advisor.md` | System prompt: cuts-first, reads `games_played`/`win_rate` from COMPUTED FACTS (falls back to curve/roles below 5 games), adds are optional. |
 | `skills/chat.md` | System prompt for chat mode (tool-first, no card facts from memory, read-only). |
+
+All four analysis skills share `analysis.run_analysis`, `schemas.analysis_schema`
+and `guard.check_analysis` — a skill is just a system prompt registered in
+`analysis.SKILLS`; add a new one there without touching the grounding code.
 
 Page: `pages/10_Advisor.py` (Analysis and Chat tabs). Tests:
 `tests/test_advisor.py` (offline, includes the starter eval cases).

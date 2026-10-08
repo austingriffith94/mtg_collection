@@ -1,10 +1,11 @@
 # Advisor Plan — Grounded MTG Chat with a Swappable Model
 
-Status: **Phase 0, 1 and 3 done** (analysis mode and tool-based chat, both on
-Gemini; page `pages/10_Advisor.py`; see `dashboard_lib/advisor/README.md`).
-Phase 2 (Ollama) is skipped for now. Phase 4 (more skills) is next. The
-Gemini adapter already lives in `providers.py` and now implements tool
-calling, so Phase 5 only adds a sibling adapter.
+Status: **Phase 0, 1, 3 and 4 done** (analysis mode with four skills, and
+tool-based chat, both on Gemini; page `pages/10_Advisor.py`; see
+`dashboard_lib/advisor/README.md`). Phase 2 (Ollama) is skipped for now.
+Phase 5 (Claude adapter) is next; the Gemini adapter already lives in
+`providers.py` and implements tool calling, so Phase 5 only adds a sibling
+adapter.
 
 ## Goal
 
@@ -162,10 +163,22 @@ offline `FakeProvider` tests, both fixed before calling the phase done:
   restate step reports — that lookup is already ground truth from the
   database, so it needs no model cooperation to trust.
 
-**Phase 4 — More skills + eval set.** Upgrade finder, build-from-collection,
-cut advisor (can use game-tracking win rates). Grow the starter eval set to
-~10 fixed questions that score each provider on fabricated names, misquoted
-text and wrong mechanical claims.
+**Phase 4 — More skills + eval set. Done (2026-10-06).** Three new skills —
+`upgrade_finder.md` (assume the deck's plan is fine, find single-for-single
+power upgrades only), `build_from_collection.md` (maximise using only owned
+cards, weighted toward thin computed roles), `cut_advisor.md` (cuts-first,
+reads `games_played`/`win_rate` already in COMPUTED FACTS, falls back to
+curve/roles when there are fewer than 5 recorded games) — registered in
+`analysis.SKILLS`. No code changes needed beyond that: every skill is just a
+system prompt sharing `run_analysis`, `analysis_schema` and
+`check_analysis`, and the page's skill picker already lists whatever is in
+`analysis.SKILLS`. Grew the guard-level eval set from 5 to 11 cases (fabricated
+name / misquoted text / wrong role on both cuts and adds, bad `replaces`,
+commander-cut, multi-violation-in-one-answer, and a check that every skill
+file still states the core guardrail rules). This eval set checks the guard,
+not model quality — scoring live providers against the same questions is
+still a manual comparison, deferred to Phase 5 when there is a second
+provider to compare against.
 
 **Phase 5 — Claude adapter.** Add the key, enable Sonnet and Opus, add prompt
 caching, compare cost against Gemini. Re-verify model IDs and pricing at

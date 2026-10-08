@@ -15,7 +15,12 @@ from .providers import ProviderError
 from .schemas import analysis_schema
 
 SKILLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills")
-SKILLS = {"Deck doctor": "deck_doctor.md"}
+SKILLS = {
+    "Deck doctor": "deck_doctor.md",
+    "Upgrade finder": "upgrade_finder.md",
+    "Build from collection": "build_from_collection.md",
+    "Cut advisor": "cut_advisor.md",
+}
 
 
 @dataclass

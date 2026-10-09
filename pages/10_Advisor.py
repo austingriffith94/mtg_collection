@@ -1,6 +1,6 @@
 """
-Advisor page — grounded deck analysis and chat (Phase 3: analysis mode plus
-tool-based chat, both on Gemini).
+Advisor page — grounded deck analysis and chat, with a provider toggle in
+the sidebar (Gemini, or Claude Sonnet/Opus as of Phase 5).
 
 Analysis mode: pick a deck and a skill; the app builds a database-grounded
 context, asks the model for schema-constrained suggestions, and validates
@@ -26,7 +26,15 @@ from dashboard_lib import db, loaders
 from dashboard_lib import card_view as cv
 from dashboard_lib.advisor import analysis, chat
 from dashboard_lib.advisor.context import build_deck_context
-from dashboard_lib.advisor.providers import GeminiProvider, ProviderError
+from dashboard_lib.advisor.providers import ANTHROPIC_MODELS, AnthropicProvider, GeminiProvider, ProviderError
+
+PROVIDER_CHOICES = ["Gemini"] + list(ANTHROPIC_MODELS)
+
+
+def make_provider(choice):
+    if choice == "Gemini":
+        return GeminiProvider()
+    return AnthropicProvider(model=ANTHROPIC_MODELS[choice])
 
 
 def show_analysis_item(i):
@@ -155,12 +163,13 @@ if decks.empty:
     st.info("No decks yet.")
     st.stop()
 
+provider_choice = st.sidebar.selectbox("Model", PROVIDER_CHOICES)
 try:
-    provider = GeminiProvider()
+    provider = make_provider(provider_choice)
 except ProviderError as e:
     st.error(str(e))
     st.stop()
-st.sidebar.caption(f"Model: Gemini · {provider.model}")
+st.sidebar.caption(f"Model: {provider_choice} · {provider.model}")
 
 tab_analysis, tab_chat = st.tabs(["Analysis", "Chat"])
 with tab_analysis:

@@ -1,11 +1,9 @@
 # Advisor Plan — Grounded MTG Chat with a Swappable Model
 
-Status: **Phase 0, 1, 3 and 4 done** (analysis mode with four skills, and
-tool-based chat, both on Gemini; page `pages/10_Advisor.py`; see
-`dashboard_lib/advisor/README.md`). Phase 2 (Ollama) is skipped for now.
-Phase 5 (Claude adapter) is next; the Gemini adapter already lives in
-`providers.py` and implements tool calling, so Phase 5 only adds a sibling
-adapter.
+Status: **Phase 0, 1, 3, 4 and 5 done** (analysis mode with four skills, and
+tool-based chat, on Gemini or Anthropic via a sidebar toggle; page
+`pages/10_Advisor.py`; see `dashboard_lib/advisor/README.md`). Phase 2
+(Ollama) is skipped for now.
 
 ## Goal
 
@@ -180,9 +178,24 @@ not model quality — scoring live providers against the same questions is
 still a manual comparison, deferred to Phase 5 when there is a second
 provider to compare against.
 
-**Phase 5 — Claude adapter.** Add the key, enable Sonnet and Opus, add prompt
-caching, compare cost against Gemini. Re-verify model IDs and pricing at
-that point; they change.
+**Phase 5 — Claude adapter. Done (2026-10-08).** `AnthropicProvider` in
+`providers.py`: Messages API, `x-api-key`/`anthropic-version` headers,
+backoff on 429/5xx like Gemini. Claude has no native structured-output
+parameter, so a `schema` request is sent as a single forced tool call named
+"respond" whose `input_schema` is the schema translated out of Gemini's
+dialect (`_gemini_schema_to_json_schema`); its `input` becomes
+`ProviderResponse.parsed`. Regular tools (`TOOL_SPECS`) translate the same
+way and go through Claude's normal `tool_use`/`tool_result` protocol
+(`_to_anthropic_messages`), with the `id` Claude assigns each `tool_use`
+block round-tripped via `call_id` exactly like Gemini's `thoughtSignature`.
+Prompt caching (`cache_control: {"type": "ephemeral"}`) marks the system
+prompt and the last tool definition, since both repeat unchanged across a
+session. The page sidebar gained a model toggle (`providers.ANTHROPIC_MODELS`:
+Claude Sonnet 5.5 / Opus 5.5) alongside Gemini. Cost-vs-Gemini comparison is
+manual — the sidebar's existing token counter is enough to eyeball it; no
+pricing table is hardcoded since prices and model IDs change. Key goes in
+`.streamlit/secrets.toml` under `[advisor] anthropic_api_key` (or
+`ANTHROPIC_API_KEY`), same pattern as Gemini's key.
 
 **Later / optional.** Suggested changes written to `deck_changes` as `idea`
 entries with explicit confirmation. A notes table for user preferences.

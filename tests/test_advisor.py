@@ -317,6 +317,46 @@ def test_to_gemini_contents_translates_tool_calls_and_results():
     assert contents[3] == {"role": "model", "parts": [{"text": "Sol Ring taps for colorless mana."}]}
 
 
+# ---- providers: Anthropic message/schema translation (Phase 5, no network) -
+
+def test_to_anthropic_messages_translates_tool_calls_and_results():
+    from dashboard_lib.advisor.providers import _to_anthropic_messages
+    msgs = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "tool_calls": [{"id": "call_1", "name": "get_card", "args": {"name": "Sol Ring"}}]},
+        {"role": "tool", "name": "get_card", "content": {"oracle_text": "Add {C}{C}."}, "call_id": "call_1"},
+        {"role": "assistant", "content": "Sol Ring taps for colorless mana."},
+    ]
+    out = _to_anthropic_messages(msgs)
+    assert out[0] == {"role": "user", "content": "hi"}
+    assert out[1] == {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "call_1", "name": "get_card", "input": {"name": "Sol Ring"}}]}
+    assert out[2] == {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "call_1", "content": '{"oracle_text": "Add {C}{C}."}'}]}
+    assert out[3] == {"role": "assistant", "content": "Sol Ring taps for colorless mana."}
+
+
+def test_gemini_schema_to_json_schema_translates_types_and_enums():
+    from dashboard_lib.advisor.providers import _gemini_schema_to_json_schema
+    schema = {"type": "OBJECT", "properties": {
+        "card": {"type": "STRING", "enum": ["Sol Ring"]},
+        "roles": {"type": "ARRAY", "items": {"type": "STRING"}},
+    }, "required": ["card"]}
+    out = _gemini_schema_to_json_schema(schema)
+    assert out == {"type": "object", "properties": {
+        "card": {"type": "string", "enum": ["Sol Ring"]},
+        "roles": {"type": "array", "items": {"type": "string"}},
+    }, "required": ["card"]}
+
+
+def test_anthropic_provider_requires_a_key(monkeypatch):
+    from dashboard_lib.advisor.providers import AnthropicProvider, ProviderError
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr("dashboard_lib.advisor.providers.load_advisor_secrets", lambda path=None: {})
+    with pytest.raises(ProviderError):
+        AnthropicProvider()
+
+
 # ---- chat mode (Phase 3: tool loop + mention check) -----------------------
 
 TOOLS_CAP = Capabilities(tools=True)

@@ -1,9 +1,9 @@
 """
 Provider layer: one interface, so the grounding code never knows which model
-answered. Phase 1 ships Gemini plus a scripted FakeProvider for tests; the
-Ollama and Anthropic adapters arrive in later phases behind the same
-`chat(messages, system=None, schema=None, tools=None) -> ProviderResponse`
-call.
+answered. Phase 1 shipped Gemini, Phase 5 adds Anthropic (Claude Sonnet /
+Opus), plus a scripted FakeProvider for tests. Ollama (Phase 2) is skipped
+for now (user decision; see ADVISOR_PLAN.md). All adapters share one call:
+`chat(messages, system=None, schema=None, tools=None) -> ProviderResponse`.
 
 Messages are normally [{"role": "user"|"assistant", "content": str}]. Chat
 mode (Phase 3) adds two more shapes: an assistant turn with `tool_calls`
@@ -29,6 +29,9 @@ import requests
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SECRETS_PATH = os.path.join(BASE_DIR, ".streamlit", "secrets.toml")
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
+DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5-5"
+ANTHROPIC_VERSION = "2023-06-01"
+ANTHROPIC_MODELS = {"Claude Sonnet 5.5": "claude-sonnet-5-5", "Claude Opus 5.5": "claude-opus-5-5"}
 
 
 class ProviderError(RuntimeError):
@@ -173,6 +176,132 @@ class GeminiProvider:
                     break
             time.sleep(2 ** attempt)
         raise ProviderError(f"Gemini ({self.model}) failed: {err}")
+
+
+def _gemini_schema_to_json_schema(node):
+    """Translate one node of tools.py/schemas.py's Gemini-dialect schema
+    (uppercase type names: OBJECT/STRING/ARRAY) into standard JSON Schema
+    (lowercase), recursively, for Claude's `input_schema`."""
+    if not isinstance(node, dict):
+        return node
+    out = {}
+    for k, v in node.items():
+        if k == "type" and isinstance(v, str):
+            out[k] = v.lower()
+        elif k == "properties" and isinstance(v, dict):
+            out[k] = {pk: _gemini_schema_to_json_schema(pv) for pk, pv in v.items()}
+        elif k == "items":
+            out[k] = _gemini_schema_to_json_schema(v)
+        else:
+            out[k] = v
+    return out
+
+
+def _to_anthropic_messages(messages):
+    """Generic messages -> Anthropic's `messages` (system is passed
+    separately, as a `system` top-level field). Anthropic has no separate
+    "tool" role: a `tool` turn becomes a `tool_result` content block inside
+    a user turn, keyed by `tool_use_id`. An assistant `tool_calls` turn
+    becomes `tool_use` content blocks. `call_id` round-trips the `id`
+    Anthropic always assigns its `tool_use` blocks, which it requires back
+    verbatim on the matching `tool_result` (not produced by FakeProvider,
+    which never goes through this adapter)."""
+    out = []
+    for m in messages:
+        role = m["role"]
+        if role == "tool":
+            content = m["content"]
+            text = content if isinstance(content, str) else json.dumps(content)
+            out.append({"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": m.get("call_id"), "content": text}]})
+        elif role == "assistant" and m.get("tool_calls"):
+            blocks = [{"type": "tool_use", "id": c.get("id"), "name": c["name"], "input": c.get("args") or {}}
+                      for c in m["tool_calls"]]
+            out.append({"role": "assistant", "content": blocks})
+        else:
+            out.append({"role": "assistant" if role == "assistant" else "user",
+                        "content": m.get("content", "")})
+    return out
+
+
+class AnthropicProvider:
+    """Anthropic Claude over the Messages API (ADVISOR_PLAN.md Phase 5).
+    Claude has no native "respond with this JSON schema" parameter the way
+    Gemini does, so a `schema` request is sent as a single tool named
+    "respond" with `tool_choice` forced to it; the tool's `input` becomes
+    `ProviderResponse.parsed`. Prompt caching marks the system prompt and
+    the tool definitions (the parts of the request that repeat unchanged
+    turn to turn) with `cache_control`."""
+    name = "anthropic"
+    capabilities = Capabilities(tools=True, structured_output=True)
+    URL = "https://api.anthropic.com/v1/messages"
+
+    def __init__(self, api_key=None, model=None, timeout=120, attempts=3):
+        secrets = load_advisor_secrets() if not (api_key and model) else {}
+        self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY") or secrets.get("anthropic_api_key")
+        self.model = model or secrets.get("anthropic_model") or DEFAULT_ANTHROPIC_MODEL
+        if not self.api_key:
+            raise ProviderError("No Anthropic key: set [advisor] anthropic_api_key in .streamlit/secrets.toml")
+        self.timeout, self.attempts = timeout, attempts
+
+    def chat(self, messages, system=None, schema=None, tools=None):
+        body = {"model": self.model, "max_tokens": 4096, "messages": _to_anthropic_messages(messages)}
+        if system:
+            # A cached system prompt is re-sent unchanged on every call in a
+            # session (same skill or chat.md), so it is the cheapest, safest
+            # thing to mark cacheable.
+            body["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+
+        claude_tools = [
+            {"name": t["name"], "description": t.get("description", ""),
+             "input_schema": _gemini_schema_to_json_schema(
+                 t.get("parameters") or {"type": "OBJECT", "properties": {}})}
+            for t in (tools or [])]
+        if schema:
+            claude_tools.append({"name": "respond", "description": "Submit your structured answer.",
+                                  "input_schema": _gemini_schema_to_json_schema(schema)})
+            body["tool_choice"] = {"type": "tool", "name": "respond"}
+        if claude_tools:
+            claude_tools[-1] = {**claude_tools[-1], "cache_control": {"type": "ephemeral"}}
+            body["tools"] = claude_tools
+
+        data = self._post(body)
+        blocks = data.get("content") or []
+        text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+        parsed = None
+        calls = []
+        for b in blocks:
+            if b.get("type") != "tool_use":
+                continue
+            if schema and b.get("name") == "respond":
+                parsed = b.get("input")
+            else:
+                calls.append({"id": b.get("id"), "name": b["name"], "args": b.get("input") or {}})
+        if not text and parsed is None and not calls:
+            raise ProviderError(f"Claude returned no content: {str(data)[:300]}")
+        u = data.get("usage", {})
+        return ProviderResponse(
+            text=text or (json.dumps(parsed) if parsed is not None else ""), parsed=parsed, tool_calls=calls,
+            input_tokens=u.get("input_tokens", 0), output_tokens=u.get("output_tokens", 0))
+
+    def _post(self, body):
+        """POST with backoff on rate limits / 5xx; a bad key or model fails fast."""
+        err = ""
+        for attempt in range(self.attempts):
+            try:
+                r = requests.post(self.URL, json=body, timeout=self.timeout, headers={
+                    "x-api-key": self.api_key, "anthropic-version": ANTHROPIC_VERSION,
+                    "content-type": "application/json"})
+            except requests.RequestException as e:
+                err = str(e)
+            else:
+                if r.ok:
+                    return r.json()
+                err = f"HTTP {r.status_code}: {r.text[:300]}"
+                if r.status_code not in (429, 500, 502, 503, 504):
+                    break
+            time.sleep(2 ** attempt)
+        raise ProviderError(f"Claude ({self.model}) failed: {err}")
 
 
 @dataclass

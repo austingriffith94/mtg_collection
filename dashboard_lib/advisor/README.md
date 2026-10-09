@@ -4,9 +4,10 @@ Grounded MTG deck analysis and chat with a swappable model. Design and
 phasing live in [ADVISOR_PLAN.md](../../ADVISOR_PLAN.md); this file
 describes what is built.
 
-**Status: Phase 4** — analysis mode (four skills) and tool-based chat, both
-on Gemini. No Ollama/Anthropic adapters yet. Read-only: nothing here writes
-to the database.
+**Status: Phase 5** — analysis mode (four skills) and tool-based chat, on
+Gemini or Anthropic (Claude Sonnet/Opus), switchable from the page sidebar.
+No Ollama adapter (skipped, see ADVISOR_PLAN.md). Read-only: nothing here
+writes to the database.
 
 ## How it works
 
@@ -44,10 +45,10 @@ Gated off per provider: the page only offers the Chat tab when
 | File | Role |
 |---|---|
 | `context.py` | `build_deck_context`: deck cards, stats (curve, pips, role tallies), candidate pool. `mechanical_roles` = oracle-text heuristics for ramp/draw/removal/wipe/tutor/counter. `lookup_card_text`: front-face name resolution shared by `tools.get_card` and `guard.check_chat_answer`. |
-| `schemas.py` | `analysis_schema(ctx)`: enum-constrained to one deck's pool. `chat_answer_schema()`: no enum, for the chat restate step. Both in Gemini's response-schema dialect. |
+| `schemas.py` | `analysis_schema(ctx)`: enum-constrained to one deck's pool. `chat_answer_schema()`: no enum, for the chat restate step. Both written in Gemini's response-schema dialect (uppercase types); `providers._gemini_schema_to_json_schema` translates for Claude. |
 | `guard.py` | `check_analysis`: name (front-face match)/quote (oracle-text substring)/role checks for analysis mode, `retry_prompt` for the corrective follow-up. `check_chat_answer`: the same name/quote/role checks for chat mentions, against the whole database instead of one deck's pool. |
 | `tools.py` | Chat-mode tools (`get_card`, `search_cards`, `list_decks`, `get_deck`) and `dispatch`, which never raises — a bad call becomes an `{"error": ...}` result the model sees. `TOOL_SPECS` is the Gemini-dialect function-declaration list. |
-| `providers.py` | `GeminiProvider` (REST, `x-goog-api-key` header, backoff on 429/5xx, function calling), `FakeProvider` for tests. |
+| `providers.py` | `GeminiProvider` (REST, `x-goog-api-key` header, backoff on 429/5xx, function calling). `AnthropicProvider` (Phase 5; Messages API, forces a "respond" tool for schema output since Claude has no native schema param, caches the system prompt and tool definitions). `FakeProvider` for tests. |
 | `analysis.py` | Analysis mode: prompt building and the validate/retry loop. |
 | `chat.py` | Chat mode: the tool-call loop, its iteration/token budget, and the restate-then-check step. |
 | `skills/deck_doctor.md` | System prompt: general health check, up to 5 cuts and 5 adds. |
@@ -60,8 +61,9 @@ All four analysis skills share `analysis.run_analysis`, `schemas.analysis_schema
 and `guard.check_analysis` — a skill is just a system prompt registered in
 `analysis.SKILLS`; add a new one there without touching the grounding code.
 
-Page: `pages/10_Advisor.py` (Analysis and Chat tabs). Tests:
-`tests/test_advisor.py` (offline, includes the starter eval cases).
+Page: `pages/10_Advisor.py` (model toggle in the sidebar, Analysis and Chat
+tabs). Tests: `tests/test_advisor.py` (offline, includes the starter eval
+cases).
 
 ## Configuration
 
@@ -70,11 +72,16 @@ Page: `pages/10_Advisor.py` (Analysis and Chat tabs). Tests:
 ```toml
 [advisor]
 google_api_key = "..."
-gemini_model = "gemini-3.5-flash"   # optional; this is the default
+gemini_model = "gemini-3.5-flash"      # optional; this is the default
+anthropic_api_key = "..."              # optional; enables the Claude toggle
+anthropic_model = "claude-sonnet-5-5"  # optional; this is the default
 ```
 
-`GOOGLE_API_KEY` in the environment also works. `gemini-2.5-flash` is retired
-for this key; see the Phase 0 notes in the plan.
+`GOOGLE_API_KEY` / `ANTHROPIC_API_KEY` in the environment also work.
+`gemini-2.5-flash` is retired for this key; see the Phase 0 notes in the
+plan. The sidebar toggle offers Gemini, Claude Sonnet 5.5 and Claude Opus
+5.5 (`providers.ANTHROPIC_MODELS`); re-verify model IDs and pricing before
+relying on cost comparisons, since both change.
 
 ## Things to know
 

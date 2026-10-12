@@ -95,7 +95,7 @@ def render_edit_table(df):
             "Delete": st.column_config.CheckboxColumn("Delete"),
         },
         column_order=["Card", "Set", "Qty", "Foil", "Location", "Date", "Price Paid", "Source", "Delete"],
-        hide_index=True, use_container_width=True,
+        hide_index=True, width="stretch",
         key=f"collection_edit_table_{ids_hash}",
     )
     if st.button("💾 Save collection changes", key="collection_edit_save"):

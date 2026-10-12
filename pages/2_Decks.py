@@ -160,7 +160,7 @@ with st.expander("📊 Compare all decks"):
                 help="Share of the non-basic mainboard physically located in this deck (Workbench -> Reconcile).",
             ),
         },
-        hide_index=True, use_container_width=True,
+        hide_index=True, width="stretch",
     )
     st.caption(
         "Click a column header to sort. Win rates here come from a 4-player pod and a handful of "
@@ -262,6 +262,7 @@ with st.expander("🖨️ Printable deck sheet"):
         _commander_names = {n for n in (meta.get("commander"), meta.get("partner")) if n}
         _priciest = (
             _sheet_df[~_sheet_df["name"].isin(_commander_names)]
+            .assign(current_price_usd=lambda d: pd.to_numeric(d["current_price_usd"], errors="coerce"))
             .dropna(subset=["current_price_usd"])
             .nlargest(3, "current_price_usd")
         )
@@ -402,7 +403,7 @@ if _sourcing and _sourcing["needed"]:
                             pd.DataFrame(
                                 [{"Card": c["card"], "Copies": c["copies"]} for c in _d["cards"]]
                             ),
-                            hide_index=True, use_container_width=True,
+                            hide_index=True, width="stretch",
                         )
                 continue
 
@@ -427,7 +428,7 @@ if _sourcing and _sourcing["needed"]:
                         }
                         for r in _rows
                     ]),
-                    hide_index=True, use_container_width=True,
+                    hide_index=True, width="stretch",
                 )
 
         st.divider()
@@ -504,7 +505,7 @@ with mana_tag_col:
     st.markdown("**Optimized mana**")
     mana_summary = loaders.load_deck_mana_tag_summary(conn, deck_id)
     if mana_summary:
-        st.dataframe(pd.DataFrame(mana_summary), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(mana_summary), hide_index=True, width="stretch")
     else:
         st.caption("No optimized-mana tags matched for this deck.")
 
@@ -523,7 +524,7 @@ with gc_col:
             # (a harmless additive column nothing else reads), only this
             # page's own display was simplified.
             gc_df.rename(columns={"card_name": "Card", "custom_tag": "Your tag"})[["Card", "Your tag"]],
-            hide_index=True, use_container_width=True,
+            hide_index=True, width="stretch",
         )
     else:
         st.caption("No Game Changers in this deck.")
@@ -536,7 +537,7 @@ with reserved_col:
         st.dataframe(
             reserved_df.rename(columns={"card_name": "Card", "price": "Price"}),
             column_config={"Price": st.column_config.NumberColumn("Price", format="$%.2f")},
-            hide_index=True, use_container_width=True,
+            hide_index=True, width="stretch",
         )
     else:
         st.caption("No Reserved List cards in this deck.")
@@ -586,7 +587,7 @@ with button_col:
     check_combos = st.button(
         "🔄 Check Spellbook",
         key=f"deck_{deck_id}_combo_refresh",
-        use_container_width=True,
+        width="stretch",
         help="One request to commanderspellbook.com's public find-my-combos API. Needs network access.",
     )
 
@@ -739,7 +740,7 @@ if combo_sync:
                         help="Decks on Spellbook running the most popular combo this card would complete.",
                     ),
                 },
-                hide_index=True, use_container_width=True,
+                hide_index=True, width="stretch",
             )
 
             with st.expander(f"Every one-card-away combo ({len(almost_df)})"):
@@ -834,7 +835,7 @@ with curve_col:
     st.markdown("**Strategy tag breakdown**")
     tag_counts = loaders.load_deck_strategy_tag_counts(conn, deck_id)
     if not tag_counts.empty:
-        st.dataframe(tag_counts, hide_index=True, use_container_width=True)
+        st.dataframe(tag_counts, hide_index=True, width="stretch")
     else:
         st.caption("No strategy tags recorded for this deck.")
 
@@ -862,7 +863,7 @@ if not price_df.empty:
                 "Purchase price / Cost paid", format="$%.2f",
             ),
         },
-        hide_index=True, use_container_width=True,
+        hide_index=True, width="stretch",
     )
 else:
     st.caption("No priced cards in this deck yet.")

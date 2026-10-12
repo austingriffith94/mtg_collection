@@ -121,7 +121,7 @@ with tab_gc:
                 "In decks": st.column_config.NumberColumn("In decks", disabled=True),
             },
             column_order=["image_uri", "Card", "Scryfall flag", "Categories", "Owned", "In decks"],
-            hide_index=True, use_container_width=True,
+            hide_index=True, width="stretch",
             # Keyed by the search text (not a static key) so changing the
             # search gives a genuinely fresh widget instead of Streamlit
             # reapplying this editor's in-progress edits against a
@@ -256,7 +256,7 @@ with tab_manatags:
                 "In decks": st.column_config.NumberColumn("In decks", disabled=True),
             },
             column_order=["image_uri", "Card", "Tags", "Owned", "In decks"],
-            hide_index=True, use_container_width=True,
+            hide_index=True, width="stretch",
             key=f"editor_mt_editor_{mt_bulk_search}",
         )
         if st.button("💾 Save tag changes", key="editor_mt_save_bulk"):
@@ -398,7 +398,7 @@ with tab_carddata:
     })
     st.dataframe(
         combo_overview[["Deck", "Last checked", "Combos in deck", "One card away"]],
-        hide_index=True, use_container_width=True,
+        hide_index=True, width="stretch",
     )
 
     # The "Salt Scores (EDHREC)" sub-editor that used to live here was

@@ -1,0 +1,10 @@
+# Streamlit app config. Theme block is Phase 0 of UI_ACTION_PLAN.md; the
+# [server] section (static file serving for image grids) is added in
+# Phase 4 of that plan.
+[theme]
+base = "dark"
+primaryColor = "#C0392B"
+backgroundColor = "#0E1117"
+secondaryBackgroundColor = "#1B1F27"
+font = "sans serif"
+baseRadius = "medium"

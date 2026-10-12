@@ -32,8 +32,10 @@ Covers:
      manual string-formatting lines are gone, the new styling helper is
      wired in for all three tables, and the ELO table (out of scope per
      the prompt — it has no Win % column) is left untouched.
-  E. dashboard.py source-text check — the sidebar-nav explainer markdown
-     block now appears before the deck-grid render call, not after.
+  E. Home page source-text check — the page guide appears before the
+     deck-grid render call, not after. (Since UI plan Phase 1 the guide is
+     a grid of st.page_link cards in pages/0_Home.py, not a markdown block
+     in dashboard.py.)
 
 Run from anywhere:
     python scripts/_test_prompt_pass9_offline.py
@@ -215,18 +217,17 @@ def main():
     )
 
     # ------------------------------------------------------------------
-    # E. dashboard.py source-text check — the sidebar-nav explainer text
-    #    (prompt2.txt instruction #2) sits above the deck tile grid now,
-    #    not below it.
+    # E. Home page source-text check — the page guide (prompt2.txt
+    #    instruction #2) sits above the deck tile grid, not below it.
     # ------------------------------------------------------------------
-    dashboard_path = os.path.join(PROJECT_ROOT, "dashboard.py")
-    with open(dashboard_path, encoding="utf-8") as f:
-        dashboard_text = f.read()
+    home_path = os.path.join(PROJECT_ROOT, "pages", "0_Home.py")
+    with open(home_path, encoding="utf-8") as f:
+        home_text = f.read()
 
-    markdown_pos = dashboard_text.index("Use the sidebar to jump to:")
-    grid_call_pos = dashboard_text.index("cv.render_deck_landing_grid(")
+    markdown_pos = home_text.index("st.page_link(spec.path")
+    grid_call_pos = home_text.index("cv.render_deck_landing_grid(")
     check(
-        "dashboard.py's sidebar-nav explainer text now precedes the deck tile grid render call",
+        "Home page's page guide precedes the deck tile grid render call",
         markdown_pos < grid_call_pos,
     )
 

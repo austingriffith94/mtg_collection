@@ -41,6 +41,12 @@ plus pytest (`pip install -r requirements-dev.txt`):
   nothing physical, a transfer's lot moving source -> target without a stop
   at "Box", and the pure-add / pure-remove apply paths.
 
+- `test_pages_smoke.py` — `AppTest` smoke run of every page against a small
+  temp database on disk (never the real one): each page through the
+  `dashboard.py` router, and each page except Home on its own.
+- `test_nav.py` — the page registry in `dashboard_lib/nav.py` matches the
+  files in `pages/`, and the Decks page keeps its `Decks` URL.
+
 The `add_card` fixture gives every card an `oracle_id` derived from its
 name, so printings sharing a name group together the way real Scryfall data
 does. Pass `oracle_id=` explicitly where name and oracle identity need to

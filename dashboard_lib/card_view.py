@@ -36,48 +36,15 @@ SORT_FIELDS = {
     "Set": "set_code",
 }
 
-# ------------------------------------------------------------------
-# Sidebar nav-label styling (Prompt Pass 8) — every page calls this
-# once, right after st.set_page_config(), so Streamlit's own
-# auto-generated sidebar page links (the pages/ directory nav this app
-# doesn't build itself) render in ALL CAPS. Pure CSS (text-transform),
-# so it's display-only: page filenames, URLs/query params, and every
-# hardcoded route string elsewhere in this codebase (e.g.
-# render_deck_landing_grid()'s deck_page_path default below) are
-# untouched. Streamlit doesn't expose a supported way to relabel the
-# auto-generated nav items themselves (only the separate, newer
-# st.navigation() API does, which this app doesn't use), so this
-# targets the nav's internal data-testid hooks directly — those aren't
-# a stable public API and have changed across Streamlit versions
-# before, so if a future Streamlit upgrade ever stops showing caps
-# here, this selector list is the first place to check.
-# ------------------------------------------------------------------
-def inject_nav_caps_css():
-    st.markdown(
-        """
-        <style>
-        [data-testid="stSidebarNav"] a,
-        [data-testid="stSidebarNav"] a *,
-        [data-testid="stSidebarNavItems"] a,
-        [data-testid="stSidebarNavItems"] a * {
-            text-transform: uppercase !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def setup_page(page_title, page_icon, layout="wide"):
-    """st.set_page_config() + inject_nav_caps_css() — every page (and
-    dashboard.py) calls both of these as its very first UI action, in
-    this order, with layout="wide" in every case; this collapses that
-    two-line pair copy-pasted in all 8 files into one call. Each page
-    still needs its own sys.path.insert(...) BEFORE this can even be
+    """Logging + st.set_page_config() — every page calls this as its very
+    first UI action. page_title sets the browser-tab title; the sidebar
+    label comes from dashboard_lib/nav.py instead (uppercase titles there
+    replaced the old nav-caps CSS in Phase 1 of UI_ACTION_PLAN.md). Each
+    page still needs its own sys.path.insert(...) BEFORE this can even be
     imported, so that part stays per-file."""
     setup_logging()
     st.set_page_config(page_title=page_title, page_icon=page_icon, layout=layout)
-    inject_nav_caps_css()
 
 
 # ------------------------------------------------------------------
@@ -371,7 +338,7 @@ def render_table(df, column_config, extra_cols=None):
         df[cols],
         column_config=column_config,
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -674,12 +641,10 @@ def inject_deck_accent_css(gradient_css, accent_hex):
     page's expander (the Moxfield-export panel) and the sidebar a
     colored accent edge in the deck's dominant color
     (fmt.deck_accent_hex()). Call once per page render, AFTER the
-    current deck (and therefore its accent colors) is known — unlike
-    inject_nav_caps_css() (Prompt Pass 8), which is identical on every
-    page and safe to call before anything else, this one is deck-
-    specific and must be (re-)called every rerun once the deck picker
+    current deck (and therefore its accent colors) is known — it's
+    deck-specific and must be (re-)called every rerun once the deck picker
     has settled, so switching decks in the sidebar re-themes the page.
-    Same caveat as inject_nav_caps_css(): `hr`/stExpander/stSidebar are
+    Caveat: `hr`/stExpander/stSidebar are
     Streamlit's own rendered/internal DOM structure, not all guaranteed
     stable public API across versions — this hasn't been checked against
     a real running Streamlit (no live Streamlit in this project's build

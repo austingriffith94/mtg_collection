@@ -7,13 +7,17 @@ consistency. Previous plans are finished and archived in
 [docs/archive/](docs/archive/README.md).
 
 Each phase can ship on its own: the app runs, tests pass, and no page is
-half-converted at a phase boundary. Do them in order. Phase 1 changes how
-pages are registered, and Phases 2-3 build on that.
+half-converted at a phase boundary. Do them in order. Phase 0 builds the
+smoke-test harness every later phase uses; Phase 1 changes how pages are
+registered, and Phase 2's `st.page_link` cross-links need that (links only
+work to pages the router knows about). Phase 3 moves content onto the
+Phase 1 Home page, and Phase 5's `st.pills` and dialogs assume the
+Phase 0 version pin.
 
 Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 
-- [ ] **Phase 0** — Foundations: version pin, `width=` migration, theme file, stale docs
-- [ ] **Phase 1** — Grouped navigation (`st.navigation`) + new Home page
+- [x] **Phase 0** — Foundations: version pin, `width=` migration, theme file, stale docs. Done: `requirements.txt` pinned to `streamlit>=1.63`; all 31 `use_container_width=True` call sites → `width="stretch"`; `.streamlit/config.toml` theme block added; `tests/test_pages_smoke.py` runs all 10 pages via `AppTest` (also fixed a latent crash in `2_Decks.py`'s printable-sheet price `nlargest` on an all-null price column); `PROJECT_STATE.md`/`dashboard.py` stale-doc spots corrected.
+- [x] **Phase 1** — Grouped navigation + new Home page. Done: `dashboard.py` is now a router over `dashboard_lib/nav.py`'s `PAGES` registry (4 sections, uppercase titles, explicit `url_path`s, `Decks` kept); old Home content moved to `pages/0_Home.py` with a registry-built `st.page_link` card grid replacing the text guide; `inject_nav_caps_css()` deleted; DB caption moved to a sidebar footer. Checked on 1.63: per-page `set_page_config` still works under `st.navigation` (its `page_title` sets the browser tab), and `AppTest` drives the router incl. `switch_page`. Home is router-only (its `page_link` paths are relative to `dashboard.py`), so the smoke test now runs every page through the router plus every non-Home page standalone; `tests/test_nav.py` covers the registry. Compare-all-decks slot left for Phase 3.
 - [ ] **Phase 2** — One shared "current deck" across pages + cross-links
 - [ ] **Phase 3** — Split the Decks page into tabs
 - [ ] **Phase 4** — Speed: static images, fragments, lazy exports
@@ -30,20 +34,34 @@ Small, low-risk groundwork that later phases rely on.
 - **Version pin.** `requirements.txt` says `streamlit>=1.32`, but the
   `mtg1` env runs 1.63, and this plan uses `st.navigation` sections,
   `st.dialog`, `st.fragment`, `st.segmented_control`/`st.pills` and
-  `width="stretch"`. Raise the pin to `streamlit>=1.50`.
+  `width="stretch"`. Pin to the version actually tested here
+  (`streamlit>=1.63`) rather than guessing the oldest release that has all
+  of them.
 - **`use_container_width` → `width="stretch"`.** About 30 call sites across
   `pages/` and `dashboard_lib/` (`grep -rn use_container_width`). Mechanical
   change; removes deprecation warnings.
-- **Theme.** Add `.streamlit/config.toml` (the folder has only the
+- **Config file.** Add `.streamlit/config.toml` (the folder has only the
   gitignored `secrets.toml` today) with a `[theme]` block: base, primary
   color, background/secondary background, font, and corner radius. Check
   that the file is *not* caught by `.gitignore` (only `secrets.toml` is).
-- **Stale docs.** `PROJECT_STATE.md` still says "7 pages" and carries the
-  "no real Streamlit in the sandbox" caveat; there are 10 pages and
-  `AppTest` runs fine here. Fix both lines.
+  Phase 4 adds a `[server]` section to this same file.
+- **Page smoke-test harness.** `tests/` has no `AppTest` coverage today
+  (`conftest.py` only builds an in-memory connection, and pages call
+  `db.get_connection()` against the real `DB_PATH`). Every later phase
+  says "AppTest the page", so build the harness first:
+  `tests/test_pages_smoke.py` plus a fixture that builds a small temp
+  database (reuse the `conftest.py` schema/seed helpers), points
+  `db.DB_PATH` at it, and runs each file in `pages/` through
+  `AppTest.from_file(...)`, asserting no exception. Never run it against
+  the live `mtg_collection.db`.
+- **Stale docs.** In `PROJECT_STATE.md`: "7 pages" (line 8), the "The 7
+  pages, in brief" heading (line 102), and the "no live Streamlit or
+  network access" caveat (line 230). There are 10 pages and `AppTest`
+  runs fine here. Also the `dashboard.py` docstring still says the
+  launcher option is "2) Launch dashboard" (it's 1).
 
-**Done when:** `grep use_container_width` returns nothing, every page
-renders under `AppTest` without deprecation warnings, and the theme shows.
+**Done when:** `grep use_container_width` returns nothing, the smoke test
+runs all 10 pages with no exceptions, and the theme shows.
 
 ## Phase 1 — Grouped navigation + new Home page
 
@@ -78,16 +96,30 @@ calls the two editors "Editor".
 - Replace the Home page's text guide with a grid of `st.page_link` cards
   (icon + name + one-line purpose), built from the same page registry as
   the router so the two can't drift apart. Keep the metrics row, the
-  Workbench summary line and the deck tiles.
+  Workbench summary line and the deck tiles, and leave room for the
+  "📊 Compare all decks" expander that Phase 3 moves here from the Decks
+  page.
 - Move the "Reading from `mtg_collection.db`" caption into a sidebar footer
   (or drop it).
 
-**Watch out for.** `st.set_page_config` is called by every page via
-`setup_page()`; with a router, call it once there and make the per-page
-call set only title/icon. Check this on 1.63 before converting all pages.
+**Watch out for.**
+- `st.set_page_config` is called by every page via `setup_page()`. Check on
+  1.63, with one converted page, that calling it from a page script under
+  `st.navigation` still works (and what it does to the browser-tab title
+  next to the uppercase `st.Page` title) before converting all ten.
+- Pages are no longer entry scripts, so the per-page
+  `sys.path.insert(...)` lines become redundant (the router's own insert
+  covers them). Leave them alone for now so a page can still be run on its
+  own; don't remove them as part of this phase.
+- Confirm `AppTest.from_file("dashboard.py")` can drive a navigation
+  router on 1.63. If it can't, test each page file directly (the Phase 0
+  harness) and test the registry separately.
+- Docs that list the page set need updating: `README.md`'s page sections
+  and `PROJECT_STATE.md`.
 
-**Tests.** AppTest the router and each page; a test that every registry
-entry's file exists; a test that the Decks `url_path` is `Decks`.
+**Tests.** The Phase 0 smoke test over every page; a test that every
+registry entry's file exists and no file in `pages/` is missing from the
+registry; a test that the Decks `url_path` is `Decks`.
 
 ## Phase 2 — One shared "current deck"
 
@@ -104,16 +136,35 @@ means choosing it again, and there are no links between a deck's views.
   value across pages. Instead: copy `current_deck_id` into the widget key
   just before drawing the picker, and write the choice back in its
   `on_change`.
-- Fold the Decks page's `?deck_id=` handling into the picker, so any deck
-  page reached by URL picks it up. Also set `st.query_params["deck_id"]` on
-  change so the URL can be bookmarked or shared.
+- **Store the deck *id*, not its name.** Today the picker's value is the
+  deck's name (`deck_labels`), and the Deck Editor's "create deck" flow
+  sets `st.session_state["editor_deck_select"] = cn_name.strip()`
+  ([4_Deck_Editor.py:79](pages/4_Deck_Editor.py#L79)). Both break under a
+  shared key (and a rename would orphan the saved selection). Change that
+  create path to set `current_deck_id` to the new deck's id, and make the
+  rename path keep it (the id doesn't change).
+- **Deep links vs. the URL (conflict with today's code).** The Decks page
+  currently *deletes* `?deck_id=` right after reading it, specifically so a
+  leftover param doesn't override a later manual pick. So don't simply
+  "also write the param on change". Rule: a `deck_id` param seeds
+  `current_deck_id` only when it differs from the last param already
+  consumed this session (track it in `session_state`); after that the
+  session key wins. Keep deleting the param after reading, as now. If
+  bookmarkable URLs are wanted, that's a separate, optional step that must
+  honor the same rule. Note that Streamlit also clears query params when
+  you switch pages, so the session key (not the URL) is what carries the
+  deck between pages.
 - Cross-links under the deck header (`st.page_link`): **✏️ Edit deck**,
   **🎲 Probabilities**, **🧠 Ask the Advisor**, and **← Decks** from the
   Editor/Probability pages. The Advisor's deck selectbox
-  ([10_Advisor.py](pages/10_Advisor.py)) joins the shared key as well.
+  ([10_Advisor.py](pages/10_Advisor.py)) joins the shared key as well. The
+  Advisor selects by `deck_id` already, so it needs the key only, not the
+  name mapping.
 
-**Tests.** Pure test of the seed/sync helper; AppTest: set
-`current_deck_id`, render each deck page, confirm they all show that deck.
+**Tests.** Pure test of the seed/sync helper, including the "param already
+consumed, then manual pick wins" case and the create-deck path; AppTest:
+set `current_deck_id`, render each deck page, confirm they all show that
+deck.
 
 ## Phase 3 — Split the Decks page into tabs
 
@@ -131,10 +182,21 @@ tabs. Everything else goes into tabs:
 | Mana & Curve | Themes, mana curve + color breakdown, type breakdown, strategy tags |
 | Combos | Commander Spellbook panel (in deck / one card away) |
 | Cards | Mainboard/Shortlist browser, top-10 most expensive |
-| History | Change log; Moxfield export and printable sheet |
+| History | Change log |
 
-- Move "📊 Compare all decks" off this page and onto the Home page (or into
-  Workbench). It's a cross-deck view and sits above a single deck here.
+- **Exports** (Moxfield, printable sheet) are actions on the whole deck,
+  not history. Put them in a single "Export" expander in the header area
+  above the tabs (built lazily, see Phase 4).
+- **Sidebar filters.** The Cards browser's filters are in the sidebar
+  ([2_Decks.py:955](pages/2_Decks.py#L955), `container=st.sidebar`), so
+  after the split they'd show on every tab while only affecting Cards. Move
+  them into the Cards tab (a `st.popover` or an expander above the
+  browser). `render_filter_panel` already takes a `container=`, so this is
+  mostly passing a different container. Keep the sidebar for the deck
+  picker only.
+- Move "📊 Compare all decks" off this page and onto the **Home page**
+  (as a collapsed expander under the deck tiles; add it to Phase 1's Home
+  build list). It's a cross-deck view and sits above a single deck here.
 - Split the page into a few `_render_<tab>(conn, deck_id)` functions in the
   same file (or `dashboard_lib/deck_page.py` if the file is still too long).
   Behavior stays the same; only the layout changes.
@@ -152,20 +214,42 @@ re-send a lot of data each time.
 
 - **Images as base64.** `card_view` reads each cached image and puts it into
   HTML as a `data:` URI (around [card_view.py:405-523](dashboard_lib/card_view.py)).
-  A 48-card grid sends several MB on every rerun. Fix: turn on
-  `server.enableStaticServing` and serve images as
-  `/app/static/<file>`. Static files must live in `static/` next to the
-  entry script, so either move `image_cache/` to `static/image_cache/`
-  (update `db.IMAGE_CACHE_DIR`, `scripts/sync_images.py`, `.gitignore`)
-  or use a directory junction. **Check first** whether
-  `cards.local_image_path` stores absolute or relative paths. If absolute,
-  this needs a one-off path rewrite (additive, through `writes.py`).
-  Keep the remote Scryfall URL fallback.
+  A 48-card grid sends several MB on every rerun. Fix: add
+  `[server] enableStaticServing = true` to `.streamlit/config.toml` and
+  serve images as `/app/static/<path>`. Static files must live in
+  `static/` next to the entry script (`dashboard.py`).
+  - **Paths are checked:** `cards.local_image_path` and deck cover paths
+    are stored *relative* to the project root (`image_cache/<id>.jpg`,
+    `image_cache/deck_covers/12.png`), so **no database rewrite is
+    needed**. Move the folder to `static/image_cache/` and resolve stored
+    paths against `static/` instead of `BASE_DIR`
+    ([formatting.resolve_local_image](dashboard_lib/formatting.py)); the
+    stored values stay valid. The browser URL is then
+    `/app/static/` + the stored path.
+  - Places that must change together: `db.IMAGE_CACHE_DIR`,
+    `DECK_COVER_DIR` in [4_Deck_Editor.py:42](pages/4_Deck_Editor.py#L42),
+    the cover-saving code in `writes.py` (~line 366),
+    `scripts/sync_images.py` (its own `IMAGE_CACHE_DIR` + `rel_path`),
+    `.gitignore` (`/image_cache/` → `/static/image_cache/`), and the
+    offline-test fixtures that use `image_cache/...` strings.
+  - `deck_printout` and any download/export that needs a self-contained
+    file keeps embedding base64; only the on-screen grids and tiles switch
+    to URLs. Keep the remote Scryfall URL fallback.
+  - Moving the user's existing cache is a one-time file move; do it in the
+    phase's change as a small, idempotent step in `run.py`/a script, not by
+    hand.
 - **Fragments.** Wrap self-contained interactive panels in `@st.fragment`:
   the browser (view/sort/page controls + grid), the Combos tab, the
-  Collection edit table, and the Workbench's per-deck plan blocks. Any
-  write that changes things outside the fragment ends with
-  `st.rerun(scope="app")`.
+  Collection edit table, and the Workbench's per-deck plan blocks. Rules
+  that make this safe:
+  - A fragment reruns with the arguments it had on the last *full* run, so
+    pass it the already-filtered data frame from outside and let the
+    sidebar filters trigger the full rerun (they live outside it).
+  - Don't draw into the sidebar or other outside containers from inside a
+    fragment; keep every fragment's widgets in its own container.
+  - Any write that changes things outside the fragment (a tag edit that
+    changes the stat grid, a lot edit that changes the metrics row) ends
+    with `st.rerun(scope="app")`.
 - **Lazy exports.** A collapsed `st.expander` still runs its code. The
   Collection page's Moxfield expander
   ([1_Collection.py](pages/1_Collection.py)) builds the full CSV on every
@@ -173,9 +257,12 @@ re-send a lot of data each time.
   them only when a "Prepare export" button is clicked, or inside an
   `st.dialog`.
 
-**Done when:** a sidebar filter change on Collection (grid view, 48/page)
-feels instant; compare page payload size before and after in browser
-devtools and record both numbers in the "as built" note.
+**Done when:** Collection in grid view (48/page) no longer embeds image
+bytes in the page, so a filter change is light and paging or sorting
+reruns only the browser fragment. Record page payload size before and
+after (browser devtools, Network tab) in the "as built" note. Note that a
+filter change is still a full rerun by design; the win there is payload
+size, not skipping the rerun.
 
 ## Phase 5 — Better controls
 
@@ -185,6 +272,13 @@ devtools and record both numbers in the "as built" note.
   curve breakdown radio, and the Yes/No/All bool filters in
   `render_filter_panel`. Color identity becomes WUBRG+C pills
   (`st.pills`, multi-select) instead of a multiselect.
+  - **Unlike a selectbox/radio, these can end up with nothing selected**
+    (they return `None`). Treat `None` as the default ("All" / no filter /
+    Table view) everywhere they're read, and keep `register_filter_key()`
+    for each so "Refresh data" still resets them.
+  - The Collection page's "Colorless" option and the Decks page's
+    `multi_facets` use the same filter panel, so change it once in
+    `render_filter_panel` and check both pages.
 - **Dialogs (`st.dialog`)** for create/edit/delete flows that now sit in
   inline expanders:
   - Game Tracking: edit game, and delete game. **Delete has no
@@ -197,7 +291,11 @@ devtools and record both numbers in the "as built" note.
 - **Collection edit table.** Its caption warns that changing a filter
   discards unsaved edits. Turn the sidebar filters off (`disabled=True`)
   while Edit mode is on, and show a "N unsaved changes" count from the
-  editor's `edited_rows` next to the Save button.
+  editor's `edited_rows` next to the Save button. Two details: the filters
+  are drawn *before* the Edit-mode toggle in script order, so read the
+  toggle from `st.session_state["collection_edit_mode"]` and add a
+  `disabled` parameter to `render_filter_panel`; and the count must be
+  computed inside the same fragment as the editor (Phase 4).
 - **Feedback.** Use `st.toast` for successful saves app-wide (Collection
   Editor already does), and keep `st.success`/`st.error` for things the
   user needs to read.

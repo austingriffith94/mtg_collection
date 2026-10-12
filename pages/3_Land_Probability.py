@@ -137,7 +137,7 @@ for turn in range(0, 6):
         "Expected lands seen": round(expected_lands, 2),
     })
 land_drop_table = pd.DataFrame(rows).set_index("When")
-st.dataframe(land_drop_table, use_container_width=True)
+st.dataframe(land_drop_table, width="stretch")
 
 st.markdown("**Distribution of lands in your opening 7**")
 dist = prob.distribution(library_size, land_count, prob.OPENING_HAND_SIZE)
@@ -196,7 +196,7 @@ else:
         table_rows.append(table_row)
 
     color_table = pd.DataFrame(table_rows).set_index("When")
-    st.dataframe(color_table, use_container_width=True)
+    st.dataframe(color_table, width="stretch")
 
     color_chart = pd.DataFrame(chart_rows).set_index("turn")
     st.line_chart(color_chart)
@@ -250,7 +250,7 @@ else:
     st.bar_chart(weighted_df[nonzero_cols], color=chart_colors)
 
     with st.expander("Show as a table"):
-        st.dataframe(weighted_df[nonzero_cols].round(2), use_container_width=True)
+        st.dataframe(weighted_df[nonzero_cols].round(2), width="stretch")
 
 st.divider()
 
@@ -322,7 +322,7 @@ else:
                 display_df = display_df.rename(columns={"turn": "Turn", "cards_seen": "Cards seen"})
                 st.dataframe(
                     display_df[["Turn", "Cards seen", "Land factor", "Color factor", "Combined"]].set_index("Turn"),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
 st.divider()
@@ -377,7 +377,7 @@ else:
     st.dataframe(
         summary_df.set_index("When")[["cards_seen", "P(playable on curve)"]]
         .rename(columns={"cards_seen": "Cards seen"}),
-        use_container_width=True,
+        width="stretch",
     )
 
     with st.expander("Show factor breakdown"):
@@ -389,6 +389,6 @@ else:
         st.dataframe(
             breakdown_df.set_index("When")[["cards_seen", "Drawn", "Land factor", "Color factor", "Combined"]]
             .rename(columns={"cards_seen": "Cards seen"}),
-            use_container_width=True,
+            width="stretch",
         )
 

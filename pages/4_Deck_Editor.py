@@ -292,7 +292,7 @@ with tab_info:
                             {"Card": c["card"], "Copies": c["copies"], "Type": c["card_type"]}
                             for c in _dis["direct_transfer"]
                         ]),
-                        hide_index=True, use_container_width=True,
+                        hide_index=True, width="stretch",
                     )
 
             if _dis["to_box"]:
@@ -304,7 +304,7 @@ with tab_info:
                             {"Card": c["card"], "Copies": c["copies"], "Type": c["card_type"]}
                             for c in sorted(_dis["to_box"], key=lambda r: (r["card_type"], r["card"]))
                         ]),
-                        hide_index=True, use_container_width=True,
+                        hide_index=True, width="stretch",
                     )
 
             if _dis["strays"]:
@@ -320,7 +320,7 @@ with tab_info:
                         pd.DataFrame([
                             {"Card": c["card"], "Copies": c["copies"]} for c in _dis["strays"]
                         ]),
-                        hide_index=True, use_container_width=True,
+                        hide_index=True, width="stretch",
                     )
 
             if _dis["target_needs"]:
@@ -337,7 +337,7 @@ with tab_info:
                             {"Card": n["card"], "Short": n["short"]}
                             for n in _dis["target_needs"]
                         ]),
-                        hide_index=True, use_container_width=True,
+                        hide_index=True, width="stretch",
                     )
 
             _dis_move_strays = st.checkbox(
@@ -433,7 +433,7 @@ with tab_themes:
     else:
         current_themes = loaders.load_deck_themes(conn, deck_id)
         if current_themes:
-            st.dataframe(pd.DataFrame(current_themes), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(current_themes), hide_index=True, width="stretch")
         else:
             st.caption("No themes yet.")
 
@@ -554,7 +554,7 @@ with tab_cardtags:
                     },
                     column_order=["Card", "Tags"],
                     hide_index=True,
-                    use_container_width=True,
+                    width="stretch",
                     key=f"editor_{deck_id}_{tag_type}_cardtags_editor",
                 )
 
@@ -637,7 +637,7 @@ with tab_main:
                     "Delete": st.column_config.CheckboxColumn("Delete"),
                 },
                 column_order=["Card", "Qty", "Delete"],
-                hide_index=True, use_container_width=True,
+                hide_index=True, width="stretch",
                 key=f"editor_{deck_id}_main_editor",
             )
             if st.button("💾 Save mainboard changes", key=f"editor_{deck_id}_main_save"):

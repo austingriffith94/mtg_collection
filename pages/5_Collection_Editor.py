@@ -146,7 +146,7 @@ if order_file is not None:
                 }
                 for r in singles
             ]),
-            hide_index=True, use_container_width=True,
+            hide_index=True, width="stretch",
         )
 
         if unrecognized_finish:

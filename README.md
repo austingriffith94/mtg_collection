@@ -19,8 +19,9 @@ mtg_dashboard/
 ├── run.sh                            # run on Linux
 ├── schema.sql                        # full DB schema (DDL)
 ├── requirements.txt
-├── dashboard.py                      # Streamlit entry point (home page)
-├── pages/                             # Streamlit auto-discovers these as nav tabs
+├── dashboard.py                      # Streamlit entry point: grouped sidebar router (st.navigation)
+├── pages/                             # one file per page; registered in dashboard_lib/nav.py
+│   ├── 0_Home.py
 │   ├── 1_Collection.py
 │   ├── 2_Decks.py
 │   ├── 3_Land_Probability.py
@@ -29,7 +30,8 @@ mtg_dashboard/
 │   ├── 6_Card_Database.py
 │   ├── 7_Commander_Game_Tracking.py
 │   ├── 8_Workbench.py
-│   └── 9_Card_Lookup.py
+│   ├── 9_Card_Lookup.py
+│   └── 10_Advisor.py
 ├── dashboard_lib/                     # shared library code behind the pages
 │   ├── formatting.py                 # card-type/color/URL/filename helpers (no Streamlit dep)
 │   ├── queries.py                    # read-only sqlite3+pandas queries (no Streamlit dep)
@@ -42,7 +44,8 @@ mtg_dashboard/
 │   ├── game_form.py                  # Commander Game Tracking form resolution/validation (no Streamlit dep, Prompt Pass 7)
 │   ├── db.py                         # cached connection + "no DB yet" guard
 │   ├── loaders.py                    # st.cache_data-wrapped versions of queries.py
-│   └── card_view.py                  # shared table/grid browser + filter UI
+│   ├── card_view.py                  # shared table/grid browser + filter UI
+│   └── nav.py                        # page registry: sidebar sections, titles, URLs, Home link cards
 ├── tests/                             # pytest suite on an in-memory DB (python -m pytest tests) — see tests/README.md
 ├── data/                              # your source CSVs go here
 │   ├── decks.csv
@@ -175,10 +178,22 @@ Option 1 launches the real Streamlit dashboard (`dashboard.py`, plus
 everything under `pages/`) — make sure `streamlit` is installed (see
 "Setup" above), then run the migration first if you haven't already.
 
+The sidebar groups the pages into four sections (the list lives in
+`dashboard_lib/nav.py`):
+
+| Section | Pages |
+|---|---|
+| Browse | Home, Collection, Decks, Card Lookup |
+| Plan | Workbench, Advisor, Land & Color Probability |
+| Edit | Deck Editor, Collection Editor, Card Database |
+| Play | Commander Game Tracking |
+
 The dashboard currently covers:
-- **Home** — a landing page of image-backed deck tiles (cover image if
-  you've set one, else the commander's own card art); clicking a tile
-  jumps straight to that deck on the Decks page below.
+- **Home** — headline counts, a link card for every page (grouped like the
+  sidebar, with a one-line purpose each), a summary of pending Workbench
+  work, and image-backed deck tiles (cover image if you've set one, else
+  the commander's own card art); clicking a tile jumps straight to that
+  deck on the Decks page below.
 - **Collection** — table or image-grid view (48 cards per page by default)
   of your full physical collection, with layered filters (color, type,
   rarity, set, location, foil, basic land, Game Changer, Reserved List,

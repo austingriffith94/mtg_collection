@@ -265,7 +265,7 @@ with tab_stats:
             )[["Deck", "Played", "Wins", "Losses", "Win %"]]
             st.dataframe(
                 cv.style_win_rate_percentages(display_deck_wr, columns=["Win %"]),
-                hide_index=True, use_container_width=True,
+                hide_index=True, width="stretch",
             )
 
     with wr_col2:
@@ -282,7 +282,7 @@ with tab_stats:
             )[["Player", "Played", "Wins", "Losses", "Win %"]]
             st.dataframe(
                 cv.style_win_rate_percentages(display_player_wr, columns=["Win %"]),
-                hide_index=True, use_container_width=True,
+                hide_index=True, width="stretch",
             )
 
     st.divider()
@@ -301,7 +301,7 @@ with tab_stats:
     else:
         st.dataframe(
             elo_df.rename(columns={"player_name": "Player", "rating": "Rating", "games_played": "Games"}),
-            hide_index=True, use_container_width=True,
+            hide_index=True, width="stretch",
         )
 
     st.divider()
@@ -316,4 +316,4 @@ with tab_stats:
     if h2h_df.empty:
         st.caption("Not enough shared games with recorded player names yet.")
     else:
-        st.dataframe(cv.style_win_rate_percentages(h2h_df), use_container_width=True)
+        st.dataframe(cv.style_win_rate_percentages(h2h_df), width="stretch")

@@ -2,12 +2,10 @@
 Offline test for Prompt Pass 8 changes: no Streamlit, no live network.
 
 Prompt Pass 8 ("prompt1.txt" — nav caps + UI text cleanup):
-  1. Sidebar nav labels now render ALL CAPS via a small CSS injection
-     (card_view.inject_nav_caps_css(), called once per page right after
-     st.set_page_config()) rather than by renaming pages/*.py — see
-     PROJECT_STATE.md for why renaming (and especially renaming
-     dashboard.py, the entry script every launcher hardcodes) was
-     rejected in favor of a display-only CSS approach.
+  1. Sidebar nav labels render ALL CAPS. Originally a CSS injection
+     (card_view.inject_nav_caps_css()); since Phase 1 of UI_ACTION_PLAN.md
+     the labels are uppercase st.Page titles in dashboard_lib/nav.py and
+     the CSS is gone, so this now checks the registry instead.
   2. A UI-facing "Prompt Pass 5:" / "rather than the old plain
      draw-probability" leak was removed from the Land Probability
      page's "Check a specific card" caption. Every OTHER "Prompt Pass
@@ -40,6 +38,7 @@ if "streamlit" not in sys.modules:
     sys.modules["streamlit"] = _fake_streamlit
 
 from dashboard_lib import card_view as cv
+from dashboard_lib import nav
 
 
 def check(label, cond):
@@ -49,64 +48,27 @@ def check(label, cond):
         raise SystemExit(f"Test failed: {label}")
 
 
-PAGE_FILES = [
-    "dashboard.py",
-    "pages/1_Collection.py",
-    "pages/2_Decks.py",
-    "pages/3_Land_Probability.py",
-    "pages/4_Deck_Editor.py",
-    "pages/5_Collection_Editor.py",
-    "pages/6_Card_Database.py",
-    "pages/7_Commander_Game_Tracking.py",
-]
+PAGE_FILES = [p.path for p in nav.PAGES]
 
 
 def main():
     # ------------------------------------------------------------------
-    # 1. inject_nav_caps_css() itself: the markdown it emits must carry
-    #    a <style> block, passed with unsafe_allow_html=True (required
-    #    for the <style> tag to take effect at all), that actually
-    #    applies text-transform: uppercase against the sidebar nav's
-    #    data-testid hooks.
+    # 1. Every sidebar label in the page registry is ALL CAPS.
     # ------------------------------------------------------------------
-    captured = {}
-
-    def _fake_markdown(body, **kwargs):
-        captured["body"] = body
-        captured["kwargs"] = kwargs
-
-    sys.modules["streamlit"].markdown = _fake_markdown
-    cv.inject_nav_caps_css()
-
-    check("inject_nav_caps_css calls st.markdown", "body" in captured)
-    check("...with unsafe_allow_html=True (required for <style> to apply)", captured["kwargs"].get("unsafe_allow_html") is True)
-    css = captured["body"]
-    check("...output contains a <style> block", "<style>" in css and "</style>" in css)
-    check("...targets the stSidebarNav data-testid hook", 'data-testid="stSidebarNav"' in css)
-    check("...targets the stSidebarNavItems data-testid hook", 'data-testid="stSidebarNavItems"' in css)
-    check("...actually sets text-transform: uppercase", "text-transform: uppercase" in css)
+    for spec in nav.PAGES:
+        check(f"nav title {spec.title!r} is uppercase", spec.title == spec.title.upper())
+    check("inject_nav_caps_css() is gone", not hasattr(cv, "inject_nav_caps_css"))
 
     # ------------------------------------------------------------------
-    # 2. Every page must import card_view and call
-    #    cv.inject_nav_caps_css() AFTER its own st.set_page_config() —
-    #    a source-text check, since none of these page scripts can be
-    #    executed for real in this sandbox (no streamlit install).
+    # 2. Every page imports card_view and calls cv.setup_page()
+    #    (st.set_page_config) — a source-text check.
     # ------------------------------------------------------------------
     for rel_path in PAGE_FILES:
         path = os.path.join(PROJECT_ROOT, rel_path)
         with open(path, encoding="utf-8") as f:
             text = f.read()
         check(f"{rel_path}: imports card_view", "card_view" in text)
-        # Pages now call cv.setup_page(), which runs st.set_page_config() and
-        # then inject_nav_caps_css() in that order (verified below).
         check(f"{rel_path}: calls cv.setup_page()", "cv.setup_page(" in text)
-
-    captured_calls = []
-    st_mod = sys.modules["streamlit"]
-    st_mod.set_page_config = lambda **kw: captured_calls.append("config")
-    st_mod.markdown = lambda body, **kw: captured_calls.append("css")
-    cv.setup_page("t", "x")
-    check("setup_page() runs set_page_config() before the nav-caps CSS", captured_calls == ["config", "css"])
 
     # ------------------------------------------------------------------
     # 3. The Land Probability page's "Check a specific card" caption no

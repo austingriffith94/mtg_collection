@@ -92,6 +92,22 @@ def page_path(url_path):
     return next(p.path for p in PAGES if p.url_path == url_path)
 
 
+def render_empty_state(missing, url_path=None, link_label=None, container=None):
+    """The one "nothing here yet" pattern (UI plan Phase 6): what's
+    missing, plus where to add it. `missing` is a full sentence ("No decks
+    yet."); when url_path is given it's followed by a page_link to that
+    page. Standalone pages (no router) get the sentence alone, same
+    fallback as render_deck_links."""
+    c = container if container is not None else st
+    c.caption(missing)
+    if url_path is None:
+        return
+    try:
+        c.page_link(page_path(url_path), label=link_label or "Go there →")
+    except StreamlitPageNotFoundError:
+        pass
+
+
 def render_deck_links(current_url_path):
     """One row of st.page_link cross-links to the other per-deck views,
     skipping the page we're on. When a page runs on its own instead of

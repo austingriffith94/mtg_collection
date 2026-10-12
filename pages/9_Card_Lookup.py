@@ -37,9 +37,9 @@ search = st.text_input(
 )
 
 if not search.strip():
-    st.caption("Search for any card already in your database to see its price, every lot "
-               "you own, every deck it's mainboarded or shortlisted in, and its recent "
-               "applied-change history — all rolled up across printings.")
+    st.caption("Search for any card in your database to see its lots, decks and history.",
+               help="Price, every lot you own, every deck it's mainboarded or shortlisted in, "
+                    "and its recent applied-change history — all rolled up across printings.")
     st.stop()
 
 matches = q.search_card_names(conn, search.strip())

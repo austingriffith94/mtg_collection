@@ -115,7 +115,7 @@ db.refresh_data_button()
 
 decks_df = loaders.load_decks_df(conn)
 if decks_df.empty:
-    st.info("No decks found.")
+    nav.render_empty_state("No decks yet.", "Deck_Editor", "✏️ Create one in the Deck Editor")
     st.stop()
 
 # Honor a `?deck_id=<id>` query param (set by the home page's deck-tile
@@ -198,7 +198,10 @@ def _render_export(conn, deck_id, meta, stats, value, deck_name, color_identity_
     """Export expander body: Moxfield text + printable deck sheet. Only
     called while the expander is open (see below), because building the
     sheet loads every panel's data and base64-encodes its art."""
-    st.markdown("**📋 Moxfield**")
+    st.markdown(
+        "**📋 Moxfield**",
+        help="Hover the text box and click the copy icon in its corner to copy it to your clipboard.",
+    )
     export_include_mb = st.checkbox(
         "Include shortlist (as a separate '// Maybeboard' section)",
         key=f"deck_{deck_id}_moxfield_include_mb",
@@ -208,7 +211,6 @@ def _render_export(conn, deck_id, meta, stats, value, deck_name, color_identity_
         st.caption("No mainboard cards to export yet.")
     else:
         st.code(moxfield_text, language=None)
-        st.caption("Hover the box above and click the copy icon in the corner to copy it to your clipboard.")
 
         if st.button("💾 Save to file", key=f"deck_{deck_id}_moxfield_save"):
             os.makedirs(MOXFIELD_EXPORT_DIR, exist_ok=True)
@@ -220,10 +222,12 @@ def _render_export(conn, deck_id, meta, stats, value, deck_name, color_identity_
             st.success(f"Saved to `{os.path.relpath(out_path, db.BASE_DIR)}`")
 
     st.divider()
-    st.markdown("**🖨️ Printable deck sheet**")
-    st.caption(
-        "A one-page, Letter-size sheet with stats, charts, art and the full decklist. "
-        "Open the downloaded file in a browser and print (or save as PDF)."
+    st.markdown(
+        "**🖨️ Printable deck sheet**",
+        help=(
+            "A one-page, Letter-size sheet with stats, charts, art and the full decklist. "
+            "Open the downloaded file in a browser and print (or save as PDF)."
+        ),
     )
     _sheet_df = loaders.load_deck_cards_df(conn, deck_id)
     if _sheet_df.empty:
@@ -396,16 +400,9 @@ def _render_overview(conn, deck_id, meta, deck_name, color_identity_raw):
             _to_pull = sum(_counts[b] for b in ("box", "unlocated", "other_deck"))
 
             if _brewing:
-                st.caption(
-                    "This deck is marked as **brewing** — its list exists and its cards are "
-                    "still elsewhere. Completion below is derived from where the cards "
-                    "physically are, so it updates itself as you sleeve them."
-                )
+                st.caption("Brewing — completion updates itself as you sleeve the cards.")
             else:
-                st.caption(
-                    "Where this deck's cards are right now. Mark it as brewing if you're "
-                    "assembling it, to keep this panel open and show the build bar on its tile."
-                )
+                st.caption("Mark the deck as brewing in the Deck Editor to keep this panel open.")
 
             if _pct is not None:
                 st.progress(
@@ -456,14 +453,12 @@ def _render_overview(conn, deck_id, meta, deck_name, color_identity_raw):
 
                 with st.expander(f"{_icon} {q.bucket_label(_bucket)} — {_n}"):
                     if _bucket == "unlocated":
-                        st.caption(
-                            "You own these but no box is recorded. The Workbench's "
-                            "**Reconcile** tab is where locations get set."
+                        nav.render_empty_state(
+                            "Owned, but no box is recorded.", "Workbench", "🔧 Set locations in the Workbench",
                         )
                     elif _bucket == "not_owned":
-                        st.caption(
-                            "Not owned. These feed the Workbench's **buy list**; proxying "
-                            "is the other way to finish the deck."
+                        nav.render_empty_state(
+                            "Not owned — these feed the buy list.", "Workbench", "🔧 See the Workbench buy list",
                         )
                     _show_where = _bucket in ("box", "sleeved")
                     st.dataframe(
@@ -533,15 +528,17 @@ def _render_mana_curve(conn, deck_id):
         st.markdown("**Type breakdown**")
         if not main_df_full.empty:
             type_counts = main_df_full.groupby("card_type")["quantity"].sum().reindex(fmt.ALL_CARD_TYPES).fillna(0)
-            st.bar_chart(type_counts)
+            st.bar_chart(type_counts, color=fmt.CATEGORY_COLORS[0])
         else:
             st.caption("No mainboard cards loaded yet.")
 
     with curve_col:
-        st.markdown("**Mana curve** (non-land, MDFC-aware)")
-        st.caption(
-            "Cards with a land on either face (e.g. an MDFC land) are excluded here, same as "
-            "the rest of this dashboard's mana-curve and land-ratio math (Land Probability page)."
+        st.markdown(
+            "**Mana curve** (non-land, MDFC-aware)",
+            help=(
+                "Cards with a land on either face (e.g. an MDFC land) are excluded here, same as "
+                "the rest of this dashboard's mana-curve and land-ratio math (Land Probability page)."
+            ),
         )
         if not main_df_full.empty:
             nonland_df = main_df_full[~main_df_full["is_land"]]
@@ -584,10 +581,8 @@ def _render_mana_curve(conn, deck_id):
                 ordered_cols = [c for c in fmt.ALL_CARD_TYPES if c in pivot.columns]
                 ordered_cols += [c for c in pivot.columns if c not in ordered_cols]
                 pivot = pivot[ordered_cols]
-            if chart_colors:
-                st.bar_chart(pivot, color=chart_colors)
-            else:
-                st.bar_chart(pivot)
+                chart_colors = fmt.category_colors(len(ordered_cols))
+            st.bar_chart(pivot, color=chart_colors)
 
         st.markdown("**Strategy tag breakdown**")
         tag_counts = loaders.load_deck_strategy_tag_counts(conn, deck_id)
@@ -621,11 +616,7 @@ def _render_combos(conn, deck_id, meta):
                 "Re-check after changing the decklist."
             )
         else:
-            st.caption(
-                "Combos for this deck haven't been looked up yet. "
-                "“Check Spellbook” sends this decklist to commanderspellbook.com "
-                "and caches what comes back."
-            )
+            st.caption("Not looked up yet — “Check Spellbook” sends this decklist to commanderspellbook.com.")
 
     with button_col:
         check_combos = st.button(
@@ -716,16 +707,12 @@ def _render_combos(conn, deck_id, meta):
 
         with in_deck_tab:
             if included_df.empty:
-                st.info(
-                    "Spellbook doesn't know of any complete combos in this deck. "
-                    "That's a real answer, not a gap — it only tracks combos "
-                    "someone has submitted, so your own synergies won't appear here."
+                st.caption(
+                    "No complete combos known to Spellbook — it only tracks submitted combos, "
+                    "so your own synergies won't appear."
                 )
             else:
-                st.caption(
-                    "Every card of these combos is in the mainboard right now — "
-                    "including any you assembled without meaning to."
-                )
+                st.caption("Every card of these combos is in the mainboard right now.")
                 for _, row in included_df.iterrows():
                     label = " + ".join(_lines(row["uses"]))
                     produces_short = ", ".join(_lines(row["produces"])[:2])
@@ -734,7 +721,7 @@ def _render_combos(conn, deck_id, meta):
 
         with one_away_tab:
             if almost_df.empty:
-                st.info("Nothing is exactly one card away from a known combo.")
+                st.caption("Nothing is exactly one card away from a known combo.")
             else:
                 # Grouping by the MISSING card is the actionable view: "adding
                 # Freed from the Real completes 3 combos" is a shopping-list
@@ -772,9 +759,8 @@ def _render_combos(conn, deck_id, meta):
                 )
 
                 st.caption(
-                    "One card short of a known combo. Ranked by how many combos each "
-                    "missing card would complete, then by how widely that combo is played. "
-                    "“In collection” counts a copy as free unless it's sleeved in another deck."
+                    "One card short of a known combo, ranked by combos completed, then popularity.",
+                    help="“In collection” counts a copy as free unless it's sleeved in another deck.",
                 )
                 st.dataframe(
                     summary_df,
@@ -950,8 +936,8 @@ def _render_history(conn, deck_id):
                     line += f"  — {h['notes']}"
                 st.markdown(line)
             st.caption(
-                "Games are counted by day, and a game on the day of a change counts toward the "
-                "older list. A 4-player pod and a few games per version is a signal, not evidence."
+                "A few games per version is a signal, not evidence.",
+                help="Games are counted by day; a game on the day of a change counts toward the older list.",
             )
 
 

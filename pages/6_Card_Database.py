@@ -36,7 +36,13 @@ db.require_db()
 conn = db.get_connection()
 
 st.title("🗄️ Card Database")
-st.caption("Writes straight to the database — no CSV editing or re-migration needed for any of this.")
+cv.how_it_works(
+    "Everything here writes straight to the database — no CSV editing or re-migration needed.",
+    "**Game Changers** lists every card that's either flagged by Scryfall's live Game Changer "
+    "field or already carries one of your custom categories — across your whole database, not "
+    "just one deck. *Owned* sums collection quantity across all printings; *In decks* counts how "
+    "many of your decks currently run the card.",
+)
 
 db.refresh_data_button()
 
@@ -49,13 +55,6 @@ tab_gc, tab_manatags, tab_carddata = st.tabs(["Game Changers", "Mana Tags", "Car
 # below), same pattern as the Themes catalog above.
 # ------------------------------------------------------------------
 with tab_gc:
-    st.caption(
-        "Every card that's either flagged by Scryfall's live Game Changer field, or already "
-        "carries one of your custom categories below — across your whole database, not just "
-        "one deck. 'Owned' sums collection quantity across all printings of the card; "
-        "'In decks' counts how many of your decks currently run it."
-    )
-
     @st.dialog("⚙️ Manage the master category list")
     def _manage_gc_catalog_dialog():
         """Phase 5: was an inline st.expander."""
@@ -164,10 +163,11 @@ with tab_gc:
 # ------------------------------------------------------------------
 with tab_manatags:
     st.caption(
-        "Optimized-mana categorization (Fast, Dual, Shockland, Fetch, Ritual, Mana Doubler, "
-        "Medallion, Moxen, etc.) — reconstructs the old 'Optimized Mana' footnote, shown live "
-        "per deck on the Decks page's 'Optimized mana' panel. Card-name-keyed across your "
-        "whole database, not deck-scoped, same as Game Changers."
+        "Optimized-mana categories (Fast, Dual, Shockland, Fetch, Ritual, …), shown per deck on the Decks page.",
+        help=(
+            "Reconstructs the old 'Optimized Mana' footnote. Card-name-keyed across your "
+            "whole database, not deck-scoped, same as Game Changers."
+        ),
     )
 
     @st.dialog("⚙️ Manage the master tag list")
@@ -211,11 +211,13 @@ with tab_manatags:
 
     st.divider()
 
-    st.markdown("**Tag a card**")
-    st.caption(
-        "Search any card in your database and assign its optimized-mana tags — this is the "
-        "only way to give a card its FIRST tag, since (unlike Game Changers) there's no "
-        "Scryfall flag to seed the list below from."
+    st.markdown(
+        "**Tag a card**",
+        help=(
+            "Search any card in your database and assign its optimized-mana tags — this is the "
+            "only way to give a card its FIRST tag, since (unlike Game Changers) there's no "
+            "Scryfall flag to seed the list below from."
+        ),
     )
     mt_search = st.text_input("Search for a card by name", key="editor_mt_search_add")
     mt_matches = q.search_card_names(conn, mt_search) if mt_search.strip() else []
@@ -245,10 +247,7 @@ with tab_manatags:
 
     mt_df = loaders.load_mana_tags_overview(conn)
     if mt_df.empty:
-        st.info(
-            "No cards carry an optimized-mana tag yet — use 'Tag a card' above to assign the "
-            "first one."
-        )
+        st.caption("No cards carry an optimized-mana tag yet — use **Tag a card** above to assign the first one.")
     else:
         mt_bulk_search = st.text_input("Search by card name", key="editor_mt_bulk_search")
         mt_scoped = (
@@ -297,15 +296,16 @@ with tab_manatags:
 # straight from Scryfall for every card already in the database
 # ------------------------------------------------------------------
 with tab_carddata:
-    st.markdown("**Refresh Scryfall data**")
-    st.caption(
-        "Re-fetches every card already in your database by its permanent Scryfall ID and "
-        "updates its Reserved List flag, Game Changer flag, Showcase/Borderless flags, "
-        "Commander legality, and current price. Doesn't touch your decklists or tags — safe "
-        "to run anytime, as often as you like. Needs network access and the `requests` "
-        "package. Afterward, it also automatically prunes your collection: any lot with no "
-        "assigned location, a quantity of 0/none, and not present in any deck's mainboard or "
-        "shortlist is deleted."
+    st.markdown(
+        "**Refresh Scryfall data**",
+        help=(
+            "Re-fetches every card already in your database by its permanent Scryfall ID and "
+            "updates its Reserved List flag, Game Changer flag, Showcase/Borderless flags, "
+            "Commander legality, and current price. Doesn't touch your decklists or tags — safe "
+            "to run anytime. Needs network access and the `requests` package. Afterward, it also "
+            "automatically prunes your collection: any lot with no assigned location, a quantity "
+            "of 0/none, and not present in any deck's mainboard or shortlist is deleted."
+        ),
     )
     total_cards = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
     st.caption(f"{total_cards} card(s) in your database.")
@@ -349,13 +349,15 @@ with tab_carddata:
     # read); this is the "I've been editing decklists, re-check everything"
     # path, alongside the Scryfall refresh above for the same reason.
     # ------------------------------------------------------------------
-    st.markdown("**Refresh Commander Spellbook combos**")
-    st.caption(
-        "Re-checks every deck against commanderspellbook.com's public combo database: which "
-        "combos are fully assembled in each deck right now, and which are exactly one card "
-        "short. Results are cached in the database and shown per deck on the Decks page — "
-        "this only refreshes them in bulk. One request per deck, and it never touches your "
-        "decklists or tags. Needs network access and the `requests` package."
+    st.markdown(
+        "**Refresh Commander Spellbook combos**",
+        help=(
+            "Re-checks every deck against commanderspellbook.com's public combo database: which "
+            "combos are fully assembled in each deck right now, and which are exactly one card "
+            "short. Results are cached and shown per deck on the Decks page — this only refreshes "
+            "them in bulk. One request per deck; never touches your decklists or tags. Needs "
+            "network access and the `requests` package."
+        ),
     )
 
     combo_sync_df = loaders.load_deck_combo_sync_all(conn)

@@ -53,7 +53,11 @@ db.require_db()
 conn = db.get_connection()
 
 st.title("✏️ Deck Editor")
-st.caption("Writes straight to the database — no CSV editing or re-migration needed for any of this.")
+cv.how_it_works(
+    "Everything here writes straight to the database — no CSV editing or re-migration needed.",
+    "**Deck Info** edits the deck's metadata, **Themes** and **Card Tags** label it, "
+    "**Mainboard** changes the card list, and **Shortlist** holds ideas you're weighing.",
+)
 
 st.sidebar.header("Deck")
 db.refresh_data_button()
@@ -107,7 +111,7 @@ if deck_id is not None:
 # ------------------------------------------------------------------
 with tab_info:
     if deck_id is None:
-        st.info("Create a deck in the sidebar to get started.")
+        nav.render_empty_state("No decks yet — use **➕ Create a new deck** in the sidebar to start.")
     else:
         meta = loaders.load_deck_meta(conn, deck_id)
 
@@ -177,8 +181,10 @@ with tab_info:
             st.rerun()
 
         st.divider()
-        st.markdown("#### Cover image")
-        st.caption("A custom PNG shown as this deck's thumbnail on the Decks page and the home page's deck tiles.")
+        st.markdown(
+            "#### Cover image",
+            help="A custom PNG shown as this deck's thumbnail on the Decks page and the home page's deck tiles.",
+        )
         current_cover = fmt.resolve_local_image(meta.get("cover_image_path"))
         cov_col1, cov_col2 = st.columns([1, 3])
         if current_cover:
@@ -207,8 +213,10 @@ with tab_info:
                 st.rerun()
 
         st.divider()
-        st.markdown("#### Win Conditions / Strengths / Weaknesses")
-        st.caption("Up to 3 ranked entries each, as \"Label\" + an optional longer description.")
+        st.markdown(
+            "#### Win Conditions / Strengths / Weaknesses",
+            help="Up to 3 ranked entries each, as \"Label\" + an optional longer description.",
+        )
 
         rank_kinds = [("win_conditions", "Win Conditions"), ("strengths", "Strengths"), ("weaknesses", "Weaknesses")]
         rank_col1, rank_col2, rank_col3 = st.columns(3)
@@ -255,14 +263,16 @@ with tab_info:
         # planned deck_changes rows, which then preview and apply through
         # the Workbench like every other change.
         # ------------------------------------------------------------------
-        st.markdown("#### 🔧 Dismantle this deck")
-        st.caption(
-            "Takes the deck apart and (optionally) feeds another deck with it. Cards on "
-            "both lists move **card-to-card**, skipping the box entirely; the rest goes "
-            "back to storage. The deck's list and change history are kept, so you can see "
-            "what it was and rebuild it later — unlike Delete below, which destroys the "
-            "record. Everything is staged as **planned** changes and applied from the "
-            "Workbench, so nothing moves until you confirm it."
+        st.markdown(
+            "#### 🔧 Dismantle this deck",
+            help=(
+                "Takes the deck apart and (optionally) feeds another deck with it. Cards on "
+                "both lists move **card-to-card**, skipping the box entirely; the rest goes "
+                "back to storage. The deck's list and change history are kept, so you can see "
+                "what it was and rebuild it later — unlike Delete below, which destroys the "
+                "record. Everything is staged as **planned** changes and applied from the "
+                "Workbench, so nothing moves until you confirm it."
+            ),
         )
 
         _dis_targets = {
@@ -288,10 +298,9 @@ with tab_info:
 
         _dis = q.deck_dismantle_plan(conn, deck_id, _dis_target_id)
         if _dis is None or not (_dis["direct_transfer"] or _dis["to_box"] or _dis["strays"]):
-            st.caption(
-                "Nothing is physically sleeved in this deck, so there's nothing to "
-                "dismantle. (Set the cards' Location to this deck's name first — the "
-                "Workbench's Reconcile tab does it in bulk.)"
+            nav.render_empty_state(
+                "Nothing is physically sleeved in this deck, so there's nothing to dismantle.",
+                "Workbench", "🔧 Set locations in the Workbench",
             )
         else:
             st.caption(
@@ -448,7 +457,7 @@ with tab_info:
 # ------------------------------------------------------------------
 with tab_themes:
     if deck_id is None:
-        st.info("Create a deck in the sidebar to get started.")
+        nav.render_empty_state("No decks yet — use **➕ Create a new deck** in the sidebar to start.")
     else:
         current_themes = loaders.load_deck_themes(conn, deck_id)
         if current_themes:
@@ -539,7 +548,7 @@ with tab_themes:
 # ------------------------------------------------------------------
 with tab_cardtags:
     if deck_id is None:
-        st.info("Create a deck in the sidebar to get started.")
+        nav.render_empty_state("No decks yet — use **➕ Create a new deck** in the sidebar to start.")
     else:
         cardtags_library_df = loaders.load_deck_cards_df(conn, deck_id)
 
@@ -604,10 +613,12 @@ with tab_cardtags:
 # ------------------------------------------------------------------
 with tab_main:
     if deck_id is None:
-        st.info("Create a deck in the sidebar to get started.")
+        nav.render_empty_state("No decks yet — use **➕ Create a new deck** in the sidebar to start.")
     else:
-        st.markdown("**Add a card**")
-        st.caption("Set code + collector number picks an exact printing; leave them blank to match by name.")
+        st.markdown(
+            "**Add a card**",
+            help="Set code + collector number picks an exact printing; leave them blank to match by name.",
+        )
         ac1, ac2, ac3, ac4 = st.columns([3, 1, 1, 1])
         main_add_name = ac1.text_input("Card name", key=f"editor_{deck_id}_main_add_name")
         main_add_set = ac2.text_input("Set", key=f"editor_{deck_id}_main_add_set")
@@ -776,7 +787,7 @@ def _apply_flash(results):
 
 with tab_shortlist:
     if deck_id is None:
-        st.info("Create a deck in the sidebar to get started.")
+        nav.render_empty_state("No decks yet — use **➕ Create a new deck** in the sidebar to start.")
     else:
         deck_name = loaders.load_deck_meta(conn, deck_id).get("name")
         main_df = loaders.load_deck_cards_df(conn, deck_id)
@@ -811,14 +822,18 @@ with tab_shortlist:
             del st.session_state[result_key]
 
         st.caption(
-            "A card moves **idea → planned → applied**, or gets **dropped**. Ideas can be cards "
-            "you own or don't, and needn't name what they'd replace yet. Nothing touches the "
-            "deck or your collection until you apply a planned change."
+            "A card moves **idea → planned → applied**, or gets **dropped**.",
+            help=(
+                "Ideas can be cards you own or don't, and needn't name what they'd replace yet. "
+                "Nothing touches the deck or your collection until you apply a planned change."
+            ),
         )
 
         # ---------------- Add an idea ----------------
-        st.markdown("**Add an idea**")
-        st.caption("Set code + collector number picks an exact printing; leave them blank to match by name.")
+        st.markdown(
+            "**Add an idea**",
+            help="Set code + collector number picks an exact printing; leave them blank to match by name.",
+        )
         with st.form(f"editor_{deck_id}_shortlist_add_form", clear_on_submit=True):
             f1, f2, f3 = st.columns([3, 1, 1])
             sl_name = f1.text_input("Card name", key=f"editor_{deck_id}_sl_add_name")

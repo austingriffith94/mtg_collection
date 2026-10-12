@@ -107,7 +107,6 @@ def _edit_game_dialog(games_df, game_ids):
     """Phase 5: was an inline st.expander. A dialog keeps the edit form off
     the main page and, per the dialog rules (one open at a time, no
     nesting), is a single self-contained job."""
-    st.caption("Pick a game to load it into an editable form below, then save your changes.")
     edit_gid = st.selectbox(
         "Pick a game", game_ids,
         format_func=lambda gid: gf.format_game_option(gid, games_df),
@@ -210,11 +209,13 @@ tab_log, tab_stats = st.tabs(["\U0001F4DD Log & manage games", "\U0001F4CA Playe
 # Tab 1: log a new game, game history, edit, delete
 # ------------------------------------------------------------------
 with tab_log:
-    st.subheader("Log a new game")
-    st.caption(
-        "For each seat, either pick one of your tracked decks, or pick a known opponent deck "
-        "you've logged before, or type a new one. Player names work the same way. Leave a whole "
-        "seat untouched to skip it (e.g. a 3-player pod)."
+    st.subheader(
+        "Log a new game",
+        help=(
+            "For each seat, either pick one of your tracked decks, or pick a known opponent deck "
+            "you've logged before, or type a new one. Player names work the same way. Leave a whole "
+            "seat untouched to skip it (e.g. a 3-player pod)."
+        ),
     )
 
     with st.form("gt_log_game_form", clear_on_submit=True):
@@ -249,7 +250,7 @@ with tab_log:
 
     games_df = loaders.load_games_list(conn)
     if games_df.empty:
-        st.info("No games logged yet — use the form above to log your first one.")
+        st.caption("No games logged yet — use the form above to log your first one.")
     else:
         for _, g in games_df.iterrows():
             with st.container(border=True):
@@ -277,12 +278,14 @@ with tab_log:
 # push it off the bottom of the page)
 # ------------------------------------------------------------------
 with tab_stats:
-    st.subheader("Win rate comparisons")
-    st.caption(
-        "Win % is bucketed against a 25% fair/expected win rate for a 4-player Commander pod "
-        "where every seat is equally likely to win: below 20% shades red (clearly "
-        "underperforming), 20\u201335% shades amber (around the fair rate), above 35% shades "
-        "green (clearly overperforming)."
+    st.subheader(
+        "Win rate comparisons",
+        help=(
+            "Win % is bucketed against a 25% fair/expected win rate for a 4-player Commander pod "
+            "where every seat is equally likely to win: below 20% shades red (clearly "
+            "underperforming), 20\u201335% shades amber (around the fair rate), above 35% shades "
+            "green (clearly overperforming)."
+        ),
     )
 
     wr_col1, wr_col2 = st.columns(2)
@@ -323,13 +326,15 @@ with tab_stats:
 
     st.divider()
 
-    st.subheader("Player ELO ratings")
-    st.caption(
-        "A multiplayer ELO variant, not a straight 1v1 ladder: a game's winner is scored a win "
-        "against every other seated player, and every pair of non-winners is scored a draw "
-        "against each other, since a 4-player pod's baseline win rate isn't 50/50 the way a 1v1 "
-        "match is. Only games with 2+ recorded player names count (same scoping as \u201cBy "
-        "player\u201d above)."
+    st.subheader(
+        "Player ELO ratings",
+        help=(
+            "A multiplayer ELO variant, not a straight 1v1 ladder: a game's winner is scored a win "
+            "against every other seated player, and every pair of non-winners is scored a draw "
+            "against each other, since a 4-player pod's baseline win rate isn't 50/50 the way a 1v1 "
+            "match is. Only games with 2+ recorded player names count (same scoping as \u201cBy "
+            "player\u201d above)."
+        ),
     )
     elo_df = loaders.load_player_elo_ratings(conn)
     if elo_df.empty:
@@ -342,11 +347,13 @@ with tab_stats:
 
     st.divider()
 
-    st.subheader("Head-to-head win rates")
-    st.caption(
-        "Row player's win rate against column player, counting only games the two of them "
-        "shared (with anyone else also at the table). \u2014 means they've never shared a "
-        "logged game. Shaded on the same red/amber/green buckets as the summaries above."
+    st.subheader(
+        "Head-to-head win rates",
+        help=(
+            "Row player's win rate against column player, counting only games the two of them "
+            "shared (with anyone else also at the table). \u2014 means they've never shared a "
+            "logged game. Shaded on the same red/amber/green buckets as the summaries above."
+        ),
     )
     h2h_df = loaders.load_player_head_to_head(conn)
     if h2h_df.empty:

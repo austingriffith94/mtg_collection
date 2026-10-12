@@ -94,10 +94,13 @@ def run_analysis_tab(conn, decks, provider):
 
     verified = [i for i in ck.items if i.verified]
     unverified = [i for i in ck.items if not i.verified]
-    st.subheader(f"Suggestions ({len(verified)} verified)")
-    st.caption("Verified: card names exist, quotes match stored oracle text, roles agree with computed tags. "
-               "That proves the facts are real, not that the advice is right."
-               + (" One retry was needed." if res.retried else ""))
+    st.subheader(
+        f"Suggestions ({len(verified)} verified)",
+        help="Verified: card names exist, quotes match stored oracle text, roles agree with computed tags. "
+             "That proves the facts are real, not that the advice is right.",
+    )
+    if res.retried:
+        st.caption("One retry was needed.")
     for i in verified:
         show_analysis_item(i)
     if not verified:
@@ -109,8 +112,7 @@ def run_analysis_tab(conn, decks, provider):
 
 
 def run_chat_tab(conn, provider):
-    st.caption("Free-form chat. The assistant can look up cards and decks from your database; "
-               "it cannot change anything.")
+    st.caption("Free-form chat — read-only; it can look up cards and decks but can't change anything.")
     if not provider.capabilities.tools:
         st.info(f"{provider.name} does not support tool calling, so chat mode is off for it.")
         return
@@ -164,7 +166,7 @@ db.refresh_data_button()
 
 decks = loaders.load_decks_df(conn)
 if decks.empty:
-    st.info("No decks yet.")
+    nav.render_empty_state("No decks yet.", "Deck_Editor", "✏️ Create one in the Deck Editor")
     st.stop()
 
 provider_choice = st.sidebar.selectbox("Model", PROVIDER_CHOICES)

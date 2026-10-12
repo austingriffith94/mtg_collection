@@ -36,7 +36,7 @@ import pandas as pd
 import streamlit as st
 
 from dashboard_lib import db, loaders, writes, card_resolver, queries as q
-from dashboard_lib import card_view as cv
+from dashboard_lib import card_view as cv, nav
 from dashboard_lib import moxfield_export as mox
 
 cv.setup_page("Workbench · MTG Dashboard", "🔧")
@@ -159,15 +159,17 @@ def _verdict_cell(change_id):
 # Conflicts — first, because these are the rows that cannot all succeed.
 # Everything below this is just a to-do list.
 # ------------------------------------------------------------------
-st.header(f"⚠️ Conflicts ({len(conflicts)})")
-if not conflicts:
-    st.success("No two plans want the same physical card. Everything below can be applied as it stands.")
-else:
-    st.caption(
+st.header(
+    f"⚠️ Conflicts ({len(conflicts)})",
+    help=(
         "Two or more open changes want one card, and between them want more copies than "
         "are free in storage. Applying them in order gives the card to the earliest; the "
         "rest will fail or buy a copy. Pick which deck keeps it and drop the others."
-    )
+    ),
+)
+if not conflicts:
+    st.success("No two plans want the same physical card. Everything below can be applied as it stands.")
+else:
     for group in conflicts:
         free = group["available_qty"] or 0
         with st.container(border=True):
@@ -299,7 +301,10 @@ def _planned_block(deck_id, deck_rows):
 # ------------------------------------------------------------------
 st.header(f"📋 Planned changes ({len(planned_df)})")
 if planned_df.empty:
-    st.caption("Nothing staged. Promote an idea on a deck's **Shortlist** tab to stage it.")
+    nav.render_empty_state(
+        "Nothing staged yet. Promote an idea on a deck's **Shortlist** tab to stage it.",
+        "Deck_Editor", "✏️ Open the Deck Editor",
+    )
 else:
     blocked = sum(
         1 for cid in planned_df["change_id"]
@@ -320,15 +325,12 @@ else:
 flagged = ideas_df[ideas_df["review_flag"] == 1] if not ideas_df.empty else ideas_df
 st.header(f"🚩 Ideas needing a decision ({len(flagged)})")
 if flagged.empty:
-    st.caption(
-        "No ideas are flagged. Tick **Review** on an idea in a deck's Shortlist tab to "
-        "gather it here."
+    nav.render_empty_state(
+        "No ideas are flagged. Tick **Review** on an idea in a deck's Shortlist tab to gather it here.",
+        "Deck_Editor", "✏️ Open the Deck Editor",
     )
 else:
-    st.caption(
-        "Promoting and pairing happen on the deck's own Shortlist tab, where the mainboard "
-        "is there to pick a card to cut from. Drop and un-flag can be done here."
-    )
+    st.caption("Promote and pair on the deck's own Shortlist tab; drop and un-flag work here.")
     table = [{
         "change_id": int(r["change_id"]),
         "Deck": r["deck_name"],
@@ -377,16 +379,18 @@ else:
 # Room in 4 decks on 3 copies) still surfaces here. The per-row shortlist
 # check above can't see this; it only ever looks at open deck_changes.
 # ------------------------------------------------------------------
-st.header(f"📊 Contention ({len(contention)})")
-if not contention:
-    st.success("No card is shorter than its total demand across mainboards and shortlists.")
-else:
-    st.caption(
+st.header(
+    f"📊 Contention ({len(contention)})",
+    help=(
         "Demand = decks running this card mainboard + decks with an open idea/planned add "
         "for it. Shortfall = demand minus copies owned. Buying the shortfall is already "
         "reflected in the Buy list below; dropping it from a deck here removes it from that "
         "deck's mainboard immediately (logged to its history like any hand edit)."
-    )
+    ),
+)
+if not contention:
+    st.success("No card is shorter than its total demand across mainboards and shortlists.")
+else:
     for row in contention:
         with st.container(border=True):
             mb = ", ".join(row["mainboard_decks"]) or "—"
@@ -419,14 +423,16 @@ else:
 # Buy list (Phase 3) — unowned ideas, deduplicated across decks, plus one
 # row per contention shortfall above.
 # ------------------------------------------------------------------
-st.header(f"🛒 Buy list ({len(buy['rows'])}) — ${buy['total']:,.2f}")
+st.header(
+    f"🛒 Buy list ({len(buy['rows'])}) — ${buy['total']:,.2f}",
+    help=(
+        "Ideas with zero owned copies (grouped across decks, priced once) plus contention "
+        "rows where buying the shortfall resolves it."
+    ),
+)
 if not buy["rows"]:
     st.caption("Nothing to buy — every open idea is already owned, and nothing is short.")
 else:
-    st.caption(
-        "Ideas with zero owned copies (grouped across decks, priced once) plus contention "
-        "rows where buying the shortfall resolves it."
-    )
     buy_table = pd.DataFrame([{
         "Card": r["card"],
         "Qty": r["quantity"],
@@ -459,14 +465,16 @@ locations = q.location_options(conn)
 
 # --- 1. Unlocated lots ---------------------------------------------
 unloc = q.unlocated_lots(conn)
-st.subheader(f"📍 Unlocated lots ({len(unloc)}) — ${unlocated['value']:,.2f}")
+st.subheader(
+    f"📍 Unlocated lots ({len(unloc)}) — ${unlocated['value']:,.2f}",
+    help=(
+        "Lots with no Location, most valuable first. Pick a Location per row, or tick rows and "
+        "assign them all at once — these likely came in as a batch."
+    ),
+)
 if not unloc:
     st.success("Every lot has a location.")
 else:
-    st.caption(
-        "Lots with no Location, most valuable first. Pick a Location per row, or tick rows and "
-        "assign them all at once — these likely came in as a batch."
-    )
     unloc_df = pd.DataFrame([{
         "collection_id": r["collection_id"], "Card": r["card"], "Set": r["set_code"].upper(),
         "Qty": r["quantity"], "Foil": r["foil"], "Value": r["value"], "Source": r["source"],
@@ -511,11 +519,13 @@ else:
 
 # --- 2 + 3. Per-deck list vs. physical, with build status ----------
 recon = q.deck_reconciliation(conn)
-st.subheader("📦 Decks: list vs. physical")
-st.caption(
-    "**To pull** = in the mainboard but no copy is sleeved in the deck. **To put away** = a copy "
-    "is sleeved in the deck that the mainboard no longer runs. Basics are ignored. Build % is the "
-    "share of non-basic mainboard cards physically in the deck."
+st.subheader(
+    "📦 Decks: list vs. physical",
+    help=(
+        "**To pull** = in the mainboard but no copy is sleeved in the deck. **To put away** = a copy "
+        "is sleeved in the deck that the mainboard no longer runs. Basics are ignored. Build % is the "
+        "share of non-basic mainboard cards physically in the deck."
+    ),
 )
 for deck in recon:
     b = deck["build"]

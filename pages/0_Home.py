@@ -124,6 +124,6 @@ with st.expander("📊 Compare all decks"):
         hide_index=True, width="stretch",
     )
     st.caption(
-        "Click a column header to sort. Win rates here come from a 4-player pod and a handful of "
-        "games per deck — a signal, not evidence."
+        "Click a column header to sort. Win rates are a signal, not evidence.",
+        help="They come from a 4-player pod and a handful of games per deck.",
     )

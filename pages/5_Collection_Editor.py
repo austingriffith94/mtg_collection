@@ -29,7 +29,7 @@ import pandas as pd
 import streamlit as st
 
 from dashboard_lib import db, loaders, writes, card_resolver, formatting as fmt, queries as q
-from dashboard_lib import card_view as cv, order_import
+from dashboard_lib import card_view as cv, order_import, nav
 
 
 cv.setup_page("Collection Editor · MTG Dashboard", "📥")
@@ -38,7 +38,14 @@ db.require_db()
 conn = db.get_connection()
 
 st.title("📥 Collection Editor")
-st.caption("Writes straight to the database — no CSV editing or re-migration needed for any of this.")
+cv.how_it_works(
+    "Everything here writes straight to the database — no CSV editing or re-migration needed.",
+    "**Import a purchase order** adds every line item of a marketplace export (e.g. Mana Pool's "
+    "`order_<id>_<date>.csv`) at once. Each row's Set Code + Collector # is looked up against your "
+    "database, falling back to a live Scryfall lookup, to resolve the exact printing and its real "
+    "name. The card name printed in the file is never trusted for the match — it's only a fallback "
+    "label if a row can't be resolved at all.",
+)
 
 db.refresh_data_button()
 
@@ -85,16 +92,10 @@ if cv.dialog_is_open("editor_loc_catalog_dialog"):
     _manage_location_catalog_dialog()
 
 st.markdown("**Import a purchase order (CSV)**")
-st.caption(
-    "Upload a marketplace order export (e.g. Mana Pool's "
-    "'order_<id>_<date>.csv' download) to add every line item at once. "
-    "Each row's Set Code + Collector # is looked up against your "
-    "database (falling back to a live Scryfall lookup) to resolve the "
-    "exact printing and its real name — the card name printed in the "
-    "file itself is never trusted for the match, only used as a "
-    "fallback label if a row can't be resolved at all."
+order_file = st.file_uploader(
+    "Order CSV", type=["csv"], key="editor_order_import_file",
+    help="A marketplace order export. Printings are matched by Set Code + Collector #, not by name.",
 )
-order_file = st.file_uploader("Order CSV", type=["csv"], key="editor_order_import_file")
 
 if order_file is not None:
     order_rows = []
@@ -201,15 +202,7 @@ if order_file is not None:
                 "Note: some resolved names differ from the file's own Card Name text "
                 "(e.g. MDFC naming) — the resolved name above is what gets stored."
             )
-        if any(r["language"] and r["language"].lower() != "english" for r in singles):
-            st.caption(
-                "Note: this file has non-English cards — the collection schema "
-                "doesn't track Language, so it'll be dropped on import."
-            )
-        st.caption(
-            "Condition and Language are shown above for reference but aren't stored — "
-            "the collection schema has no per-lot Condition/Language column today."
-        )
+        st.caption("Condition and Language are shown for reference only — they aren't stored.")
 
         oc1, oc2, oc3 = st.columns(3)
         LOC_OTHER_IMPORT = "+ Other (type a new location below)..."
@@ -266,14 +259,15 @@ if order_file is not None:
             st.rerun()
 
 st.divider()
-st.markdown("**Add a card to your collection**")
-st.caption(
-    "Start typing a card name — matches already in your database appear as "
-    "suggestions below (refreshes once you finish typing or press Enter, since "
-    "that's as close to live autocomplete as plain Streamlit widgets get). Pick "
-    "one to choose the exact printing you own, or leave it on \"use exactly what "
-    "I typed\" / fill in Set + Collector Number directly for a brand-new card "
-    "(resolved via a live Scryfall lookup when you click Add)."
+st.markdown(
+    "**Add a card to your collection**",
+    help=(
+        "Start typing a card name — matches already in your database appear as suggestions "
+        "(they refresh once you finish typing or press Enter). Pick one to choose the exact "
+        "printing you own, or leave it on \"use exactly what I typed\" / fill in Set + "
+        "Collector Number directly for a brand-new card (resolved via a live Scryfall lookup "
+        "when you click Add)."
+    ),
 )
 # After a successful add, clear the per-card fields (name, printing, set/number,
 # qty, foil, price) but keep location/date/source — those usually stay the same
@@ -420,8 +414,7 @@ if st.button("➕ Add to collection", key="editor_coll_add_btn"):
 
 st.divider()
 st.markdown("**Edit / remove collection lots**")
-st.info(
-    "Editing and removing existing lots now lives on the **Collection** page — turn on "
-    "'✏️ Edit mode' there to change quantity, foil, location, date, price, or source "
-    "directly on whatever the sidebar filters are showing."
+nav.render_empty_state(
+    "Editing and removing existing lots lives on the Collection page's ✏️ Edit mode.",
+    "Collection", "📦 Open the Collection",
 )

@@ -146,6 +146,15 @@ def _sync_current_deck(widget_key):
     st.session_state[CURRENT_DECK_KEY] = st.session_state[widget_key]
 
 
+def how_it_works(*paragraphs):
+    """The page's single collapsed "ℹ️ How this works" expander (UI plan
+    Phase 6). Long explanations live here or in `help=` tooltips;
+    st.caption stays for short context and warnings."""
+    with st.expander("ℹ️ How this works"):
+        for p in paragraphs:
+            st.markdown(p)
+
+
 def render_deck_picker(decks_df, key, container=None, empty_message="No decks found.", label="Choose a deck"):
     """Render the deck selectbox (sidebar by default) and return the
     chosen deck_id, or None if decks_df is empty (empty_message is shown

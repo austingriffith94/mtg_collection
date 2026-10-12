@@ -274,15 +274,41 @@ def classify_mana_colors(type_line, oracle_text, color_identity):
 # ------------------------------------------------------------------
 MANA_CURVE_COLOR_ORDER = ["W", "U", "B", "R", "G", "Multi-color", "Colorless"]
 
-MANA_CURVE_COLOR_HEX = {
-    "W": "#F8E7B9",   # White
-    "U": "#0E68AB",   # Blue
-    "B": "#150B00",   # Black
-    "R": "#D3202A",   # Red
-    "G": "#00733E",   # Green
-    "Multi-color": "#B8860B",  # Dark yellow (goldenrod)
-    "Colorless": "#9E9E9E",    # Grey
+# UI plan Phase 6: the one canonical mana palette. Every chart that splits
+# by color reads from here (directly or via the aliases below), so a "Red"
+# bar always means red mana. Non-color categories use CATEGORY_COLORS
+# instead, which deliberately avoids these hues.
+MANA_COLORS = {
+    "W": "#F8E7B9",      # White
+    "U": "#0E68AB",      # Blue
+    "B": "#150B00",      # Black
+    "R": "#D3202A",      # Red
+    "G": "#00733E",      # Green
+    "C": "#9E9E9E",      # Colorless (grey)
+    "Multi": "#B8860B",  # Multicolor (goldenrod)
 }
+
+# Palette for categories that are NOT mana colors (card types, tags, ...).
+# Muted teals/violets/ambers/slates, picked to stay clear of W/U/B/R/G.
+CATEGORY_COLORS = [
+    "#8E6BBF", "#E0903A", "#3AA6A0", "#C06C9B",
+    "#8C6D4F", "#6F7FA8", "#B5A642", "#5E8C8C",
+]
+
+MANA_CURVE_COLOR_HEX = {
+    "W": MANA_COLORS["W"],
+    "U": MANA_COLORS["U"],
+    "B": MANA_COLORS["B"],
+    "R": MANA_COLORS["R"],
+    "G": MANA_COLORS["G"],
+    "Multi-color": MANA_COLORS["Multi"],
+    "Colorless": MANA_COLORS["C"],
+}
+
+
+def category_colors(n):
+    """The first n CATEGORY_COLORS, cycling if a chart has more series."""
+    return [CATEGORY_COLORS[i % len(CATEGORY_COLORS)] for i in range(n)]
 
 
 def mana_curve_color_bucket(color_display):

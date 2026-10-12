@@ -65,7 +65,7 @@ def render_edit_table(df):
     comes filtered from outside, so the sidebar filters (full reruns) still
     drive it, and a save reruns the whole app so the metrics row updates."""
     if df.empty:
-        st.info("No cards match the current filters.")
+        st.caption("No cards match the current filters — loosen a sidebar filter.")
         return
     df = df.sort_values(by=["name", "set_code"], kind="stable")
     rows = [
@@ -81,10 +81,7 @@ def render_edit_table(df):
         }
         for _, r in df.iterrows()
     ]
-    st.caption(
-        f"{len(rows)} lot(s) shown — edit cells, then save. Changing a sidebar filter "
-        "before saving discards unsaved edits."
-    )
+    st.caption(f"{len(rows)} lot(s) shown — edit cells, then save.")
     # Options: catalog + deck names, plus any Location text these rows already
     # carry, so editing can never blank out a value the dropdown doesn't know.
     loc_options = sorted(
@@ -142,15 +139,15 @@ def render_moxfield_export():
     """Moxfield collection CSV export. Only called while its expander is
     open: building the CSV walks every lot, which is wasted work on every
     filter change when nobody is exporting (UI plan Phase 4)."""
-    st.caption(
-        "Moxfield-compatible collection CSV — one row per printing + foil combination "
-        "(quantities summed across any collection lots sharing that exact printing). "
-        "'Owned NOT in a deck' only includes printings with zero copies used in any "
-        "deck's mainboard; Tradelist Count is 0 for anything run in a deck either way."
-    )
     export_scope = st.segmented_control(
         "Which cards?", ["Full Collection", "Owned NOT in a deck"],
         key="collection_moxfield_scope",
+        help=(
+            "Moxfield-compatible collection CSV — one row per printing + foil combination "
+            "(quantities summed across any lots sharing that exact printing). 'Owned NOT in a "
+            "deck' only includes printings with zero copies used in any deck's mainboard; "
+            "Tradelist Count is 0 for anything run in a deck either way."
+        ),
     ) or "Full Collection"
     export_not_in_deck = export_scope == "Owned NOT in a deck"
     export_rows = moxfield_export.collection_export_rows(conn, only_not_in_deck=export_not_in_deck)
@@ -192,12 +189,12 @@ coll_summary = loaders.load_collection_summary(conn)
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Collection lots", coll_summary.get("lots") or 0)
 m2.metric("Unique printings", coll_summary.get("unique_printings") or 0)
-m3.metric("Tracked quantity", coll_summary.get("tracked_quantity") or 0)
-m4.metric("Tracked value", fmt.format_money(coll_summary.get("tracked_value")))
-st.caption(
+_tracked_help = (
     "Tracked figures exclude untracked bulk lots (e.g. basics with no counted "
-    "quantity) — those are in the collection but not summed above."
+    "quantity) — those are in the collection but not summed here."
 )
+m3.metric("Tracked quantity", coll_summary.get("tracked_quantity") or 0, help=_tracked_help)
+m4.metric("Tracked value", fmt.format_money(coll_summary.get("tracked_value")), help=_tracked_help)
 
 # Built lazily: a collapsed st.expander still runs its body, so with
 # on_change="rerun" its .open flag decides whether to build the export.

@@ -116,14 +116,16 @@ st.divider()
 # ------------------------------------------------------------------
 # Section A — land drops
 # ------------------------------------------------------------------
-st.markdown("### Hitting your land drops")
-st.caption(
+st.markdown(
+    "### Hitting your land drops",
+    help=(
     "Probability of having drawn **at least N lands by turn N** — i.e. enough to have "
     "played a land every turn so far, assuming no mulligans or extra draw. **Expected lands "
     "seen** answers a different question: the probability-weighted EXPECTED total land count "
     "by that point (same linearity-of-expectation math as the weighted mana-source graph "
     "further down) — this can be a fraction, and it's 'how many lands do I expect to have by "
     "now' rather than 'what's the chance I've hit every drop so far'."
+    ),
 )
 
 rows = []
@@ -146,7 +148,7 @@ st.dataframe(land_drop_table, width="stretch")
 st.markdown("**Distribution of lands in your opening 7**")
 dist = prob.distribution(library_size, land_count, prob.OPENING_HAND_SIZE)
 dist_series = pd.Series(dist, name="Probability").rename_axis("Lands in opening 7")
-st.bar_chart(dist_series)
+st.bar_chart(dist_series, color=fmt.CATEGORY_COLORS[0])
 
 st.divider()
 
@@ -203,7 +205,7 @@ else:
     st.dataframe(color_table, width="stretch")
 
     color_chart = pd.DataFrame(chart_rows).set_index("turn")
-    st.line_chart(color_chart)
+    st.line_chart(color_chart, color=[fmt.MANA_COLORS[c] for c in color_chart.columns])
 
 # Color sources used below in Sections C/D always use the LAND-only,
 # text-parser-based counts (the "off" toggle state), regardless of what's
@@ -219,13 +221,15 @@ st.divider()
 # ------------------------------------------------------------------
 # Section C — weighted mana-source availability (Phase 3)
 # ------------------------------------------------------------------
-st.markdown("### Weighted mana-source availability")
-st.caption(
+st.markdown(
+    "### Weighted mana-source availability",
+    help=(
     "The probability-weighted **expected number of mana sources** you'll have access to "
     "by each turn, split by category — Mana Rocks/Dorks, Colorless lands, Any-Color lands "
     "(Command Tower, City of Brass, Exotic Orchard, etc.), and each individual color. "
     "This is an expected COUNT (not a 'chance of at least one'), so a dual land contributes "
     "to both of its colors' bars — categories won't sum to the total land count."
+    ),
 )
 
 category_counts = prob.mana_source_category_counts(library_df)
@@ -261,8 +265,9 @@ st.divider()
 # ------------------------------------------------------------------
 # Section D — Commander Cast Probability engine (Phase 3)
 # ------------------------------------------------------------------
-st.markdown("### Commander cast probability (Turn 1–10)")
-st.caption(
+st.markdown(
+    "### Commander cast probability (Turn 1–10)",
+    help=(
     "Estimated probability of being able to cast the commander **on curve**, assuming "
     "standard 1-land-per-turn drops with no ramp. This compounds two factors: (1) the "
     "cumulative probability of having drawn enough lands for the commander's full mana "
@@ -271,6 +276,7 @@ st.caption(
     "optimistic simplification (in reality the same land can't satisfy two color "
     "requirements with one draw). Hybrid/Phyrexian pips are not treated as a hard color "
     "requirement, since they can be paid another way."
+    ),
 )
 
 commander_names_ordered = [n for n in (meta.get("commander"), meta.get("partner")) if n]
@@ -316,7 +322,7 @@ else:
             )
             cast_df = pd.DataFrame(cast_rows)
             chart_df = cast_df.set_index("turn")[["probability"]].rename(columns={"probability": pick_label})
-            st.line_chart(chart_df)
+            st.line_chart(chart_df, color=fmt.CATEGORY_COLORS[0])
 
             with st.expander("Show factor breakdown"):
                 display_df = cast_df.copy()
@@ -334,14 +340,16 @@ st.divider()
 # ------------------------------------------------------------------
 # Section E — check a specific card
 # ------------------------------------------------------------------
-st.markdown("### Check a specific card")
-st.caption(
+st.markdown(
+    "### Check a specific card",
+    help=(
     "Pure lands (basics and other cards whose type line is only Land) are excluded here — "
     "they're already covered by the land-drop math above. MDFC cards with a land face are "
     "still included, since their other, non-land face is still a real card to check for. "
     "This shows the turn-by-turn probability of actually **playing** the chosen card on "
     "curve (drawn it, AND had enough lands, AND had the right colored sources by that turn), "
     "projected through Turn 8."
+    ),
 )
 checkable_df = library_df[~library_df["type_line"].fillna("").apply(fmt.is_pure_land)]
 card_names = sorted(checkable_df["name"].unique())

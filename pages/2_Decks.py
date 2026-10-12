@@ -7,7 +7,9 @@ tabs, each built by a _render_<tab>(conn, deck_id, ...) function below:
   Mana & Curve - themes, type breakdown, mana curve, strategy tags
   Combos       - Commander Spellbook panel
   Cards        - Mainboard/Shortlist browser (its filters are in an expander
-                 on the tab, not the sidebar) + top-10 most expensive
+                 on the tab, not the sidebar; the Mainboard also has a
+                 Moxfield-style "Stacks" view, dashboard_lib/deck_board.py)
+                 + top-10 most expensive
   History      - change log
 "Compare all decks" moved to the Home page. st.tabs runs every tab body on
 each rerun, so no tab does network work outside an explicit button press.
@@ -97,7 +99,7 @@ import streamlit as st
 
 from dashboard_lib import db, loaders, writes, formatting as fmt, moxfield_export, deck_printout
 from dashboard_lib import queries as q, spellbook
-from dashboard_lib import card_view as cv, nav
+from dashboard_lib import card_view as cv, nav, deck_board
 
 cv.setup_page("Decks · MTG Dashboard", "🃏")
 
@@ -877,12 +879,24 @@ def _render_cards(conn, deck_id):
         if "board" in working_df.columns:
             group_options.append(("board", "Board"))
 
+        # Stacks (VISUAL_DECK_PLAN.md Phase A) is offered for the Mainboard
+        # only: the board has no notion of Shortlist rows.
+        stacks_renderer = None
+        if board_choice == "Mainboard":
+            def stacks_renderer(df):
+                deck_board.render_deck_board(
+                    df, loaders.load_deck_meta(conn, deck_id),
+                    loaders.load_owned_card_quantities(conn),
+                    key=f"deck_{deck_id}_stacks",
+                )
+
         cv.render_browser(
             filtered,
             key_prefix=scope_key,
             group_options=group_options,
             column_config=column_config,
             extra_table_cols=extra_cols,
+            stacks_renderer=stacks_renderer,
         )
 
 

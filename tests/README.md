@@ -51,6 +51,10 @@ plus pytest (`pip install -r requirements-dev.txt`):
   `resolve_current_deck()` with a dict standing in for session state.
 - `test_nav.py` — the page registry in `dashboard_lib/nav.py` matches the
   files in `pages/`, and the Decks page keeps its `Decks` URL.
+- `test_deck_board.py` — VISUAL_DECK_PLAN.md Phase A: `board_payload()`
+  (commander first, MDFC land flags, not-owned flags, URL-only images,
+  payload size). The JS itself is checked by hand; the Decks page smoke
+  test in `test_pages_smoke.py` selects View = Stacks.
 - `test_static_images.py` — UI plan Phase 4: cached images become
   `app/static/` URLs on screen and data: URIs only when embedded (the deck
   sheet), the one-time `image_cache/` → `static/image_cache/` move

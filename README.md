@@ -45,6 +45,7 @@ mtg_dashboard/
 │   ├── db.py                         # cached connection + "no DB yet" guard
 │   ├── loaders.py                    # st.cache_data-wrapped versions of queries.py
 │   ├── card_view.py                  # shared table/grid browser + filter UI
+│   ├── deck_board.py                 # Moxfield-style Stacks view of a deck (custom component; JS/CSS in components/)
 │   └── nav.py                        # page registry: sidebar sections, titles, URLs, Home link cards
 ├── tests/                             # pytest suite on an in-memory DB (python -m pytest tests) — see tests/README.md
 ├── data/                              # your source CSVs go here

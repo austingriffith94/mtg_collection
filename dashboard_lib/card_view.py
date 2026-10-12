@@ -357,7 +357,8 @@ def render_filter_panel(
 # View toggle + group-by breakout + sort, then dispatch to table/grid
 # ------------------------------------------------------------------
 @st.fragment
-def render_browser(df, key_prefix, group_options, column_config, extra_table_cols=None, columns_per_row=5):
+def render_browser(df, key_prefix, group_options, column_config, extra_table_cols=None, columns_per_row=5,
+                   stacks_renderer=None):
     """
     A fragment (UI plan Phase 4): changing the view, grouping, sort, page
     size or page reruns only this browser, not the whole page. A fragment
@@ -372,15 +373,26 @@ def render_browser(df, key_prefix, group_options, column_config, extra_table_col
     column_config: ordered dict {col: st.column_config...} defining the
                    Table view's columns (order + rendering, incl. the
                    clickable Scryfall LinkColumn).
+    stacks_renderer: optional callable(df) that draws the deck's Stacks board
+                   (VISUAL_DECK_PLAN.md Phase A). Passing it adds a third
+                   "Stacks" View option; that view has its own group-by, so
+                   the browser's group / sort controls are skipped for it,
+                   but the (already-applied) filters still narrow `df`. It's
+                   a callable, not an import, because deck_board imports this
+                   module. Opt-in so the Collection page is unchanged.
     """
     if df.empty:
         st.info("No cards match the current filters.")
         return
 
     ctrl1, ctrl2, ctrl3, ctrl4 = st.columns([1.3, 2, 1.3, 1])
-    view = ctrl1.segmented_control(
-        "View", ["Table", "Image Grid"], key=f"{key_prefix}_view"
-    ) or "Table"
+    views = ["Table", "Image Grid"] + (["Stacks"] if stacks_renderer else [])
+    view = ctrl1.segmented_control("View", views, key=f"{key_prefix}_view") or "Table"
+
+    if view == "Stacks":
+        st.caption(f"{len(df)} card row(s) shown")
+        stacks_renderer(df)
+        return
 
     label_by_col = dict(group_options)
     col_by_label = {label: col for col, label in group_options}

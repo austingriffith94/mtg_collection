@@ -20,6 +20,7 @@ that the Deck Editor's create flow selects the new deck.
 import os
 import shutil
 import sqlite3
+import sys
 
 import pytest
 import streamlit as st
@@ -254,6 +255,58 @@ def test_decks_page_brewing_deck_and_empty_deck(smoke_db_path, tmp_path, monkeyp
             at.run()
             assert not at.exception, deck_id
             assert "Overview" in [t.label for t in at.tabs]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def _forget_deck_board():
+    """Make the next page run re-import deck_board (and so re-register its
+    component). `from dashboard_lib import deck_board` consults the package
+    attribute before sys.modules, so both have to go."""
+    import dashboard_lib
+
+    sys.modules.pop("dashboard_lib.deck_board", None)
+    if hasattr(dashboard_lib, "deck_board"):
+        del dashboard_lib.deck_board
+
+
+def test_decks_page_stacks_view(smoke_db_path, tmp_path, monkeypatch):
+    # VISUAL_DECK_PLAN.md Phase A: the Cards tab's View gains "Stacks" for the
+    # Mainboard. AppTest can't click inside the component's JS, so this only
+    # proves the page renders with the view selected — for a deck with cards
+    # (no cached image, so the Scryfall/None fallback path) and an empty one.
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO decks (deck_id, name, commander, color_identity) VALUES (3, 'Empty Deck', NULL, '')"
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    # The component registers itself at import, in the Streamlit Runtime that
+    # exists then. A real server has one Runtime for the whole process, but
+    # every AppTest.run() builds a fresh one, so re-import to re-register
+    # (done again before the second run below).
+    _forget_deck_board()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "2_Decks.py"), default_timeout=15)
+        for deck_id in (1, 3):
+            at.session_state["current_deck_id"] = deck_id
+            at.run()
+            assert not at.exception, deck_id
+            if deck_id != 1:
+                continue  # the empty deck shows "no cards" instead of a browser
+            view = at.segmented_control(key="deck_1_Mainboard_view")
+            assert "Stacks" in view.options
+            _forget_deck_board()
+            view.set_value("Stacks").run()
+            assert not at.exception, deck_id
     finally:
         st.cache_resource.clear()
         st.cache_data.clear()

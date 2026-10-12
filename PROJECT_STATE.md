@@ -71,6 +71,7 @@ mtg_dashboard/
 │   ├── game_form.py        # Commander Game Tracking form seat resolution/validation (Prompt Pass 7) (no Streamlit dep)
 │   ├── db.py / loaders.py / card_view.py   # Streamlit-specific glue
 │   ├── nav.py              # page registry (sections/titles/url_paths) shared by the router and Home page
+│   ├── deck_board.py       # Stacks view of a deck (VISUAL_DECK_PLAN.md Phase A): pure board_payload() + CCv2 mount; JS/CSS in components/
 ├── data/                   # source CSVs (decks, collection, maybeboard, etc.)
 ├── moxfield_exports/       # created on first use
 ├── static/image_cache/     # created on first use; deck_covers/<deck_id>.png added in Phase 2; moved under static/ in UI plan Phase 4

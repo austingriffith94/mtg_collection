@@ -1,0 +1,101 @@
+/* Stacks deck board styles (see deck_board.js). Colors come from Streamlit's
+   --st-* theme variables so the board follows the app's light/dark theme.
+   The fallbacks only matter if a variable is missing. */
+
+.board {
+  --card-w: 180px;
+  --card-h: calc(var(--card-w) * 1.4);   /* 5:7 card art */
+  --bar-h: calc(var(--card-h) * 0.14);   /* the visible name bar of a stacked card */
+  color: var(--st-text-color, #fafafa);
+  font-family: var(--st-font, sans-serif);
+  font-size: 14px;
+}
+
+.empty { padding: 1rem; opacity: 0.7; }
+
+/* ---- toolbar ---- */
+.toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.toolbar-label { opacity: 0.7; margin-right: 4px; }
+.toolbar-total { margin-left: auto; opacity: 0.7; }
+.group-btn {
+  background: var(--st-secondary-background-color, #1b1f27);
+  color: inherit;
+  border: 1px solid var(--st-border-color, #444);
+  border-radius: var(--st-button-radius, 8px);
+  padding: 4px 12px;
+  cursor: pointer;
+  font: inherit;
+}
+.group-btn.active {
+  background: var(--st-primary-color, #c0392b);
+  border-color: var(--st-primary-color, #c0392b);
+  color: #fff;
+}
+
+/* ---- layout: stacks wrap on the left, preview sticks on the right ---- */
+.layout { display: flex; gap: 16px; align-items: flex-start; }
+.stacks { flex: 1; display: flex; flex-wrap: wrap; gap: 18px 14px; align-items: flex-start; min-width: 0; }
+
+.preview {
+  position: sticky;
+  top: 60px;
+  width: 260px;
+  flex: none;
+  box-sizing: border-box;
+  background: var(--st-secondary-background-color, #1b1f27);
+  border: 1px solid var(--st-border-color, #444);
+  border-radius: var(--st-base-radius, 8px);
+  padding: 10px;
+}
+.preview-hint { opacity: 0.6; text-align: center; padding: 2rem 0.5rem; }
+.preview-img { width: 100%; border-radius: 10px; display: block; }
+.preview-noimg {
+  aspect-ratio: 5 / 7; display: flex; align-items: center; justify-content: center;
+  text-align: center; opacity: 0.6; border: 1px dashed var(--st-border-color, #444); border-radius: 10px;
+}
+.preview-name { font-weight: 600; margin-top: 8px; }
+.preview-type, .preview-facts, .preview-tags { opacity: 0.75; font-size: 12px; margin-top: 2px; }
+
+/* ---- a stack ---- */
+.stack { width: var(--card-w); }
+.stack-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  border-bottom: 2px solid var(--st-primary-color, #c0392b);
+  margin-bottom: 6px; padding-bottom: 2px;
+}
+.stack-title { font-weight: 600; }
+.stack-count { opacity: 0.7; font-size: 12px; }
+
+/* Each non-last card is clipped to just its name bar; the last shows in full. */
+.card {
+  position: relative;
+  height: var(--bar-h);
+  overflow: hidden;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+}
+.card.last { height: var(--card-h); overflow: visible; border-radius: 8px; }
+.card-img { width: 100%; display: block; border-radius: 8px; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45); }
+.card-noimg {
+  height: var(--bar-h); box-sizing: border-box; padding: 0 8px; display: flex; align-items: center;
+  background: var(--st-secondary-background-color, #1b1f27);
+  border: 1px solid var(--st-border-color, #444); border-radius: 8px 8px 0 0;
+  font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.card.last .card-noimg { height: var(--card-h); border-radius: 8px; white-space: normal; padding: 8px; }
+.card:hover { filter: brightness(1.15); }
+
+/* ---- badges on the name bar ---- */
+.badges { position: absolute; top: 3px; right: 4px; display: flex; gap: 3px; pointer-events: none; }
+.badge {
+  font-size: 10px; font-weight: 700; line-height: 1; padding: 2px 4px; border-radius: 4px;
+  background: rgba(0, 0, 0, 0.78); color: #fff; border: 1px solid rgba(255, 255, 255, 0.35);
+}
+.b-gc { background: #b8860b; }
+.b-no { background: #7a1f1f; }
+
+/* Narrow screens: preview drops below the stacks. */
+@media (max-width: 760px) {
+  .layout { flex-direction: column-reverse; }
+  .preview { position: static; width: 100%; }
+}

@@ -3,7 +3,7 @@
 > **Archived — complete.** Phases 0, 1, 3, 4 and 5 shipped (2026-10-08);
 > Phase 2 (Ollama) was skipped on purpose. Kept for the design reasoning
 > that code comments point to. Follow-ups moved to the backlog in
-> [UI_ACTION_PLAN.md](../../UI_ACTION_PLAN.md#backlog-carried-over).
+> [UI_ACTION_PLAN.md](UI_ACTION_PLAN.md#backlog-carried-over).
 
 Status: **Phase 0, 1, 3, 4 and 5 done** (analysis mode with four skills, and
 tool-based chat, on Gemini or Anthropic via a sidebar toggle; page

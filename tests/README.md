@@ -53,8 +53,10 @@ plus pytest (`pip install -r requirements-dev.txt`):
   files in `pages/`, and the Decks page keeps its `Decks` URL.
 - `test_deck_board.py` — VISUAL_DECK_PLAN.md Phase A: `board_payload()`
   (commander first, MDFC land flags, not-owned flags, URL-only images,
-  payload size). The JS itself is checked by hand; the Decks page smoke
-  test in `test_pages_smoke.py` selects View = Stacks.
+  payload size), plus Phase B's `apply_board_action()`: each op's effect on
+  `deck_cards`, `deck_changes` history rows and tags, each returned undo
+  restoring the prior state, and malformed / stale actions raising. The JS
+  itself is checked by hand; smoke tests in `test_pages_smoke.py` cover the Decks page (View = Stacks), the Deck Editor Board tab (add bar) and the edit/undo glue.
 - `test_static_images.py` — UI plan Phase 4: cached images become
   `app/static/` URLs on screen and data: URIs only when embedded (the deck
   sheet), the one-time `image_cache/` → `static/image_cache/` move

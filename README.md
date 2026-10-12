@@ -261,6 +261,11 @@ jump to the same deck's other views.
   the shuffled deck) but are editable if you want to test a hypothetical.
 - **Deck Editor** — add, rename, and remove deck-level things directly, no
   CSV editing required:
+  - **🃏 Board** (first tab) — edit the mainboard on the Stacks view: click a
+    card for +1 / −1 / Remove / Move to Shortlist / Tags…, add cards from the
+    bar above, watch the stats strip (count vs. 100, lands, average mana
+    value, curve) and reverse the last edit with **↶ Undo**. Each edit is one
+    rerun; undo adds its own history row rather than erasing the first.
   - **Deck Info** — rename a deck (with an option to also update any
     `collection.location` rows that matched the old name, so "sleeved in
     this deck" tracking stays correct), edit commander/partner/colors/

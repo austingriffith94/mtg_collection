@@ -2090,6 +2090,21 @@ def deck_card_scryfall_id_for_oracle(conn, deck_id, oracle_id):
     return row[0] if row else None
 
 
+def deck_card_entry(conn, deck_id, scryfall_id):
+    """{"name", "quantity"} for one printing as this deck sees it, or None
+    if the printing isn't in `cards` at all. quantity is None when the card
+    exists but isn't on the deck's mainboard. Read fresh by the Board's
+    edit handler (deck_board.apply_board_action) so a quantity bump works
+    off the database, never a stale browser payload."""
+    row = conn.execute(
+        """SELECT c.name, dc.quantity FROM cards c
+           LEFT JOIN deck_cards dc ON dc.scryfall_id = c.scryfall_id AND dc.deck_id = ?
+           WHERE c.scryfall_id = ?""",
+        (deck_id, scryfall_id),
+    ).fetchone()
+    return {"name": row[0], "quantity": row[1]} if row else None
+
+
 def buy_list(conn, contention=None):
     """The cross-deck shopping list: every open **idea** (not yet staged —
     a planned swap that's not owned buys a starter lot automatically on

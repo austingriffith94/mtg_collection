@@ -85,6 +85,14 @@ def _point_db_at_smoke_db(smoke_db_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", smoke_db_path)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_deck_board_component():
+    # The Deck Editor mounts the deck board by default, and the component
+    # registers itself at import into whichever Streamlit Runtime exists
+    # then — AppTest builds a new one per run (see _forget_deck_board).
+    _forget_deck_board()
+
+
 @pytest.mark.parametrize("page_file", [f for f in PAGE_FILES if f not in ROUTER_ONLY])
 def test_page_runs_without_exception(page_file):
     # Default AppTest timeout (3s) is tight for pages that cold-import
@@ -307,6 +315,119 @@ def test_decks_page_stacks_view(smoke_db_path, tmp_path, monkeypatch):
             _forget_deck_board()
             view.set_value("Stacks").run()
             assert not at.exception, deck_id
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_deck_editor_board_tab(smoke_db_path, tmp_path, monkeypatch):
+    # VISUAL_DECK_PLAN.md Phase B: the Deck Editor's first tab is the editable
+    # Board. Renders for a deck with cards, an empty deck and (the no-deck
+    # case is covered by test_page_runs_without_exception); the add bar adds
+    # a card and the board's stats strip follows. AppTest can't click inside
+    # the component or set a trigger value, so edits themselves are covered
+    # by the apply_board_action tests in test_deck_board.py.
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO decks (deck_id, name, commander, color_identity) VALUES (3, 'Empty Deck', NULL, '')"
+    )
+    conn.execute(
+        "INSERT INTO cards (scryfall_id, name, set_code, collector_number, oracle_id, type_line, cmc)"
+        " VALUES ('arcane-sign-1', 'Arcane Signet', 'cmd', '2', 'oracle-arcane', 'Artifact', 2)"
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    _forget_deck_board()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "4_Deck_Editor.py"), default_timeout=15)
+        for deck_id in (1, 3):
+            at.session_state["current_deck_id"] = deck_id
+            _forget_deck_board()
+            at.run()
+            assert not at.exception, deck_id
+            assert [t.label for t in at.tabs][0] == "🃏 Board"
+        # The Undo button reads the same session key run_board_action() writes
+        # (the component's key). A pending undo seeded under that key must
+        # produce the button on the page — this caught a key mismatch the
+        # scripted-app test above couldn't, because it used one key for both.
+        at.session_state["current_deck_id"] = 1
+        at.session_state["editor_1_board_stacks__undo"] = {
+            "label": "Removed Sol Ring", "action": {"op": "set_qty", "id": "sol-ring-cmd-1", "qty": 1},
+        }
+        _forget_deck_board()
+        at.run()
+        assert not at.exception
+        assert at.button(key="editor_1_board_stacks__undo_btn").label == "↶ Undo: Removed Sol Ring"
+        at.session_state["current_deck_id"] = 3
+        _forget_deck_board()
+        at.run()
+        # Back on the empty deck: add a card through the Board's add bar.
+        at.text_input(key="editor_3_board_add_name").set_value("Arcane Signet")
+        _forget_deck_board()
+        at.button(key="editor_3_board_add_btn").click().run()
+        assert not at.exception
+        assert not at.error
+        count = sqlite3.connect(path).execute(
+            "SELECT quantity FROM deck_cards WHERE deck_id=3 AND scryfall_id='arcane-sign-1'"
+        ).fetchone()
+        assert count == (1,)
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_board_edit_glue_undo_button(smoke_db_path, tmp_path, monkeypatch):
+    # AppTest can't send a component trigger, so drive the page-side glue
+    # (deck_board.run_board_action + the Undo button) from a tiny script:
+    # an edit toasts, stores its inverse and flags the rerun; the Undo button
+    # reverses it and then disappears (one level); a refused edit toasts and
+    # leaves the previous undo alone.
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+
+    def script():
+        import streamlit as st
+        from dashboard_lib import db, deck_board
+
+        conn = db.get_connection()
+        if st.session_state.get("edit"):
+            deck_board.run_board_action(conn, 1, "k", st.session_state.pop("edit"))
+        deck_board.render_undo_button(conn, 1, "k")
+
+    def qty():
+        return sqlite3.connect(path).execute(
+            "SELECT quantity FROM deck_cards WHERE deck_id=1 AND scryfall_id='sol-ring-cmd-1'"
+        ).fetchone()
+
+    try:
+        at = AppTest.from_function(script, default_timeout=15)
+        at.session_state["edit"] = {"op": "inc", "id": "sol-ring-cmd-1"}
+        at.run()
+        assert not at.exception
+        assert qty() == (2,)
+        assert at.session_state["k__edited"] is True
+        assert at.button(key="k__undo_btn").label.startswith("↶ Undo: ")
+
+        at.session_state["edit"] = {"op": "inc", "id": "no-such-card"}  # refused
+        at.run()
+        assert qty() == (2,) and "k__undo_btn" in [b.key for b in at.button]
+
+        at.button(key="k__undo_btn").click().run()
+        assert not at.exception
+        assert qty() == (1,)
+        assert "k__undo_btn" not in [b.key for b in at.button]
     finally:
         st.cache_resource.clear()
         st.cache_data.clear()

@@ -12,7 +12,7 @@ component read-only, Phase B adds writes to it, Phase C adds the Shortlist.
 Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 
 - [x] **Phase A** — Read-only Stacks view (custom component). Done 2026-10-12: payload ~29–36 KB for 73–91-card decks (real DB, under the 50 KB target); JS not yet eyeballed in a browser.
-- [ ] **Phase B** — Edit in place on the board.
+- [x] **Phase B** — Edit in place on the board. Done 2026-10-12: 🃏 Board tab (card menu, add bar, stats strip, one-level Undo) on `deck_board.apply_board_action()`; full-page rerun kept (measured ~0.2s). JS menu not yet clicked through in a browser.
 - [ ] **Phase C** — Shortlist alongside the deck; pair and apply swaps visually.
 
 ---
@@ -223,10 +223,14 @@ stats strip until the next edit. (`st.toast` can't hold a button.)
 
 Undoing a remove re-adds the card, and both are logged to the deck's
 history as `applied` rows — history records what happened, including the
-mistake. **Decision needed:** accept that (recommended — simplest and
-truthful), or have undo delete the history row it just created.
+mistake. **Decided (2026-10-12): accept it** — undo never deletes history;
+the re-add (or the dropped Shortlist idea) is its own row.
 
-### Rerun scope — measure first
+### Rerun scope — measured: keep `scope="app"`
+
+**Result (2026-10-12):** a full Deck Editor rerun after an edit (deck caches invalidated, real DB copy, AppTest) takes ~0.21 s of script time, so the Phase 4 convention stays: a board edit ends in `st.rerun(scope="app")` (`deck_board.BOARD_RERUN_SCOPE`). It also avoids a real hazard: after a fragment-only rerun the Mainboard tab's `data_editor` would still hold the old quantities, and its Save would write them back over the edit. Browser-side latency (component re-mount) is not covered by this number.
+
+Original question:
 
 Phase 4's convention is that writes inside a fragment end in
 `st.rerun(scope="app")`, so other parts of the page don't show stale

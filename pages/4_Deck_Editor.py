@@ -6,6 +6,11 @@ when needed), and the Shortlist — ideas for the deck, the swaps staged from
 them, and the history of what was applied. No CSV editing or re-migration
 required for any of this.
 
+The Board tab (VISUAL_DECK_PLAN.md Phase B) is the visual way to edit the
+mainboard: the Stacks view with a card menu (+1 / −1 / Remove / Move to
+Shortlist / Tags…), the add bar, a stats strip and a one-level Undo. The
+Mainboard tab keeps its table for changing many quantities at once.
+
 Card Tags (bulk-editing any tag_type across a deck's mainboard) lives
 here too, moved from the earlier standalone Tag Editor page. Deck-level
 tags were removed entirely — use description/tutors instead.
@@ -42,7 +47,7 @@ import pandas as pd
 import streamlit as st
 
 from dashboard_lib import db, loaders, writes, card_resolver, formatting as fmt, queries as q
-from dashboard_lib import card_view as cv, nav
+from dashboard_lib import card_view as cv, nav, deck_board
 
 # Under static/ so the cover can be served by URL (UI plan Phase 4).
 DECK_COVER_DIR = os.path.join(fmt.STATIC_DIR, "image_cache", "deck_covers")
@@ -56,7 +61,8 @@ st.title("✏️ Deck Editor")
 cv.how_it_works(
     "Everything here writes straight to the database — no CSV editing or re-migration needed.",
     "**Deck Info** edits the deck's metadata, **Themes** and **Card Tags** label it, "
-    "**Mainboard** changes the card list, and **Shortlist** holds ideas you're weighing.",
+    "**Board** edits the card list visually, **Mainboard** edits it as a table, "
+    "and **Shortlist** holds ideas you're weighing.",
 )
 
 st.sidebar.header("Deck")
@@ -102,9 +108,119 @@ if cv.dialog_is_open("editor_newdeck_dialog"):
 if deck_id is not None:
     nav.render_deck_links("Deck_Editor")
 
-(tab_info, tab_themes, tab_cardtags, tab_main, tab_shortlist) = st.tabs(
-    ["Deck Info", "Themes", "Card Tags", "Mainboard", "Shortlist"]
+# ------------------------------------------------------------------
+# Add a card — shared by the Board and Mainboard tabs (one flow, not two
+# copies): resolve locally or via Scryfall, add to the mainboard, then give
+# a brand-new card a starter collection lot (Deck Building Auto-Add, Prompt
+# Pass 6).
+# ------------------------------------------------------------------
+def _add_card_to_deck(deck_id, name, set_code, number, qty):
+    """Returns (message, error) — exactly one is set."""
+    if not name and not (set_code and number):
+        return None, "Enter a card name, or a set code + collector number."
+    sid, was_new, err = card_resolver.resolve_or_fetch_card(
+        conn, name=name or None, set_code=set_code or None, collector_number=number or None,
+    )
+    if err:
+        return None, err
+    writes.add_deck_card(conn, deck_id, sid, quantity=qty)
+    # If this exact printing has no collection lot at all yet, give it a
+    # starter one (quantity matching what was just added, Location defaulted
+    # to this deck's name) rather than letting the deck and the collection
+    # quietly drift apart. A no-op if a lot already exists. Deliberately NOT
+    # done for shortlist adds (see writes.auto_add_to_collection).
+    deck_name = loaders.load_deck_meta(conn, deck_id).get("name")
+    auto_added_id = writes.auto_add_to_collection(conn, sid, quantity=qty, location=deck_name)
+    loaders.invalidate_deck_caches()
+    if auto_added_id:
+        loaders.invalidate_collection_caches()
+    return (
+        f"Added {qty}x {name or sid}"
+        + (" (fetched fresh from Scryfall)" if was_new else "")
+        + (". Also added a starter collection lot for it (wasn't tracked yet)." if auto_added_id else "."),
+        None,
+    )
+
+
+def _render_add_card_form(deck_id, key_prefix, on_added=None):
+    """The add-a-card row. `key_prefix` keeps each tab's widgets distinct;
+    `on_added` runs after a successful add (the Board uses it to forget its
+    Undo, which can't reverse an add)."""
+    st.markdown(
+        "**Add a card**",
+        help="Set code + collector number picks an exact printing; leave them blank to match by name.",
+    )
+    ac1, ac2, ac3, ac4 = st.columns([3, 1, 1, 1])
+    name = ac1.text_input("Card name", key=f"{key_prefix}_add_name")
+    set_code = ac2.text_input("Set", key=f"{key_prefix}_add_set")
+    number = ac3.text_input("Number", key=f"{key_prefix}_add_num")
+    qty = ac4.number_input("Qty", min_value=1, value=1, step=1, key=f"{key_prefix}_add_qty")
+    if st.button("➕ Add to mainboard", key=f"{key_prefix}_add_btn"):
+        message, err = _add_card_to_deck(deck_id, name.strip(), set_code.strip(), number.strip(), int(qty))
+        if err:
+            st.error(err)
+        else:
+            if on_added:
+                on_added()
+            st.toast(message, icon="✅")
+            st.rerun(scope="app")
+
+
+# ------------------------------------------------------------------
+# Board (VISUAL_DECK_PLAN.md Phase B)
+# ------------------------------------------------------------------
+@st.fragment
+def _board_fragment(deck_id):
+    """Add bar + stats strip + undo + the editable board. A fragment so a
+    widget interaction here reruns only this block; a committed board edit
+    ends in a full rerun (deck_board.BOARD_RERUN_SCOPE) so the Mainboard
+    tab's table never shows stale quantities."""
+    key = f"editor_{deck_id}_board"
+    # ONE key for everything deck_board keeps in session_state (the component
+    # itself, its saved group-by, the pending Undo, the "edited" rerun flag):
+    # run_board_action() is called with the component's key, so the Undo
+    # button and the rerun check must be given that same key or they never
+    # see the edit. `key` stays the prefix for this tab's own widgets.
+    board_key = key + "_stacks"
+    deck_board.rerun_if_edited(board_key)
+
+    _render_add_card_form(deck_id, key, on_added=lambda: deck_board.clear_board_undo(board_key))
+
+    cards_df = loaders.load_deck_cards_df(conn, deck_id)
+    stats = deck_board.board_stats(cards_df)
+    m_total, m_lands, m_avg = st.columns(3)
+    m_total.metric("Cards", f"{stats['total']} / {deck_board.DECK_SIZE}",
+                   help="Commander included, as the deck list stores it.")
+    m_lands.metric("Lands", stats["lands"], help="Any card with a land face, including modal double-faced cards.")
+    m_avg.metric("Avg mana value", "—" if stats["avg_mv"] is None else f"{stats['avg_mv']:.2f}",
+                 help="Nonland cards only.")
+    if stats["nonlands"]:
+        labels = [str(i) for i in range(deck_board.CURVE_BUCKETS - 1)] + [f"{deck_board.CURVE_BUCKETS - 1}+"]
+        st.bar_chart(pd.Series(stats["curve"], index=labels, name="Cards"),
+                     color=fmt.CATEGORY_COLORS[0], height=220, x_label="Mana value")
+    deck_board.render_undo_button(conn, deck_id, board_key)
+
+    if cards_df.empty:
+        st.caption("No mainboard cards yet — add one above.")
+        return
+    deck_board.render_deck_board(
+        cards_df, loaders.load_deck_meta(conn, deck_id), loaders.load_owned_card_quantities(conn),
+        key=board_key, editable=True, conn=conn, deck_id=deck_id,
+    )
+
+
+(tab_board, tab_info, tab_themes, tab_cardtags, tab_main, tab_shortlist) = st.tabs(
+    ["🃏 Board", "Deck Info", "Themes", "Card Tags", "Mainboard", "Shortlist"]
 )
+
+# ------------------------------------------------------------------
+# Board
+# ------------------------------------------------------------------
+with tab_board:
+    if deck_id is None:
+        nav.render_empty_state("No decks yet — use **➕ Create a new deck** in the sidebar to start.")
+    else:
+        _board_fragment(deck_id)
 
 # ------------------------------------------------------------------
 # Deck Info
@@ -615,49 +731,7 @@ with tab_main:
     if deck_id is None:
         nav.render_empty_state("No decks yet — use **➕ Create a new deck** in the sidebar to start.")
     else:
-        st.markdown(
-            "**Add a card**",
-            help="Set code + collector number picks an exact printing; leave them blank to match by name.",
-        )
-        ac1, ac2, ac3, ac4 = st.columns([3, 1, 1, 1])
-        main_add_name = ac1.text_input("Card name", key=f"editor_{deck_id}_main_add_name")
-        main_add_set = ac2.text_input("Set", key=f"editor_{deck_id}_main_add_set")
-        main_add_num = ac3.text_input("Number", key=f"editor_{deck_id}_main_add_num")
-        main_add_qty = ac4.number_input("Qty", min_value=1, value=1, step=1, key=f"editor_{deck_id}_main_add_qty")
-        if st.button("➕ Add to mainboard", key=f"editor_{deck_id}_main_add_btn"):
-            if not main_add_name.strip() and not (main_add_set.strip() and main_add_num.strip()):
-                st.warning("Enter a card name, or a set code + collector number.")
-            else:
-                sid, was_new, err = card_resolver.resolve_or_fetch_card(
-                    conn, name=main_add_name.strip() or None,
-                    set_code=main_add_set.strip() or None, collector_number=main_add_num.strip() or None,
-                )
-                if err:
-                    st.error(err)
-                else:
-                    writes.add_deck_card(conn, deck_id, sid, quantity=int(main_add_qty))
-                    # Deck Building Auto-Add (Prompt Pass 6): if this exact
-                    # printing has no collection lot at all yet, give it a
-                    # starter one (quantity matching what was just added,
-                    # Location defaulted to this deck's name) rather than
-                    # letting the deck and the collection quietly drift
-                    # apart. A no-op if a lot for this printing already
-                    # exists. Deliberately NOT done for shortlist adds
-                    # (see writes.auto_add_to_collection's docstring).
-                    deck_name = loaders.load_deck_meta(conn, deck_id).get("name")
-                    auto_added_id = writes.auto_add_to_collection(
-                        conn, sid, quantity=int(main_add_qty), location=deck_name,
-                    )
-                    loaders.invalidate_deck_caches()
-                    if auto_added_id:
-                        loaders.invalidate_collection_caches()
-                    note = " (fetched fresh from Scryfall)" if was_new else ""
-                    auto_note = (
-                        " Also added a starter collection lot for it (wasn't tracked yet)."
-                        if auto_added_id else ""
-                    )
-                    st.success(f"Added {main_add_qty}x {main_add_name.strip() or sid}{note}.{auto_note}")
-                    st.rerun()
+        _render_add_card_form(deck_id, f"editor_{deck_id}_main")
 
         st.divider()
         st.markdown("**Edit / remove mainboard cards**")

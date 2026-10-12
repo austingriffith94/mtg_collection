@@ -1,4 +1,4 @@
-// Stacks deck board (VISUAL_DECK_PLAN.md, Phase A: read-only).
+// Stacks deck board (VISUAL_DECK_PLAN.md, Phase A read-only view + Phase B edits).
 //
 // CCv2 module: `export default function(component)`. Everything is drawn
 // under `parentElement` (a shadow root — never `document`, so two boards
@@ -13,10 +13,16 @@
 //   group_by      saved choice, one of group_options
 //   group_options ["Type","Mana value","Strategy tag","Color"]
 //   type_order    stack order for "Type"
+//   editable      true on the Deck Editor's Board tab only
 //
-// Regrouping and the hover preview are pure browser work (no rerun). The
-// only thing sent back is the group-by choice, via setStateValue, so it
-// survives the next rerun.
+// Regrouping and the hover preview are pure browser work (no rerun). Sent
+// back to Python:
+//   - the group-by choice, via setStateValue, so it survives reruns;
+//   - when editable, one committed edit per menu choice, via
+//     setTriggerValue("action", {op, id[, tags]}). Python applies it
+//     (deck_board.apply_board_action) and the next rerun re-hydrates `data`,
+//     so the database is always the truth: nothing is updated optimistically
+//     here, and the menu just shows "Saving…" until the rerun lands.
 //
 // Card names, tags etc. are set with textContent / attributes, never
 // innerHTML, so a card name can't inject markup.
@@ -129,18 +135,27 @@ function money(v) {
 }
 
 export default function (component) {
-  const { data, parentElement, setStateValue } = component;
+  const { data, parentElement, setStateValue, setTriggerValue } = component;
   const cards = data.cards || [];
   const typeOrder = data.type_order || [];
+  const editable = !!data.editable;
   const options = data.group_options || ["Type"];
   let groupBy = options.includes(data.group_by) ? data.group_by : options[0];
+
+  // This function runs again on every data update with the SAME
+  // parentElement, and the previous run's cleanup is not guaranteed to have
+  // happened first — without this, each edit stacked another board below the
+  // last. So every run tears down the previous one itself.
+  if (parentElement.__boardCleanup) parentElement.__boardCleanup();
 
   const root = el("div", "board");
   parentElement.appendChild(root);
 
   if (!cards.length) {
     root.appendChild(el("div", "empty", "No mainboard cards to show."));
-    return () => root.remove();
+    const cleanupEmpty = () => { root.remove(); parentElement.__boardCleanup = null; };
+    parentElement.__boardCleanup = cleanupEmpty;
+    return cleanupEmpty;
   }
 
   // Toolbar: group-by switch + total.
@@ -196,6 +211,83 @@ export default function (component) {
     preview.classList.remove("has-card");
   }
 
+  // ---- edit menu (editable boards only) ----
+  // One floating menu, repositioned per card. Each choice sends exactly one
+  // trigger; Python decides whether it is still valid.
+  const menu = el("div", "menu");
+  menu.hidden = true;
+  root.appendChild(menu);
+  let menuCard = null;
+
+  function closeMenu() {
+    menu.hidden = true;
+    menuCard = null;
+  }
+
+  function send(action) {
+    menu.replaceChildren(el("div", "menu-saving", "Saving…"));
+    setTriggerValue("action", action);
+  }
+
+  function menuButton(label, onClick, className) {
+    const b = el("button", "menu-btn" + (className ? " " + className : ""), label);
+    b.type = "button";
+    b.onclick = ev => { ev.stopPropagation(); onClick(); };
+    return b;
+  }
+
+  function showTagEditor(card) {
+    // Comma-separated, prefilled with the card's tags; the datalist offers
+    // the tags already used elsewhere on this board.
+    const known = [...new Set(cards.flatMap(c => c.tags))].sort((a, b) => a.localeCompare(b));
+    const list = el("datalist");
+    list.id = "board-tag-options";
+    for (const t of known) { const o = el("option"); o.value = t; list.appendChild(o); }
+    const input = el("input", "menu-input");
+    input.type = "text";
+    input.value = card.tags.join(", ");
+    input.placeholder = "Ramp, Removal";
+    input.setAttribute("list", list.id);
+    const save = () => send({
+      op: "set_tags", id: card.id,
+      tags: input.value.split(",").map(t => t.trim()).filter(Boolean),
+    });
+    input.addEventListener("keydown", ev => { if (ev.key === "Enter") save(); });
+    menu.replaceChildren(
+      el("div", "menu-title", "Tags (comma-separated)"), input, list,
+      menuButton("Save tags", save, "menu-primary"),
+      menuButton("Cancel", closeMenu),
+    );
+    input.focus();
+  }
+
+  function openMenu(card, node) {
+    menuCard = card;
+    menu.replaceChildren(
+      el("div", "menu-title", card.name),
+      menuButton("+1", () => send({ op: "inc", id: card.id })),
+      menuButton(card.qty > 1 ? "−1" : "−1 (removes it)", () => send({ op: "dec", id: card.id })),
+      menuButton("Remove", () => send({ op: "remove", id: card.id }), "menu-danger"),
+      menuButton("Move to Shortlist", () => send({ op: "to_shortlist", id: card.id })),
+      menuButton("Tags…", () => showTagEditor(card)),
+    );
+    menu.hidden = false;
+    // Position under the clicked bar, relative to the board root.
+    const r = node.getBoundingClientRect();
+    const base = root.getBoundingClientRect();
+    menu.style.left = Math.max(0, Math.min(r.left - base.left, base.width - menu.offsetWidth)) + "px";
+    menu.style.top = (r.top - base.top + Math.min(r.height, 40)) + "px";
+  }
+
+  // Esc and a click anywhere else close it. Listeners go on `root` (inside
+  // the shadow root) plus window for Esc, and are removed in the cleanup.
+  const onKey = ev => { if (ev.key === "Escape") closeMenu(); };
+  const onOutside = ev => { if (!menu.hidden && !menu.contains(ev.target)) closeMenu(); };
+  if (editable) {
+    window.addEventListener("keydown", onKey);
+    root.addEventListener("click", onOutside);
+  }
+
   // ---- stacks ----
   function cardNode(card, isLast) {
     const node = el("div", "card" + (isLast ? " last" : ""));
@@ -217,7 +309,13 @@ export default function (component) {
 
     // pointerenter covers mouse; click covers touch (no hover there).
     node.addEventListener("pointerenter", () => showPreview(card));
-    node.addEventListener("click", () => showPreview(card));
+    node.addEventListener("click", ev => {
+      showPreview(card);
+      if (editable) {
+        ev.stopPropagation();  // keep the outside-click closer below from eating this open
+        openMenu(card, node);
+      }
+    });
     return node;
   }
 
@@ -240,5 +338,11 @@ export default function (component) {
   renderPreviewHint();
   renderStacks();
 
-  return () => root.remove();
+  const cleanup = () => {
+    window.removeEventListener("keydown", onKey);
+    root.remove();
+    parentElement.__boardCleanup = null;
+  };
+  parentElement.__boardCleanup = cleanup;
+  return cleanup;
 }

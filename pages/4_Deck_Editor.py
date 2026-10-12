@@ -23,6 +23,11 @@ whole-database reference data (Game Changers, Mana Tags, Card Data
 refresh) lives in Card Database — both split out from what used to be a
 single combined Editor page.
 
+The sidebar deck picker shares its selection with the other per-deck
+pages (UI plan Phase 2): it holds the deck's id, so a rename keeps it and
+creating a deck selects the new one. Cross-links to the same deck's
+other views sit above the tabs.
+
 Migration is one-way (CSV -> DB): re-running scripts/migrate.py wipes and
 rebuilds the whole database from the CSVs, discarding anything edited
 here since the last migration. Use the CSVs + migrate.py for your initial
@@ -37,7 +42,7 @@ import pandas as pd
 import streamlit as st
 
 from dashboard_lib import db, loaders, writes, card_resolver, formatting as fmt, queries as q
-from dashboard_lib import card_view as cv
+from dashboard_lib import card_view as cv, nav
 
 DECK_COVER_DIR = os.path.join(db.BASE_DIR, "image_cache", "deck_covers")
 
@@ -76,8 +81,12 @@ with st.sidebar.expander("➕ Create a new deck"):
             else:
                 loaders.invalidate_deck_caches()
                 st.success(f"Created '{cn_name.strip()}'.")
-                st.session_state["editor_deck_select"] = cn_name.strip()
+                # Select the new deck by id (Phase 2's shared current deck).
+                st.session_state[cv.CURRENT_DECK_KEY] = new_id
                 st.rerun()
+
+if deck_id is not None:
+    nav.render_deck_links("Deck_Editor")
 
 (tab_info, tab_themes, tab_cardtags, tab_main, tab_shortlist) = st.tabs(
     ["Deck Info", "Themes", "Card Tags", "Mainboard", "Shortlist"]

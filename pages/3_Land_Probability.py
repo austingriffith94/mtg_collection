@@ -39,6 +39,9 @@ caption:
     caption for the caveat this introduces. The per-card tool (Section E,
     Prompt Pass 5) adds a third factor (actually having drawn the card)
     on top of the same two, with the same independence caveat.
+
+The deck picker shares its selection with the other per-deck pages (UI
+plan Phase 2), and the header carries cross-links to them.
 """
 import sys
 import os
@@ -49,7 +52,7 @@ import pandas as pd
 import streamlit as st
 
 from dashboard_lib import db, loaders, formatting as fmt, probability as prob
-from dashboard_lib import card_view as cv
+from dashboard_lib import card_view as cv, nav
 
 cv.setup_page("Land Probability · MTG Dashboard", "🎲")
 
@@ -71,6 +74,7 @@ library_df = loaders.load_deck_library_df(conn, deck_id)
 
 header_name = meta.get("representative") or meta.get("name") or "Deck"
 st.header(header_name)
+nav.render_deck_links("Land_Probability")
 
 if library_df.empty:
     st.warning("No mainboard cards loaded for this deck yet — nothing to calculate.")

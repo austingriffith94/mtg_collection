@@ -194,6 +194,11 @@ The dashboard currently covers:
   work, and image-backed deck tiles (cover image if you've set one, else
   the commander's own card art); clicking a tile jumps straight to that
   deck on the Decks page below.
+
+The deck-focused pages (Decks, Land & Color Probability, Deck Editor,
+Advisor) remember one shared "current deck": pick a deck on any of them
+and the others open on it too. Each also has links under its header to
+jump to the same deck's other views.
 - **Collection** — table or image-grid view (48 cards per page by default)
   of your full physical collection, with layered filters (color, type,
   rarity, set, location, foil, basic land, Game Changer, Reserved List,

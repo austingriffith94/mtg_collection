@@ -12,11 +12,17 @@ Two passes (Phase 1 added the second): every page through the real
 dashboard.py st.navigation router, and every page except Home run on its
 own, so pages stay runnable as standalone scripts. Home is router-only
 (its st.page_link paths are relative to dashboard.py).
+
+Phase 2 added a second deck plus tests that the shared current deck
+(card_view.CURRENT_DECK_KEY) follows you between the per-deck pages and
+that the Deck Editor's create flow selects the new deck.
 """
 import os
+import shutil
 import sqlite3
 
 import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -48,6 +54,13 @@ def smoke_db_path(tmp_path_factory):
     )
     conn.execute(
         "INSERT INTO deck_cards (deck_id, scryfall_id, quantity) VALUES (1, 'sol-ring-cmd-1', 1)"
+    )
+    conn.execute(
+        "INSERT INTO decks (deck_id, name, commander, representative, color_identity)"
+        " VALUES (2, 'Second Deck', 'Sol Ring', 'Sol Ring', '')"
+    )
+    conn.execute(
+        "INSERT INTO deck_cards (deck_id, scryfall_id, quantity) VALUES (2, 'sol-ring-cmd-1', 1)"
     )
     conn.execute(
         "INSERT INTO collection (scryfall_id, quantity, location) VALUES ('sol-ring-cmd-1', 1, 'Smoke Test Deck')"
@@ -89,3 +102,71 @@ def test_page_runs_through_router(page_file):
     at.switch_page(f"pages/{page_file}")
     at.run()
     assert not at.exception
+
+
+# Per-deck pages and their picker widget keys (Phase 2).
+DECK_PICKERS = {
+    "pages/2_Decks.py": "deckpage_deck_select",
+    "pages/3_Land_Probability.py": "landprob_deck_select",
+    "pages/4_Deck_Editor.py": "editor_deck_select",
+}
+
+
+@pytest.mark.parametrize("page_path,picker_key", DECK_PICKERS.items())
+def test_page_opens_on_current_deck(page_path, picker_key):
+    at = AppTest.from_file(os.path.join(PROJECT_ROOT, page_path), default_timeout=15)
+    at.session_state["current_deck_id"] = 2
+    at.run()
+    assert not at.exception
+    assert at.selectbox(key=picker_key).value == 2
+
+
+def test_current_deck_carries_across_pages():
+    at = AppTest.from_file(os.path.join(PROJECT_ROOT, "dashboard.py"), default_timeout=15)
+    at.run()
+    at.switch_page("pages/2_Decks.py")
+    at.run()
+    at.selectbox(key="deckpage_deck_select").set_value(2).run()
+    assert not at.exception
+    for page_path, picker_key in DECK_PICKERS.items():
+        at.switch_page(page_path)
+        at.run()
+        assert not at.exception
+        assert at.selectbox(key=picker_key).value == 2, page_path
+
+
+def test_deck_param_seeds_once_then_manual_pick_wins():
+    at = AppTest.from_file(os.path.join(PAGES_DIR, "2_Decks.py"), default_timeout=15)
+    at.query_params["deck_id"] = "2"
+    at.run()
+    assert at.selectbox(key="deckpage_deck_select").value == 2
+    at.selectbox(key="deckpage_deck_select").set_value(1).run()
+    assert at.session_state["current_deck_id"] == 1
+
+
+def test_create_deck_selects_new_deck(smoke_db_path, tmp_path, monkeypatch):
+    # Own copy of the DB: this test writes a deck the other tests don't expect.
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    # get_connection() is a cache_resource and load_decks_df's cache ignores
+    # the connection, so drop both caches before (to open this copy) and
+    # after (so later tests reopen the shared smoke DB).
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "4_Deck_Editor.py"), default_timeout=15)
+        at.run()
+        at.text_input(key="editor_newdeck_name").set_value("Brand New Deck")
+        at.button(key="editor_newdeck_create").click().run()
+        assert not at.exception
+        new_id = sqlite3.connect(path).execute(
+            "SELECT deck_id FROM decks WHERE name = 'Brand New Deck'"
+        ).fetchone()[0]
+        assert at.session_state["current_deck_id"] == new_id
+        assert at.selectbox(key="editor_deck_select").value == new_id
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()

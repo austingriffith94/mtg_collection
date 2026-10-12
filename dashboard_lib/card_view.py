@@ -83,30 +83,80 @@ def reset_filters():
 
 
 # ------------------------------------------------------------------
-# Shared "Choose a deck" sidebar picker — Decks, Land Probability, and
-# Deck Editor pages each need a single deck_id chosen from decks_df;
-# this replaces three independent copies of the same
-# labels/label_to_id/selectbox block (each with its own key).
+# Shared "current deck" (Phase 2 of UI_ACTION_PLAN.md). Decks, Land
+# Probability, Deck Editor and the Advisor all pick one deck; the choice
+# lives in ONE plain session key, CURRENT_DECK_KEY, so it follows you from
+# page to page.
+#
+# Why not just share the selectbox's own key: Streamlit deletes a widget's
+# session_state entry on any run where that widget isn't drawn, so a
+# widget key can't carry a value across pages. Instead the picker copies
+# CURRENT_DECK_KEY into its (per-page) widget key right before drawing,
+# and its on_change writes the user's pick back.
+#
+# The value is the deck's *id*, never its name: a rename keeps the
+# selection, and the Deck Editor's create flow can select the new deck by
+# the id create_deck() returns.
 # ------------------------------------------------------------------
-def render_deck_picker(decks_df, key, container=None, empty_message="No decks found."):
-    """Render the "Choose a deck" selectbox and return the chosen
-    deck_id, or None if decks_df is empty (empty_message is shown via
-    st.info in that case). Callers that require a deck to proceed
-    should st.stop() themselves on a None return — the Deck Editor page
-    instead falls through to its "create a new deck" flow, so the stop
-    is left to the caller rather than done here. A caller that needs to
-    pre-seed the selection (e.g. the Decks page honoring a `?deck_id=`
-    query param) should set st.session_state[key] BEFORE calling this,
-    since that's the only point Streamlit allows setting a widget's
-    value."""
+CURRENT_DECK_KEY = "current_deck_id"
+_CONSUMED_PARAM_KEY = "_current_deck_param_consumed"
+
+
+def seed_current_deck(state, param_value):
+    """Apply a `?deck_id=` query param to the shared current deck. The
+    param seeds CURRENT_DECK_KEY only when it differs from the last param
+    already consumed this session; after that the session key wins, so a
+    leftover param can't override a later manual pick. Callers still
+    delete the param after reading it. Returns True if it seeded.
+    `state` is st.session_state or any dict (for tests)."""
+    if param_value is None:
+        return False
+    raw = str(param_value)
+    if state.get(_CONSUMED_PARAM_KEY) == raw:
+        return False
+    state[_CONSUMED_PARAM_KEY] = raw
+    try:
+        state[CURRENT_DECK_KEY] = int(raw)
+    except ValueError:
+        return False
+    return True
+
+
+def resolve_current_deck(state, deck_ids):
+    """The deck the picker should show: CURRENT_DECK_KEY if it's still one
+    of deck_ids (a non-empty list of ints), else the first deck (covers
+    a first visit, a deleted deck, or a bad query param). Writes the
+    answer back so every page agrees on it."""
+    current = state.get(CURRENT_DECK_KEY)
+    if current not in deck_ids:
+        current = deck_ids[0]
+    state[CURRENT_DECK_KEY] = current
+    return current
+
+
+def _sync_current_deck(widget_key):
+    st.session_state[CURRENT_DECK_KEY] = st.session_state[widget_key]
+
+
+def render_deck_picker(decks_df, key, container=None, empty_message="No decks found.", label="Choose a deck"):
+    """Render the deck selectbox (sidebar by default) and return the
+    chosen deck_id, or None if decks_df is empty (empty_message is shown
+    via st.info in that case). Callers that require a deck to proceed
+    should st.stop() themselves on a None return; the Deck Editor page
+    instead falls through to its "create a new deck" flow. `key` is this
+    page's own widget key; the selection itself is the shared
+    CURRENT_DECK_KEY (see above), so to pre-select a deck set that key,
+    not the widget's."""
     c = container if container is not None else st.sidebar
     if decks_df.empty:
         c.info(empty_message)
         return None
-    deck_labels = [row["name"] for _, row in decks_df.iterrows()]
-    label_to_id = dict(zip(deck_labels, decks_df["deck_id"]))
-    chosen_label = c.selectbox("Choose a deck", deck_labels, key=key)
-    return int(label_to_id[chosen_label])
+    deck_ids = [int(i) for i in decks_df["deck_id"]]
+    names = dict(zip(deck_ids, decks_df["name"]))
+    st.session_state[key] = resolve_current_deck(st.session_state, deck_ids)
+    c.selectbox(label, deck_ids, format_func=names.get, key=key,
+                on_change=_sync_current_deck, args=(key,))
+    return st.session_state[CURRENT_DECK_KEY]
 
 
 # ------------------------------------------------------------------

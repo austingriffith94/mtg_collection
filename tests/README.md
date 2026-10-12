@@ -43,7 +43,12 @@ plus pytest (`pip install -r requirements-dev.txt`):
 
 - `test_pages_smoke.py` — `AppTest` smoke run of every page against a small
   temp database on disk (never the real one): each page through the
-  `dashboard.py` router, and each page except Home on its own.
+  `dashboard.py` router, and each page except Home on its own. Also checks
+  the shared current deck (UI plan Phase 2): every deck page opens on it,
+  it carries across pages, a `?deck_id=` param seeds it once, and creating a
+  deck in the Deck Editor selects the new one.
+- `test_current_deck.py` — pure tests of `card_view.seed_current_deck()` and
+  `resolve_current_deck()` with a dict standing in for session state.
 - `test_nav.py` — the page registry in `dashboard_lib/nav.py` matches the
   files in `pages/`, and the Decks page keeps its `Decks` URL.
 

@@ -2,7 +2,8 @@
 Advisor page — grounded deck analysis and chat, with a provider toggle in
 the sidebar (Gemini, or Claude Sonnet/Opus as of Phase 5).
 
-Analysis mode: pick a deck and a skill; the app builds a database-grounded
+Analysis mode: pick a deck (shared with the other per-deck pages, UI
+plan Phase 2) and a skill; the app builds a database-grounded
 context, asks the model for schema-constrained suggestions, and validates
 them before display (dashboard_lib/advisor/README.md). Computed numbers and
 model opinion are shown separately; suggestions that failed verification sit
@@ -23,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import streamlit as st
 
 from dashboard_lib import db, loaders
-from dashboard_lib import card_view as cv
+from dashboard_lib import card_view as cv, nav
 from dashboard_lib.advisor import analysis, chat
 from dashboard_lib.advisor.context import build_deck_context
 from dashboard_lib.advisor.providers import ANTHROPIC_MODELS, AnthropicProvider, GeminiProvider, ProviderError
@@ -49,7 +50,10 @@ def show_analysis_item(i):
 
 
 def run_analysis_tab(conn, decks, provider):
-    deck_id = st.selectbox("Deck", decks["deck_id"], format_func=lambda i: decks.set_index("deck_id").loc[i, "name"])
+    # Shared current deck (Phase 2): picking here also changes the deck
+    # the Decks / Editor / Probability pages open on, and vice versa.
+    deck_id = cv.render_deck_picker(decks, key="advisor_deck_select", container=st, label="Deck")
+    nav.render_deck_links("Advisor")
     skill = st.selectbox("Skill", list(analysis.SKILLS))
 
     ctx = build_deck_context(conn, int(deck_id))

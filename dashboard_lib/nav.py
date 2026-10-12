@@ -16,10 +16,16 @@ sets the browser-tab title.
 url_path is explicit for every page. "Decks" must stay "Decks": the Home
 page's deck tiles link to `Decks?deck_id=N`
 (card_view.render_deck_landing_grid).
+
+DECK_LINKS (Phase 2) are the cross-links shown under the deck header on
+each per-deck page. They carry no deck in the URL: the shared
+card_view.CURRENT_DECK_KEY session value is what tells the target page
+which deck to show.
 """
 from dataclasses import dataclass
 
 import streamlit as st
+from streamlit.errors import StreamlitPageNotFoundError
 
 
 @dataclass(frozen=True)
@@ -70,3 +76,31 @@ def build_navigation():
         ]
         for section in SECTIONS
     }
+
+
+# (url_path, link label) for every per-deck view, in display order.
+DECK_LINKS = [
+    ("Decks", "← Decks"),
+    ("Deck_Editor", "✏️ Edit deck"),
+    ("Land_Probability", "🎲 Probabilities"),
+    ("Advisor", "🧠 Ask the Advisor"),
+]
+
+
+def page_path(url_path):
+    """The registry file path for a url_path (what st.page_link wants)."""
+    return next(p.path for p in PAGES if p.url_path == url_path)
+
+
+def render_deck_links(current_url_path):
+    """One row of st.page_link cross-links to the other per-deck views,
+    skipping the page we're on. When a page runs on its own instead of
+    under dashboard.py's router, st.page_link can't resolve registry
+    paths (only st.navigation knows them), so the row is skipped there."""
+    links = [(u, label) for u, label in DECK_LINKS if u != current_url_path]
+    cols = st.columns(len(links))
+    try:
+        for col, (url_path, label) in zip(cols, links):
+            col.page_link(page_path(url_path), label=label)
+    except StreamlitPageNotFoundError:
+        pass

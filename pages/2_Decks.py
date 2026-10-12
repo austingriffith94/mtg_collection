@@ -5,7 +5,10 @@ them) is still browsable here via the Board toggle near the bottom, this
 is just the section's display name/URL now).
 
 Pick a deck (or land here already-selected, via a `deck_id` query param
-set by the home page's deck-tile links) to see a branded header (Prompt
+set by the home page's deck-tile links, or on whatever deck you last
+picked on another deck page: UI plan Phase 2's shared current deck, see
+card_view.render_deck_picker) to see a branded header (with cross-links
+to the same deck's Editor / Probability / Advisor views beneath it) (Prompt
 Pass 10 — the deck's own Name, its resolved thumbnail, its short
 descriptive tagline, and its color-identity mana symbols; see below),
 then its "Turn 0" stat grid — commander/partner, colors, bracket,
@@ -76,7 +79,7 @@ import streamlit as st
 
 from dashboard_lib import db, loaders, writes, formatting as fmt, moxfield_export, deck_printout
 from dashboard_lib import queries as q, spellbook
-from dashboard_lib import card_view as cv
+from dashboard_lib import card_view as cv, nav
 
 cv.setup_page("Decks · MTG Dashboard", "🃏")
 
@@ -98,24 +101,13 @@ if decks_df.empty:
     st.stop()
 
 # Honor a `?deck_id=<id>` query param (set by the home page's deck-tile
-# links, see dashboard_lib.card_view.render_deck_landing_grid) by
-# pre-selecting that deck in the sidebar picker below — but only by
-# pre-seeding session_state BEFORE the selectbox is created, since that's
-# the only point Streamlit allows setting a widget's value. The param is
-# consumed (deleted) immediately after reading so it doesn't keep
-# re-forcing this deck back into the picker on a later rerun after the
-# user manually picks something else (e.g. by toggling a sidebar filter).
-query_deck_id = st.query_params.get("deck_id")
-if query_deck_id is not None:
-    try:
-        target_deck_id = int(query_deck_id)
-    except (TypeError, ValueError):
-        target_deck_id = None
-    if target_deck_id is not None:
-        id_to_label = dict(zip(decks_df["deck_id"], decks_df["name"]))
-        target_label = id_to_label.get(target_deck_id)
-        if target_label:
-            st.session_state["deckpage_deck_select"] = target_label
+# links, see dashboard_lib.card_view.render_deck_landing_grid) by seeding
+# the shared current deck (Phase 2) before the picker is drawn. A param
+# seeds only once per value per session (cv.seed_current_deck), and it's
+# deleted right after reading so it can't keep forcing this deck back
+# after the user picks another one.
+if "deck_id" in st.query_params:
+    cv.seed_current_deck(st.session_state, st.query_params.get("deck_id"))
     del st.query_params["deck_id"]
 
 deck_id = cv.render_deck_picker(decks_df, key="deckpage_deck_select")
@@ -190,6 +182,7 @@ cv.inject_deck_accent_css(
     fmt.deck_accent_gradient(color_identity_raw), fmt.deck_accent_hex(color_identity_raw)
 )
 cv.render_deck_header(deck_name, meta.get("description"), header_img_src, color_identity_raw)
+nav.render_deck_links("Decks")
 
 # ------------------------------------------------------------------
 # Turn 0 stat grid

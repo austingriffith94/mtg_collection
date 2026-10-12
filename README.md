@@ -393,7 +393,7 @@ jump to the same deck's other views.
     game on the day of a change counts toward the older list, since a date
     can't say which side of the change it fell on. Dropped changes never
     split a period — rejecting a card doesn't change the deck.
-  - **📊 Compare all decks** sits at the top of the Decks page: one row per
+  - **📊 Compare all decks** sits under the deck tiles on the Home page: one row per
     deck (bracket, interaction, avg CMC, value, W-L, Game Changers, combos,
     planned, ideas, build %), sortable by column header. *Combos* is blank,
     not 0, for a deck never checked against Spellbook. Avg CMC excludes
@@ -815,7 +815,7 @@ neither can drift from the other.
 
 ### Deck export
 
-**In the dashboard** (Decks page → "📋 Export to Moxfield"
+**In the dashboard** (Decks page → "📤 Export"
 expander, under the deck value line): shows the formatted list in a code
 box with a one-click copy-to-clipboard icon (hover the box, click the
 icon in the corner), plus a checkbox to include the shortlist (ideas and

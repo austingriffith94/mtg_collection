@@ -1,4 +1,18 @@
 """
+LAYOUT (UI plan Phase 3): the branded header, cross-links, "Turn 0" stat grid
+and a single Export expander (Moxfield text + printable sheet) sit above five
+tabs, each built by a _render_<tab>(conn, deck_id, ...) function below:
+  Overview     - win conditions/strengths/weaknesses, optimized mana, Game
+                 Changers, Reserved List, Build Plan
+  Mana & Curve - themes, type breakdown, mana curve, strategy tags
+  Combos       - Commander Spellbook panel
+  Cards        - Mainboard/Shortlist browser (its filters are in an expander
+                 on the tab, not the sidebar) + top-10 most expensive
+  History      - change log
+"Compare all decks" moved to the Home page. st.tabs runs every tab body on
+each rerun, so no tab does network work outside an explicit button press.
+The notes below predate the split but still describe each section's content.
+
 Decks page (renamed from "Decks & Maybeboard" in Prompt Pass 4 — the
 deck's Shortlist (the old maybeboard: ideas plus the swaps staged from
 them) is still browsable here via the Board toggle near the bottom, this
@@ -112,53 +126,6 @@ if "deck_id" in st.query_params:
 
 deck_id = cv.render_deck_picker(decks_df, key="deckpage_deck_select")
 
-# ------------------------------------------------------------------
-# Deck comparison matrix (Workbench rework, Phase 5) — every deck, one
-# row, above the selected deck's own header. Collapsed by default so a
-# deck-tile click still lands on the deck, not on a table.
-# ------------------------------------------------------------------
-with st.expander("📊 Compare all decks"):
-    cmp_df = loaders.load_deck_comparison(conn)
-    st.dataframe(
-        cmp_df.assign(
-            record=cmp_df.apply(lambda r: f"{int(r['wins'])}-{int(r['losses'])}" if r["games"] else "—", axis=1),
-            win_pct=cmp_df["win_rate"] * 100,
-            build_pct=cmp_df["build_pct"],
-        )[["name", "build_state", "bracket", "interaction", "avg_cmc", "value", "record", "win_pct",
-           "game_changers", "combos", "planned", "ideas", "build_pct"]],
-        column_config={
-            "name": st.column_config.TextColumn("Deck"),
-            # Phase 6: blank for a normal built deck, which is most of them.
-            "build_state": st.column_config.TextColumn(
-                "State",
-                help="Blank = a normal built deck. 'brewing' = the list exists but the "
-                     "cards are still elsewhere; 'dismantled' = taken apart, list kept.",
-            ),
-            "bracket": st.column_config.NumberColumn("Bracket", format="%d"),
-            "interaction": st.column_config.NumberColumn("Interaction", format="%d"),
-            "avg_cmc": st.column_config.NumberColumn("Avg CMC", format="%.2f", help="Non-land mainboard cards, weighted by quantity."),
-            "value": st.column_config.NumberColumn("Value", format="$%.0f"),
-            "record": st.column_config.TextColumn("W-L"),
-            "win_pct": st.column_config.NumberColumn("Win %", format="%.0f%%"),
-            "game_changers": st.column_config.NumberColumn("Game Changers", format="%d"),
-            "combos": st.column_config.NumberColumn(
-                "Combos", format="%d",
-                help="Complete combos in the mainboard per Commander Spellbook. Blank = never checked (not zero).",
-            ),
-            "planned": st.column_config.NumberColumn("Planned", format="%d"),
-            "ideas": st.column_config.NumberColumn("Ideas", format="%d"),
-            "build_pct": st.column_config.NumberColumn(
-                "Built", format="%.0f%%",
-                help="Share of the non-basic mainboard physically located in this deck (Workbench -> Reconcile).",
-            ),
-        },
-        hide_index=True, width="stretch",
-    )
-    st.caption(
-        "Click a column header to sort. Win rates here come from a 4-player pod and a handful of "
-        "games per deck — a signal, not evidence."
-    )
-
 meta = loaders.load_deck_meta(conn, deck_id)
 stats = loaders.load_deck_stats(conn, deck_id)
 value = loaders.load_deck_value(conn, deck_id)
@@ -222,7 +189,8 @@ stat_col5.metric("Sleeved in deck", sleeved_label, help="Tracked collection rows
 
 st.caption(f"Estimated deck value: {fmt.format_money(value.get('total_value'))}")
 
-with st.expander("📋 Export to Moxfield"):
+with st.expander("📤 Export"):
+    st.markdown("**📋 Moxfield**")
     export_include_mb = st.checkbox(
         "Include shortlist (as a separate '// Maybeboard' section)",
         key=f"deck_{deck_id}_moxfield_include_mb",
@@ -243,7 +211,8 @@ with st.expander("📋 Export to Moxfield"):
                 f.write(moxfield_text + "\n")
             st.success(f"Saved to `{os.path.relpath(out_path, db.BASE_DIR)}`")
 
-with st.expander("🖨️ Printable deck sheet"):
+    st.divider()
+    st.markdown("**🖨️ Printable deck sheet**")
     st.caption(
         "A one-page, Letter-size sheet with stats, charts, art and the full decklist. "
         "Open the downloaded file in a browser and print (or save as PDF)."
@@ -314,681 +283,660 @@ with st.expander("🖨️ Printable deck sheet"):
             key=f"deck_{deck_id}_sheet_download",
         )
 
-# ------------------------------------------------------------------
-# Build Plan (deck lifecycle, Phase 6) — where every card of a brewing
-# deck would come from, and what pulling it costs the deck it's in.
-#
-# Rendered as an expander rather than a tab because this page's top-level
-# sections already are expanders ("Compare all decks", "Export to
-# Moxfield", "Printable deck sheet"); a lone tab beside them would be the
-# odd one out. Expanded by default for a deck actually marked 'brewing',
-# collapsed otherwise — a built deck still gets the panel, since "where
-# are the 4 cards I'm missing" is a fair question for any deck.
-#
-# The plan is read live (queries.deck_sourcing_plan is deliberately
-# uncached) because sleeving one card changes every number here.
-# ------------------------------------------------------------------
-_brewing = meta.get("build_state") == "brewing"
-_sourcing = q.deck_sourcing_plan(conn, deck_id)
 
-if _sourcing and _sourcing["needed"]:
-    _pct = _sourcing["pct"]
-    _title = (
-        f"🔨 Build Plan — {_sourcing['needed']} non-basics"
-        + (f" · {_pct:.0f}% sleeved" if _pct is not None else "")
-    )
-    with st.expander(_title, expanded=_brewing):
-        _counts = _sourcing["counts"]
-        _to_pull = sum(_counts[b] for b in ("box", "unlocated", "other_deck"))
+def _render_overview(conn, deck_id, meta, deck_name, color_identity_raw):
+    """Overview tab: win conditions, optimized mana, Game Changers, Reserved List, build plan."""
+    wc, st_, wk = st.columns(3)
 
-        if _brewing:
+
+    def _render_rank_list(container, title_text, rows):
+        container.markdown(f"**{title_text}**")
+        if not rows:
+            container.caption("None recorded.")
+            return
+        for r in rows:
+            desc = f" — {r['description']}" if r.get("description") else ""
+            container.markdown(f"{r['rank']}. **{r['label']}**{desc}")
+
+
+    _render_rank_list(wc, "Win Conditions", loaders.load_deck_rank_list(conn, deck_id, "win_conditions"))
+    _render_rank_list(st_, "Strengths", loaders.load_deck_rank_list(conn, deck_id, "strengths"))
+    _render_rank_list(wk, "Weaknesses", loaders.load_deck_rank_list(conn, deck_id, "weaknesses"))
+
+    mana_tag_col, gc_col, reserved_col = st.columns(3)
+
+    with mana_tag_col:
+        st.markdown("**Optimized mana**")
+        mana_summary = loaders.load_deck_mana_tag_summary(conn, deck_id)
+        if mana_summary:
+            st.dataframe(pd.DataFrame(mana_summary), hide_index=True, width="stretch")
+        else:
+            st.caption("No optimized-mana tags matched for this deck.")
+
+    with gc_col:
+        st.markdown("**Game Changers**", help="Cards flagged as Game Changers in this deck, with your own category tag.")
+        gc_df = loaders.load_deck_game_changers(conn, deck_id)
+        if not gc_df.empty:
+            st.dataframe(
+                # scryfall_flag was already omitted from display in Prompt
+                # Pass 4 (every row here is already Game-Changer-flagged or
+                # custom-tagged, so the raw Scryfall boolean only ever showed
+                # a static "1"); Prompt Pass 10 (prompt3.txt instruction 4)
+                # drops the derived "Status" column too, per that prompt's
+                # "only display the Card Name and its associated Tag" —
+                # queries.deck_game_changers() itself still computes status
+                # (a harmless additive column nothing else reads), only this
+                # page's own display was simplified.
+                gc_df.rename(columns={"card_name": "Card", "custom_tag": "Your tag"})[["Card", "Your tag"]],
+                hide_index=True, width="stretch",
+            )
+        else:
+            st.caption("No Game Changers in this deck.")
+
+    with reserved_col:
+        st.markdown("**Reserved List**", help="Pulled live from Scryfall's `reserved` field.")
+        reserved_df = loaders.load_deck_reserved_list_cards(conn, deck_id)
+        if not reserved_df.empty:
+            # Prompt Pass 4: shows current price instead of quantity run.
+            st.dataframe(
+                reserved_df.rename(columns={"card_name": "Card", "price": "Price"}),
+                column_config={"Price": st.column_config.NumberColumn("Price", format="$%.2f")},
+                hide_index=True, width="stretch",
+            )
+        else:
+            st.caption("No Reserved List cards in this deck.")
+
+    # ------------------------------------------------------------------
+    # Build Plan (deck lifecycle, Phase 6) — where every card of a brewing
+    # deck would come from, and what pulling it costs the deck it's in.
+    #
+    # Rendered as an expander rather than a tab because this page's top-level
+    # sections already are expanders ("Compare all decks", "Export to
+    # Moxfield", "Printable deck sheet"); a lone tab beside them would be the
+    # odd one out. Expanded by default for a deck actually marked 'brewing',
+    # collapsed otherwise — a built deck still gets the panel, since "where
+    # are the 4 cards I'm missing" is a fair question for any deck.
+    #
+    # The plan is read live (queries.deck_sourcing_plan is deliberately
+    # uncached) because sleeving one card changes every number here.
+    # ------------------------------------------------------------------
+    _brewing = meta.get("build_state") == "brewing"
+    _sourcing = q.deck_sourcing_plan(conn, deck_id)
+
+    if _sourcing and _sourcing["needed"]:
+        _pct = _sourcing["pct"]
+        _title = (
+            f"🔨 Build Plan — {_sourcing['needed']} non-basics"
+            + (f" · {_pct:.0f}% sleeved" if _pct is not None else "")
+        )
+        with st.expander(_title, expanded=_brewing):
+            _counts = _sourcing["counts"]
+            _to_pull = sum(_counts[b] for b in ("box", "unlocated", "other_deck"))
+
+            if _brewing:
+                st.caption(
+                    "This deck is marked as **brewing** — its list exists and its cards are "
+                    "still elsewhere. Completion below is derived from where the cards "
+                    "physically are, so it updates itself as you sleeve them."
+                )
+            else:
+                st.caption(
+                    "Where this deck's cards are right now. Mark it as brewing if you're "
+                    "assembling it, to keep this panel open and show the build bar on its tile."
+                )
+
+            if _pct is not None:
+                st.progress(
+                    min(1.0, _pct / 100.0),
+                    text=f"{_sourcing['located']} of {_sourcing['needed']} non-basics sleeved here",
+                )
+
+            # One row of counts, in the order you'd work them.
+            _cols = st.columns(5)
+            for _col, _bucket in zip(_cols, q.SOURCING_BUCKETS):
+                _col.metric(q.bucket_label(_bucket), _counts.get(_bucket, 0))
+
+            st.markdown("#### Sourcing")
+            for _bucket in q.SOURCING_BUCKETS:
+                _rows = _sourcing["buckets"].get(_bucket) or []
+                if not _rows:
+                    continue
+                _n = _counts.get(_bucket, 0)
+                _icon = {"sleeved": "✅", "box": "📦", "unlocated": "❓",
+                         "other_deck": "🃏", "not_owned": "🛒"}[_bucket]
+
+                if _bucket == "other_deck":
+                    # Grouped by donor deck, because the clustering IS the
+                    # finding: "building this means gutting Tuvasa" is a
+                    # decision to make knowingly and up front, not to discover
+                    # card by card at the kitchen table.
+                    st.markdown(f"**{_icon} {q.bucket_label(_bucket)} — {_n}**")
+                    for _d in _sourcing["donors"]:
+                        _warn = (
+                            f" · ⚠️ leaves {_d['deck_name']} {_d['shortfall']} short"
+                            if _d["shortfall"] else " · leftover lots — costs it nothing"
+                        )
+                        with st.expander(f"{_d['deck_name']} — {_d['copies']}{_warn}"):
+                            if _d["shortfall"]:
+                                st.warning(
+                                    f"Pulling these would leave **{_d['deck_name']}** "
+                                    f"{_d['shortfall']} card(s) short of its own list. "
+                                    "Either accept that, or buy the copy instead — the "
+                                    "Workbench's buy list is where that goes."
+                                )
+                            st.dataframe(
+                                pd.DataFrame(
+                                    [{"Card": c["card"], "Copies": c["copies"]} for c in _d["cards"]]
+                                ),
+                                hide_index=True, width="stretch",
+                            )
+                    continue
+
+                with st.expander(f"{_icon} {q.bucket_label(_bucket)} — {_n}"):
+                    if _bucket == "unlocated":
+                        st.caption(
+                            "You own these but no box is recorded. The Workbench's "
+                            "**Reconcile** tab is where locations get set."
+                        )
+                    elif _bucket == "not_owned":
+                        st.caption(
+                            "Not owned. These feed the Workbench's **buy list**; proxying "
+                            "is the other way to finish the deck."
+                        )
+                    _show_where = _bucket in ("box", "sleeved")
+                    st.dataframe(
+                        pd.DataFrame([
+                            {
+                                "Card": r["card"],
+                                "Copies": r["copies"],
+                                **({"Where": ", ".join(r["locations"])} if _show_where else {}),
+                            }
+                            for r in _rows
+                        ]),
+                        hide_index=True, width="stretch",
+                    )
+
+            st.divider()
+            _sheet_col, _state_col = st.columns([2, 1])
+
+            # The pull sheet is grouped by location rather than card type,
+            # because you work the box in location order.
+            _pull_html = deck_printout.build_pull_sheet_html(
+                _sourcing,
+                accent_gradient=fmt.deck_accent_gradient(color_identity_raw),
+                meta=meta,
+            )
+            _sheet_col.download_button(
+                f"🖨️ Printable pull sheet ({_to_pull} to pull)",
+                data=_pull_html.encode("utf-8"),
+                file_name=f"{fmt.safe_filename(deck_name)} - pull sheet.html",
+                mime="text/html",
+                key=f"deck_{deck_id}_pull_sheet",
+                disabled=not _to_pull,
+                help="A checklist grouped by where each card is, so one walk through the "
+                     "boxes collects everything. Open it in a browser and print.",
+            )
+            if _brewing:
+                if _state_col.button(
+                    "✅ Mark deck as built", key=f"deck_{deck_id}_mark_built",
+                    help="Clears the brewing flag. Completion stays derived from where the "
+                         "cards are, so this doesn't claim the deck is 100% sleeved.",
+                ):
+                    writes.set_build_state(conn, deck_id, None)
+                    loaders.invalidate_deck_caches(deck_id)
+                    st.rerun()
+            elif _state_col.button(
+                "🔨 Mark as brewing", key=f"deck_{deck_id}_mark_brewing",
+                help="For a deck whose list exists but whose cards are still elsewhere.",
+            ):
+                writes.set_build_state(conn, deck_id, "brewing")
+                loaders.invalidate_deck_caches(deck_id)
+                st.rerun()
+
+
+def _render_mana_curve(conn, deck_id):
+    """Mana & Curve tab: themes, type breakdown, mana curve, strategy tags."""
+    main_df_full = loaders.load_deck_cards_df(conn, deck_id)
+
+    theme_col, curve_col = st.columns(2)
+
+    with theme_col:
+        st.markdown("**Themes**")
+        themes = loaders.load_deck_themes(conn, deck_id)
+        mains = [t["theme"] for t in themes if t["role"] == "main"]
+        subs = [t["theme"] for t in themes if t["role"] == "sub"]
+        st.markdown(f"- Main: {', '.join(mains) if mains else '—'}")
+        st.markdown(f"- Sub: {', '.join(subs) if subs else '—'}")
+
+        st.markdown("**Type breakdown**")
+        if not main_df_full.empty:
+            type_counts = main_df_full.groupby("card_type")["quantity"].sum().reindex(fmt.ALL_CARD_TYPES).fillna(0)
+            st.bar_chart(type_counts)
+        else:
+            st.caption("No mainboard cards loaded yet.")
+
+    with curve_col:
+        st.markdown("**Mana curve** (non-land, MDFC-aware)")
+        st.caption(
+            "Cards with a land on either face (e.g. an MDFC land) are excluded here, same as "
+            "the rest of this dashboard's mana-curve and land-ratio math (Land Probability page)."
+        )
+        if not main_df_full.empty:
+            nonland_df = main_df_full[~main_df_full["is_land"]]
+        else:
+            nonland_df = main_df_full
+        if nonland_df.empty:
+            st.caption("No non-land cards to chart yet.")
+        else:
+            breakdown_by = st.radio(
+                "Stack by", ["Color", "Type"], horizontal=True, key=f"curve_stackby_{deck_id}"
+            )
+            chart_colors = None
+            if breakdown_by == "Color":
+                # Prompt Pass 4: fixed W/U/B/R/G/Multi-color/Colorless
+                # grouping+order with custom mana-colored bars, instead of an
+                # alphabetical-with-Colorless-last fallback order.
+                bucketed = nonland_df.assign(
+                    mana_color_bucket=nonland_df["color_display"].apply(fmt.mana_curve_color_bucket)
+                )
+                group_col = "mana_color_bucket"
+                pivot = (
+                    bucketed.groupby(["cmc", group_col])["quantity"]
+                    .sum()
+                    .unstack(group_col)
+                    .fillna(0)
+                    .sort_index()
+                )
+                ordered_cols = [c for c in fmt.MANA_CURVE_COLOR_ORDER if c in pivot.columns]
+                pivot = pivot[ordered_cols]
+                chart_colors = [fmt.MANA_CURVE_COLOR_HEX[c] for c in ordered_cols]
+            else:
+                group_col = "card_type"
+                pivot = (
+                    nonland_df.groupby(["cmc", group_col])["quantity"]
+                    .sum()
+                    .unstack(group_col)
+                    .fillna(0)
+                    .sort_index()
+                )
+                ordered_cols = [c for c in fmt.ALL_CARD_TYPES if c in pivot.columns]
+                ordered_cols += [c for c in pivot.columns if c not in ordered_cols]
+                pivot = pivot[ordered_cols]
+            if chart_colors:
+                st.bar_chart(pivot, color=chart_colors)
+            else:
+                st.bar_chart(pivot)
+
+        st.markdown("**Strategy tag breakdown**")
+        tag_counts = loaders.load_deck_strategy_tag_counts(conn, deck_id)
+        if not tag_counts.empty:
+            st.dataframe(tag_counts, hide_index=True, width="stretch")
+        else:
+            st.caption("No strategy tags recorded for this deck.")
+
+
+def _render_combos(conn, deck_id, meta):
+    """Combos tab: Commander Spellbook panel (cached; network only on button press)."""
+    st.subheader("🔗 Combos")
+
+    combo_flash_key = f"deck_{deck_id}_combo_flash"
+    combo_flash = st.session_state.pop(combo_flash_key, None)
+    if combo_flash:
+        st.success(combo_flash)
+
+    combo_sync = loaders.load_deck_combo_sync(conn, deck_id)
+
+    sync_col, button_col = st.columns([3, 1])
+    with sync_col:
+        if combo_sync:
             st.caption(
-                "This deck is marked as **brewing** — its list exists and its cards are "
-                "still elsewhere. Completion below is derived from where the cards "
-                "physically are, so it updates itself as you sleeve them."
+                f"From Commander Spellbook · last checked {combo_sync['fetched_at']} · "
+                f"color identity {combo_sync['identity'] or '—'}. "
+                "Re-check after changing the decklist."
             )
         else:
             st.caption(
-                "Where this deck's cards are right now. Mark it as brewing if you're "
-                "assembling it, to keep this panel open and show the build bar on its tile."
+                "Combos for this deck haven't been looked up yet. "
+                "“Check Spellbook” sends this decklist to commanderspellbook.com "
+                "and caches what comes back."
             )
 
-        if _pct is not None:
-            st.progress(
-                min(1.0, _pct / 100.0),
-                text=f"{_sourcing['located']} of {_sourcing['needed']} non-basics sleeved here",
+    with button_col:
+        check_combos = st.button(
+            "🔄 Check Spellbook",
+            key=f"deck_{deck_id}_combo_refresh",
+            width="stretch",
+            help="One request to commanderspellbook.com's public find-my-combos API. Needs network access.",
+        )
+
+    if check_combos:
+        combo_result = combo_error = None
+        try:
+            with st.spinner("Asking Commander Spellbook…"):
+                combo_result, combo_error = spellbook.fetch_deck_combos(
+                    q.deck_combo_card_rows(conn, deck_id),
+                    meta.get("commander"),
+                    meta.get("partner"),
+                )
+        except ImportError:
+            # spellbook.py imports `requests` lazily (inside SpellbookClient)
+            # precisely so this page still loads without it — the failure
+            # surfaces here, on the button press, instead of at import time.
+            combo_error = "Combo lookup needs the `requests` package installed."
+
+        if combo_error:
+            st.error(combo_error)
+        elif combo_result is not None:
+            writes.save_deck_combos(conn, deck_id, combo_result)
+            loaders.invalidate_combo_caches()
+            st.session_state[combo_flash_key] = spellbook.combo_check_summary(combo_result)
+            st.rerun()
+
+    if combo_sync:
+        included_df = loaders.load_deck_combos(conn, deck_id, "included")
+        almost_df = loaders.load_deck_combos(conn, deck_id, "almost")
+        owned = loaders.load_owned_card_quantities(conn)
+
+        in_deck_tab, one_away_tab = st.tabs(
+            [f"In this deck ({len(included_df)})", f"One card away ({len(almost_df)})"]
+        )
+
+        # Shared with the printable deck sheet, which decodes the same stored
+        # convention — see spellbook.split_list().
+        _lines = spellbook.split_list
+
+        def _render_combo_detail(row):
+            """Shared detail body for a single combo, used by both tabs."""
+            meta_bits = []
+            if row["bracket_tag"]:
+                meta_bits.append(f"**{row['bracket_tag']}**")
+            if row["mana_needed"]:
+                meta_bits.append(f"mana needed {row['mana_needed']}")
+            if row["popularity"]:
+                meta_bits.append(f"{int(row['popularity']):,} decks run it")
+            if not row["commander_legal"]:
+                meta_bits.append("⚠️ not Commander-legal")
+            if meta_bits:
+                st.caption(" · ".join(meta_bits))
+
+            produces = _lines(row["produces"])
+            if produces:
+                st.markdown("**Produces:** " + ", ".join(produces))
+
+            st.markdown("**Cards:** " + ", ".join(_lines(row["uses"])))
+
+            # Template requirements can't be matched to a specific card, so
+            # they're called out rather than folded into the card list — a
+            # combo listed as "in this deck" may still hinge on one of these.
+            requires = _lines(row["requires"])
+            if requires:
+                st.markdown("**Also needs:** " + "; ".join(requires))
+
+            prereqs = _lines(row["prerequisites"])
+            if prereqs:
+                st.markdown("**Prerequisites:**")
+                for p in prereqs:
+                    st.markdown(f"- {p}")
+
+            steps = _lines(row["description"])
+            if steps:
+                st.markdown("**Steps:**")
+                for i, step in enumerate(steps, start=1):
+                    st.markdown(f"{i}. {step}")
+
+            st.markdown(
+                f"[Full writeup on Commander Spellbook]({spellbook.combo_url(row['combo_id'])})"
             )
 
-        # One row of counts, in the order you'd work them.
-        _cols = st.columns(5)
-        for _col, _bucket in zip(_cols, q.SOURCING_BUCKETS):
-            _col.metric(q.bucket_label(_bucket), _counts.get(_bucket, 0))
+        with in_deck_tab:
+            if included_df.empty:
+                st.info(
+                    "Spellbook doesn't know of any complete combos in this deck. "
+                    "That's a real answer, not a gap — it only tracks combos "
+                    "someone has submitted, so your own synergies won't appear here."
+                )
+            else:
+                st.caption(
+                    "Every card of these combos is in the mainboard right now — "
+                    "including any you assembled without meaning to."
+                )
+                for _, row in included_df.iterrows():
+                    label = " + ".join(_lines(row["uses"]))
+                    produces_short = ", ".join(_lines(row["produces"])[:2])
+                    with st.expander(f"{label} → {produces_short}"):
+                        _render_combo_detail(row)
 
-        st.markdown("#### Sourcing")
-        for _bucket in q.SOURCING_BUCKETS:
-            _rows = _sourcing["buckets"].get(_bucket) or []
-            if not _rows:
-                continue
-            _n = _counts.get(_bucket, 0)
-            _icon = {"sleeved": "✅", "box": "📦", "unlocated": "❓",
-                     "other_deck": "🃏", "not_owned": "🛒"}[_bucket]
-
-            if _bucket == "other_deck":
-                # Grouped by donor deck, because the clustering IS the
-                # finding: "building this means gutting Tuvasa" is a
-                # decision to make knowingly and up front, not to discover
-                # card by card at the kitchen table.
-                st.markdown(f"**{_icon} {q.bucket_label(_bucket)} — {_n}**")
-                for _d in _sourcing["donors"]:
-                    _warn = (
-                        f" · ⚠️ leaves {_d['deck_name']} {_d['shortfall']} short"
-                        if _d["shortfall"] else " · leftover lots — costs it nothing"
-                    )
-                    with st.expander(f"{_d['deck_name']} — {_d['copies']}{_warn}"):
-                        if _d["shortfall"]:
-                            st.warning(
-                                f"Pulling these would leave **{_d['deck_name']}** "
-                                f"{_d['shortfall']} card(s) short of its own list. "
-                                "Either accept that, or buy the copy instead — the "
-                                "Workbench's buy list is where that goes."
-                            )
-                        st.dataframe(
-                            pd.DataFrame(
-                                [{"Card": c["card"], "Copies": c["copies"]} for c in _d["cards"]]
-                            ),
-                            hide_index=True, width="stretch",
+        with one_away_tab:
+            if almost_df.empty:
+                st.info("Nothing is exactly one card away from a known combo.")
+            else:
+                # Grouping by the MISSING card is the actionable view: "adding
+                # Freed from the Real completes 3 combos" is a shopping-list
+                # answer, where the flat per-combo list below is reference.
+                missing_rows = {}
+                for _, row in almost_df.iterrows():
+                    for card in _lines(row["missing"]):
+                        key = card.split(" // ")[0].strip().lower()
+                        entry = missing_rows.setdefault(
+                            key, {"card": card, "combos": 0, "produces": set(), "best_pop": 0}
                         )
-                continue
+                        entry["combos"] += 1
+                        entry["produces"].update(_lines(row["produces"])[:2])
+                        entry["best_pop"] = max(entry["best_pop"], int(row["popularity"] or 0))
 
-            with st.expander(f"{_icon} {q.bucket_label(_bucket)} — {_n}"):
-                if _bucket == "unlocated":
-                    st.caption(
-                        "You own these but no box is recorded. The Workbench's "
-                        "**Reconcile** tab is where locations get set."
-                    )
-                elif _bucket == "not_owned":
-                    st.caption(
-                        "Not owned. These feed the Workbench's **buy list**; proxying "
-                        "is the other way to finish the deck."
-                    )
-                _show_where = _bucket in ("box", "sleeved")
+                summary = []
+                for key, entry in missing_rows.items():
+                    have = owned.get(key)
+                    if have and have["available_qty"] > 0:
+                        own_label = "✅ Own it (free)"
+                    elif have and have["owned_qty"] > 0:
+                        own_label = "🔶 Own it (in another deck)"
+                    else:
+                        own_label = "— Don't own"
+                    summary.append({
+                        "Add this card": entry["card"],
+                        "In collection": own_label,
+                        "Combos it completes": entry["combos"],
+                        "Would produce": ", ".join(sorted(entry["produces"])[:3]),
+                        "Popularity": entry["best_pop"],
+                    })
+
+                summary_df = pd.DataFrame(summary).sort_values(
+                    ["Combos it completes", "Popularity"], ascending=False
+                )
+
+                st.caption(
+                    "One card short of a known combo. Ranked by how many combos each "
+                    "missing card would complete, then by how widely that combo is played. "
+                    "“In collection” counts a copy as free unless it's sleeved in another deck."
+                )
                 st.dataframe(
-                    pd.DataFrame([
-                        {
-                            "Card": r["card"],
-                            "Copies": r["copies"],
-                            **({"Where": ", ".join(r["locations"])} if _show_where else {}),
-                        }
-                        for r in _rows
-                    ]),
+                    summary_df,
+                    column_config={
+                        "Popularity": st.column_config.NumberColumn(
+                            "Popularity", format="%d",
+                            help="Decks on Spellbook running the most popular combo this card would complete.",
+                        ),
+                    },
                     hide_index=True, width="stretch",
                 )
 
-        st.divider()
-        _sheet_col, _state_col = st.columns([2, 1])
-
-        # The pull sheet is grouped by location rather than card type,
-        # because you work the box in location order.
-        _pull_html = deck_printout.build_pull_sheet_html(
-            _sourcing,
-            accent_gradient=fmt.deck_accent_gradient(color_identity_raw),
-            meta=meta,
-        )
-        _sheet_col.download_button(
-            f"🖨️ Printable pull sheet ({_to_pull} to pull)",
-            data=_pull_html.encode("utf-8"),
-            file_name=f"{fmt.safe_filename(deck_name)} - pull sheet.html",
-            mime="text/html",
-            key=f"deck_{deck_id}_pull_sheet",
-            disabled=not _to_pull,
-            help="A checklist grouped by where each card is, so one walk through the "
-                 "boxes collects everything. Open it in a browser and print.",
-        )
-        if _brewing:
-            if _state_col.button(
-                "✅ Mark deck as built", key=f"deck_{deck_id}_mark_built",
-                help="Clears the brewing flag. Completion stays derived from where the "
-                     "cards are, so this doesn't claim the deck is 100% sleeved.",
-            ):
-                writes.set_build_state(conn, deck_id, None)
-                loaders.invalidate_deck_caches(deck_id)
-                st.rerun()
-        elif _state_col.button(
-            "🔨 Mark as brewing", key=f"deck_{deck_id}_mark_brewing",
-            help="For a deck whose list exists but whose cards are still elsewhere.",
-        ):
-            writes.set_build_state(conn, deck_id, "brewing")
-            loaders.invalidate_deck_caches(deck_id)
-            st.rerun()
-
-st.divider()
-
-# ------------------------------------------------------------------
-# Win conditions / strengths / weaknesses
-# ------------------------------------------------------------------
-wc, st_, wk = st.columns(3)
+                with st.expander(f"Every one-card-away combo ({len(almost_df)})"):
+                    # Capped because a deck like a well-supported mono-black one
+                    # can be one card away from 150+ combos — past the first
+                    # couple of dozen by popularity it stops being useful.
+                    show_n = st.slider(
+                        "How many to show", min_value=5,
+                        max_value=int(len(almost_df)), value=min(15, int(len(almost_df))),
+                        key=f"deck_{deck_id}_combo_almost_n",
+                    ) if len(almost_df) > 5 else len(almost_df)
+                    for _, row in almost_df.head(int(show_n)).iterrows():
+                        missing_label = ", ".join(_lines(row["missing"]))
+                        produces_short = ", ".join(_lines(row["produces"])[:2])
+                        with st.expander(f"Add {missing_label} → {produces_short}"):
+                            _render_combo_detail(row)
 
 
-def _render_rank_list(container, title_text, rows):
-    container.markdown(f"**{title_text}**")
-    if not rows:
-        container.caption("None recorded.")
-        return
-    for r in rows:
-        desc = f" — {r['description']}" if r.get("description") else ""
-        container.markdown(f"{r['rank']}. **{r['label']}**{desc}")
+def _render_cards(conn, deck_id):
+    """Cards tab: Mainboard/Shortlist browser (filters live in an expander here, not the sidebar), then top-10 prices."""
+    main_df_full = loaders.load_deck_cards_df(conn, deck_id)
 
 
-_render_rank_list(wc, "Win Conditions", loaders.load_deck_rank_list(conn, deck_id, "win_conditions"))
-_render_rank_list(st_, "Strengths", loaders.load_deck_rank_list(conn, deck_id, "strengths"))
-_render_rank_list(wk, "Weaknesses", loaders.load_deck_rank_list(conn, deck_id, "weaknesses"))
+    board_choice = st.radio("Board", ["Mainboard", "Shortlist", "Both"], horizontal=True, key=f"deck_{deck_id}_board_choice")
 
-st.divider()
+    shortlist_df = loaders.load_shortlist_df(conn, deck_id)
 
-# ------------------------------------------------------------------
-# Optimized mana / Game Changers / Reserved List (Prompt Pass 4: moved to
-# sit directly under Win Conditions/Strengths/Weaknesses, ahead of
-# Themes/Mana Curve below)
-# ------------------------------------------------------------------
-main_df_full = loaders.load_deck_cards_df(conn, deck_id)
-
-mana_tag_col, gc_col, reserved_col = st.columns(3)
-
-with mana_tag_col:
-    st.markdown("**Optimized mana**")
-    mana_summary = loaders.load_deck_mana_tag_summary(conn, deck_id)
-    if mana_summary:
-        st.dataframe(pd.DataFrame(mana_summary), hide_index=True, width="stretch")
+    if board_choice == "Mainboard":
+        working_df = main_df_full
+    elif board_choice == "Shortlist":
+        working_df = shortlist_df
     else:
-        st.caption("No optimized-mana tags matched for this deck.")
+        m = main_df_full.copy()
+        m["board"] = "Mainboard"
+        b = shortlist_df.copy()
+        b["board"] = "Shortlist"
+        for col in ("review_flag", "replace_target", "notes", "status"):
+            if col not in m.columns:
+                m[col] = None
+        for col in ("quantity", "strategy_tags"):
+            if col not in b.columns:
+                b[col] = None
+        working_df = pd.concat([m, b], ignore_index=True, sort=False)
 
-with gc_col:
-    st.markdown("**Game Changers**", help="Cards flagged as Game Changers in this deck, with your own category tag.")
-    gc_df = loaders.load_deck_game_changers(conn, deck_id)
-    if not gc_df.empty:
+    # Widget keys are namespaced by deck_id + board_choice so switching decks
+    # or boards never tries to restore a filter/group selection that no longer
+    # matches the available options for the new dataframe.
+    scope_key = f"deck_{deck_id}_{board_choice}"
+
+    if working_df.empty:
+        st.info(f"No cards in the {board_choice.lower()} for this deck.")
+    else:
+        filter_box = st.expander("🔍 Filters")
+        multi_facets = [("color_identity", "Color Identity", "Colorless")]
+        if "strategy_tags" in working_df.columns:
+            multi_facets.append(("strategy_tags", "Strategy Tag", None))
+
+        single_facets = [("card_type", "Card Type"), ("rarity", "Rarity"), ("set_code", "Set")]
+        if "board" in working_df.columns:
+            single_facets.append(("board", "Board"))
+
+        bool_toggles = [("is_game_changer", "Game Changer")]
+        if "review_flag" in working_df.columns:
+            bool_toggles.append(("review_flag", "Flagged for review"))
+
+        filtered = cv.render_filter_panel(
+            working_df,
+            key_prefix=scope_key,
+            container=filter_box,
+            multi_facets=multi_facets,
+            single_facets=single_facets,
+            bool_toggles=bool_toggles,
+        )
+
+        column_config = cv.base_column_config()
+        extra_cols = []
+        if "quantity" in working_df.columns:
+            column_config["quantity"] = st.column_config.NumberColumn("Qty", width="small")
+            extra_cols.append("quantity")
+        if "strategy_tags" in working_df.columns:
+            column_config["strategy_tags"] = st.column_config.TextColumn("Strategy Tag", width="small")
+            extra_cols.append("strategy_tags")
+        if "board" in working_df.columns:
+            column_config["board"] = st.column_config.TextColumn("Board", width="small")
+            extra_cols.append("board")
+        if "status" in working_df.columns:
+            column_config["status"] = st.column_config.TextColumn("Status", width="small")
+            extra_cols.append("status")
+        if "review_flag" in working_df.columns:
+            column_config["review_flag"] = st.column_config.CheckboxColumn("Review?", width="small")
+            extra_cols.append("review_flag")
+        if "replace_target" in working_df.columns:
+            column_config["replace_target"] = st.column_config.TextColumn("Replaces", width="small")
+            extra_cols.append("replace_target")
+        if "notes" in working_df.columns:
+            column_config["notes"] = st.column_config.TextColumn("Notes", width="large")
+            extra_cols.append("notes")
+
+        group_options = [("card_type", "Type"), ("color_display", "Color Identity"), ("rarity", "Rarity")]
+        if "strategy_tags" in working_df.columns:
+            group_options.append(("strategy_tags", "Strategy Tag"))
+        if "board" in working_df.columns:
+            group_options.append(("board", "Board"))
+
+        cv.render_browser(
+            filtered,
+            key_prefix=scope_key,
+            group_options=group_options,
+            column_config=column_config,
+            extra_table_cols=extra_cols,
+        )
+
+
+    st.markdown("**Top 10 most expensive cards**", help="By cards.current_price_usd, refreshed via Card Database -> Card Data. Single-card (unit) pricing — quantity isn't shown here.")
+    price_df = loaders.load_deck_price_top10(conn, deck_id)
+    if not price_df.empty:
+        # Prompt Pass 4: quantity column hidden (unit pricing only); a
+        # "purchase price / cost paid" column added, sourced from
+        # collection.price_paid for the lot(s) sleeved in this deck.
         st.dataframe(
-            # scryfall_flag was already omitted from display in Prompt
-            # Pass 4 (every row here is already Game-Changer-flagged or
-            # custom-tagged, so the raw Scryfall boolean only ever showed
-            # a static "1"); Prompt Pass 10 (prompt3.txt instruction 4)
-            # drops the derived "Status" column too, per that prompt's
-            # "only display the Card Name and its associated Tag" —
-            # queries.deck_game_changers() itself still computes status
-            # (a harmless additive column nothing else reads), only this
-            # page's own display was simplified.
-            gc_df.rename(columns={"card_name": "Card", "custom_tag": "Your tag"})[["Card", "Your tag"]],
+            price_df.rename(columns={
+                "card_name": "Card", "price": "Price", "purchase_price": "Purchase price / Cost paid",
+            }),
+            column_config={
+                "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                "Purchase price / Cost paid": st.column_config.NumberColumn(
+                    "Purchase price / Cost paid", format="$%.2f",
+                ),
+            },
             hide_index=True, width="stretch",
         )
     else:
-        st.caption("No Game Changers in this deck.")
+        st.caption("No priced cards in this deck yet.")
 
-with reserved_col:
-    st.markdown("**Reserved List**", help="Pulled live from Scryfall's `reserved` field.")
-    reserved_df = loaders.load_deck_reserved_list_cards(conn, deck_id)
-    if not reserved_df.empty:
-        # Prompt Pass 4: shows current price instead of quantity run.
-        st.dataframe(
-            reserved_df.rename(columns={"card_name": "Card", "price": "Price"}),
-            column_config={"Price": st.column_config.NumberColumn("Price", format="$%.2f")},
-            hide_index=True, width="stretch",
-        )
-    else:
-        st.caption("No Reserved List cards in this deck.")
 
-st.divider()
-
-# ------------------------------------------------------------------
-# Combos (Commander Spellbook)
-#
-# Reads the local deck_combos cache; the network fetch only ever happens
-# on an explicit button press, so this page stays usable offline. This
-# panel is the replacement for the old hand-typed decks.combos field
-# (removed from the Turn 0 grid and the Deck Editor) — real combo data
-# instead of a manually-maintained guess.
-#
-# The check's own result is flashed back naming the actual combos found
-# (spellbook.combo_check_summary()), not just a count — stashed in
-# session_state rather than shown inline, because st.rerun() below (needed
-# so the fresh cache populates the tabs in the same click) would otherwise
-# wipe an inline st.success() before it's ever seen.
-# ------------------------------------------------------------------
-st.subheader("🔗 Combos")
-
-combo_flash_key = f"deck_{deck_id}_combo_flash"
-combo_flash = st.session_state.pop(combo_flash_key, None)
-if combo_flash:
-    st.success(combo_flash)
-
-combo_sync = loaders.load_deck_combo_sync(conn, deck_id)
-
-sync_col, button_col = st.columns([3, 1])
-with sync_col:
-    if combo_sync:
-        st.caption(
-            f"From Commander Spellbook · last checked {combo_sync['fetched_at']} · "
-            f"color identity {combo_sync['identity'] or '—'}. "
-            "Re-check after changing the decklist."
-        )
-    else:
-        st.caption(
-            "Combos for this deck haven't been looked up yet. "
-            "“Check Spellbook” sends this decklist to commanderspellbook.com "
-            "and caches what comes back."
-        )
-
-with button_col:
-    check_combos = st.button(
-        "🔄 Check Spellbook",
-        key=f"deck_{deck_id}_combo_refresh",
-        width="stretch",
-        help="One request to commanderspellbook.com's public find-my-combos API. Needs network access.",
-    )
-
-if check_combos:
-    combo_result = combo_error = None
-    try:
-        with st.spinner("Asking Commander Spellbook…"):
-            combo_result, combo_error = spellbook.fetch_deck_combos(
-                q.deck_combo_card_rows(conn, deck_id),
-                meta.get("commander"),
-                meta.get("partner"),
-            )
-    except ImportError:
-        # spellbook.py imports `requests` lazily (inside SpellbookClient)
-        # precisely so this page still loads without it — the failure
-        # surfaces here, on the button press, instead of at import time.
-        combo_error = "Combo lookup needs the `requests` package installed."
-
-    if combo_error:
-        st.error(combo_error)
-    elif combo_result is not None:
-        writes.save_deck_combos(conn, deck_id, combo_result)
-        loaders.invalidate_combo_caches()
-        st.session_state[combo_flash_key] = spellbook.combo_check_summary(combo_result)
-        st.rerun()
-
-if combo_sync:
-    included_df = loaders.load_deck_combos(conn, deck_id, "included")
-    almost_df = loaders.load_deck_combos(conn, deck_id, "almost")
-    owned = loaders.load_owned_card_quantities(conn)
-
-    in_deck_tab, one_away_tab = st.tabs(
-        [f"In this deck ({len(included_df)})", f"One card away ({len(almost_df)})"]
-    )
-
-    # Shared with the printable deck sheet, which decodes the same stored
-    # convention — see spellbook.split_list().
-    _lines = spellbook.split_list
-
-    def _render_combo_detail(row):
-        """Shared detail body for a single combo, used by both tabs."""
-        meta_bits = []
-        if row["bracket_tag"]:
-            meta_bits.append(f"**{row['bracket_tag']}**")
-        if row["mana_needed"]:
-            meta_bits.append(f"mana needed {row['mana_needed']}")
-        if row["popularity"]:
-            meta_bits.append(f"{int(row['popularity']):,} decks run it")
-        if not row["commander_legal"]:
-            meta_bits.append("⚠️ not Commander-legal")
-        if meta_bits:
-            st.caption(" · ".join(meta_bits))
-
-        produces = _lines(row["produces"])
-        if produces:
-            st.markdown("**Produces:** " + ", ".join(produces))
-
-        st.markdown("**Cards:** " + ", ".join(_lines(row["uses"])))
-
-        # Template requirements can't be matched to a specific card, so
-        # they're called out rather than folded into the card list — a
-        # combo listed as "in this deck" may still hinge on one of these.
-        requires = _lines(row["requires"])
-        if requires:
-            st.markdown("**Also needs:** " + "; ".join(requires))
-
-        prereqs = _lines(row["prerequisites"])
-        if prereqs:
-            st.markdown("**Prerequisites:**")
-            for p in prereqs:
-                st.markdown(f"- {p}")
-
-        steps = _lines(row["description"])
-        if steps:
-            st.markdown("**Steps:**")
-            for i, step in enumerate(steps, start=1):
-                st.markdown(f"{i}. {step}")
-
-        st.markdown(
-            f"[Full writeup on Commander Spellbook]({spellbook.combo_url(row['combo_id'])})"
-        )
-
-    with in_deck_tab:
-        if included_df.empty:
-            st.info(
-                "Spellbook doesn't know of any complete combos in this deck. "
-                "That's a real answer, not a gap — it only tracks combos "
-                "someone has submitted, so your own synergies won't appear here."
-            )
+def _render_history(conn, deck_id):
+    """History tab: applied/dropped changes with the game record between them."""
+    history = loaders.load_deck_change_history(conn, deck_id)
+    n_applied = sum(1 for h in history if h["kind"] == "change" and h["status"] == "applied")
+    with st.expander(f"🕓 Changes ({n_applied} applied)"):
+        if not history:
+            st.caption("No changes recorded for this deck yet. Applying a swap or editing the mainboard starts the log.")
         else:
+            for h in history:
+                if h["kind"] == "games":
+                    record = f"{h['wins']}-{h['losses']}" if h["games"] else "no games"
+                    plural = "game" if h["games"] == 1 else "games"
+                    st.caption(f"── {h['games']} {plural} {h['label']} · {record} ──")
+                    continue
+                parts = []
+                if h["add_card"]:
+                    parts.append(f"**+ {h['add_card']}**")
+                if h["remove_card"]:
+                    parts.append(f"− {h['remove_card']}")
+                line = f"`{h['date']}`  " + "   ".join(parts)
+                if h["quantity"] and h["quantity"] > 1:
+                    line += f"  ×{h['quantity']}"
+                if h["status"] == "dropped":
+                    line = f"~~{line}~~  *(dropped)*"
+                if h["notes"]:
+                    line += f"  — {h['notes']}"
+                st.markdown(line)
             st.caption(
-                "Every card of these combos is in the mainboard right now — "
-                "including any you assembled without meaning to."
-            )
-            for _, row in included_df.iterrows():
-                label = " + ".join(_lines(row["uses"]))
-                produces_short = ", ".join(_lines(row["produces"])[:2])
-                with st.expander(f"{label} → {produces_short}"):
-                    _render_combo_detail(row)
-
-    with one_away_tab:
-        if almost_df.empty:
-            st.info("Nothing is exactly one card away from a known combo.")
-        else:
-            # Grouping by the MISSING card is the actionable view: "adding
-            # Freed from the Real completes 3 combos" is a shopping-list
-            # answer, where the flat per-combo list below is reference.
-            missing_rows = {}
-            for _, row in almost_df.iterrows():
-                for card in _lines(row["missing"]):
-                    key = card.split(" // ")[0].strip().lower()
-                    entry = missing_rows.setdefault(
-                        key, {"card": card, "combos": 0, "produces": set(), "best_pop": 0}
-                    )
-                    entry["combos"] += 1
-                    entry["produces"].update(_lines(row["produces"])[:2])
-                    entry["best_pop"] = max(entry["best_pop"], int(row["popularity"] or 0))
-
-            summary = []
-            for key, entry in missing_rows.items():
-                have = owned.get(key)
-                if have and have["available_qty"] > 0:
-                    own_label = "✅ Own it (free)"
-                elif have and have["owned_qty"] > 0:
-                    own_label = "🔶 Own it (in another deck)"
-                else:
-                    own_label = "— Don't own"
-                summary.append({
-                    "Add this card": entry["card"],
-                    "In collection": own_label,
-                    "Combos it completes": entry["combos"],
-                    "Would produce": ", ".join(sorted(entry["produces"])[:3]),
-                    "Popularity": entry["best_pop"],
-                })
-
-            summary_df = pd.DataFrame(summary).sort_values(
-                ["Combos it completes", "Popularity"], ascending=False
+                "Games are counted by day, and a game on the day of a change counts toward the "
+                "older list. A 4-player pod and a few games per version is a signal, not evidence."
             )
 
-            st.caption(
-                "One card short of a known combo. Ranked by how many combos each "
-                "missing card would complete, then by how widely that combo is played. "
-                "“In collection” counts a copy as free unless it's sleeved in another deck."
-            )
-            st.dataframe(
-                summary_df,
-                column_config={
-                    "Popularity": st.column_config.NumberColumn(
-                        "Popularity", format="%d",
-                        help="Decks on Spellbook running the most popular combo this card would complete.",
-                    ),
-                },
-                hide_index=True, width="stretch",
-            )
 
-            with st.expander(f"Every one-card-away combo ({len(almost_df)})"):
-                # Capped because a deck like a well-supported mono-black one
-                # can be one card away from 150+ combos — past the first
-                # couple of dozen by popularity it stops being useful.
-                show_n = st.slider(
-                    "How many to show", min_value=5,
-                    max_value=int(len(almost_df)), value=min(15, int(len(almost_df))),
-                    key=f"deck_{deck_id}_combo_almost_n",
-                ) if len(almost_df) > 5 else len(almost_df)
-                for _, row in almost_df.head(int(show_n)).iterrows():
-                    missing_label = ", ".join(_lines(row["missing"]))
-                    produces_short = ", ".join(_lines(row["produces"])[:2])
-                    with st.expander(f"Add {missing_label} → {produces_short}"):
-                        _render_combo_detail(row)
-
-st.divider()
-
-# ------------------------------------------------------------------
-# Themes / mana curve / type breakdown / strategy tags
-# ------------------------------------------------------------------
-theme_col, curve_col = st.columns(2)
-
-with theme_col:
-    st.markdown("**Themes**")
-    themes = loaders.load_deck_themes(conn, deck_id)
-    mains = [t["theme"] for t in themes if t["role"] == "main"]
-    subs = [t["theme"] for t in themes if t["role"] == "sub"]
-    st.markdown(f"- Main: {', '.join(mains) if mains else '—'}")
-    st.markdown(f"- Sub: {', '.join(subs) if subs else '—'}")
-
-    st.markdown("**Type breakdown**")
-    if not main_df_full.empty:
-        type_counts = main_df_full.groupby("card_type")["quantity"].sum().reindex(fmt.ALL_CARD_TYPES).fillna(0)
-        st.bar_chart(type_counts)
-    else:
-        st.caption("No mainboard cards loaded yet.")
-
-with curve_col:
-    st.markdown("**Mana curve** (non-land, MDFC-aware)")
-    st.caption(
-        "Cards with a land on either face (e.g. an MDFC land) are excluded here, same as "
-        "the rest of this dashboard's mana-curve and land-ratio math (Land Probability page)."
-    )
-    if not main_df_full.empty:
-        nonland_df = main_df_full[~main_df_full["is_land"]]
-    else:
-        nonland_df = main_df_full
-    if nonland_df.empty:
-        st.caption("No non-land cards to chart yet.")
-    else:
-        breakdown_by = st.radio(
-            "Stack by", ["Color", "Type"], horizontal=True, key=f"curve_stackby_{deck_id}"
-        )
-        chart_colors = None
-        if breakdown_by == "Color":
-            # Prompt Pass 4: fixed W/U/B/R/G/Multi-color/Colorless
-            # grouping+order with custom mana-colored bars, instead of an
-            # alphabetical-with-Colorless-last fallback order.
-            bucketed = nonland_df.assign(
-                mana_color_bucket=nonland_df["color_display"].apply(fmt.mana_curve_color_bucket)
-            )
-            group_col = "mana_color_bucket"
-            pivot = (
-                bucketed.groupby(["cmc", group_col])["quantity"]
-                .sum()
-                .unstack(group_col)
-                .fillna(0)
-                .sort_index()
-            )
-            ordered_cols = [c for c in fmt.MANA_CURVE_COLOR_ORDER if c in pivot.columns]
-            pivot = pivot[ordered_cols]
-            chart_colors = [fmt.MANA_CURVE_COLOR_HEX[c] for c in ordered_cols]
-        else:
-            group_col = "card_type"
-            pivot = (
-                nonland_df.groupby(["cmc", group_col])["quantity"]
-                .sum()
-                .unstack(group_col)
-                .fillna(0)
-                .sort_index()
-            )
-            ordered_cols = [c for c in fmt.ALL_CARD_TYPES if c in pivot.columns]
-            ordered_cols += [c for c in pivot.columns if c not in ordered_cols]
-            pivot = pivot[ordered_cols]
-        if chart_colors:
-            st.bar_chart(pivot, color=chart_colors)
-        else:
-            st.bar_chart(pivot)
-
-    st.markdown("**Strategy tag breakdown**")
-    tag_counts = loaders.load_deck_strategy_tag_counts(conn, deck_id)
-    if not tag_counts.empty:
-        st.dataframe(tag_counts, hide_index=True, width="stretch")
-    else:
-        st.caption("No strategy tags recorded for this deck.")
-
-st.divider()
-
-# ------------------------------------------------------------------
-# Top 10 Most Expensive
-# (The Top 10 Saltiest panel that used to sit alongside this — hand-
-# maintained EDHREC salt scores — was removed dashboard-wide in Prompt
-# Pass 5; see PROJECT_STATE.md for why.)
-# ------------------------------------------------------------------
-st.markdown("**Top 10 most expensive cards**", help="By cards.current_price_usd, refreshed via Card Database -> Card Data. Single-card (unit) pricing — quantity isn't shown here.")
-price_df = loaders.load_deck_price_top10(conn, deck_id)
-if not price_df.empty:
-    # Prompt Pass 4: quantity column hidden (unit pricing only); a
-    # "purchase price / cost paid" column added, sourced from
-    # collection.price_paid for the lot(s) sleeved in this deck.
-    st.dataframe(
-        price_df.rename(columns={
-            "card_name": "Card", "price": "Price", "purchase_price": "Purchase price / Cost paid",
-        }),
-        column_config={
-            "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
-            "Purchase price / Cost paid": st.column_config.NumberColumn(
-                "Purchase price / Cost paid", format="$%.2f",
-            ),
-        },
-        hide_index=True, width="stretch",
-    )
-else:
-    st.caption("No priced cards in this deck yet.")
-
-st.divider()
-
-# ------------------------------------------------------------------
-# Change history (Workbench rework, Phase 5) — applied and dropped changes,
-# newest first, with the deck's game record between them. Collapsed so it
-# doesn't push the card browser further down for every deck.
-# ------------------------------------------------------------------
-history = loaders.load_deck_change_history(conn, deck_id)
-n_applied = sum(1 for h in history if h["kind"] == "change" and h["status"] == "applied")
-with st.expander(f"🕓 Changes ({n_applied} applied)"):
-    if not history:
-        st.caption("No changes recorded for this deck yet. Applying a swap or editing the mainboard starts the log.")
-    else:
-        for h in history:
-            if h["kind"] == "games":
-                record = f"{h['wins']}-{h['losses']}" if h["games"] else "no games"
-                plural = "game" if h["games"] == 1 else "games"
-                st.caption(f"── {h['games']} {plural} {h['label']} · {record} ──")
-                continue
-            parts = []
-            if h["add_card"]:
-                parts.append(f"**+ {h['add_card']}**")
-            if h["remove_card"]:
-                parts.append(f"− {h['remove_card']}")
-            line = f"`{h['date']}`  " + "   ".join(parts)
-            if h["quantity"] and h["quantity"] > 1:
-                line += f"  ×{h['quantity']}"
-            if h["status"] == "dropped":
-                line = f"~~{line}~~  *(dropped)*"
-            if h["notes"]:
-                line += f"  — {h['notes']}"
-            st.markdown(line)
-        st.caption(
-            "Games are counted by day, and a game on the day of a change counts toward the "
-            "older list. A 4-player pod and a few games per version is a signal, not evidence."
-        )
-
-st.divider()
-
-# ------------------------------------------------------------------
-# Card browser: Mainboard / Maybeboard / Both
-# ------------------------------------------------------------------
-st.subheader("Cards")
-
-board_choice = st.radio("Board", ["Mainboard", "Shortlist", "Both"], horizontal=True, key=f"deck_{deck_id}_board_choice")
-
-shortlist_df = loaders.load_shortlist_df(conn, deck_id)
-
-if board_choice == "Mainboard":
-    working_df = main_df_full
-elif board_choice == "Shortlist":
-    working_df = shortlist_df
-else:
-    m = main_df_full.copy()
-    m["board"] = "Mainboard"
-    b = shortlist_df.copy()
-    b["board"] = "Shortlist"
-    for col in ("review_flag", "replace_target", "notes", "status"):
-        if col not in m.columns:
-            m[col] = None
-    for col in ("quantity", "strategy_tags"):
-        if col not in b.columns:
-            b[col] = None
-    working_df = pd.concat([m, b], ignore_index=True, sort=False)
-
-# Widget keys are namespaced by deck_id + board_choice so switching decks
-# or boards never tries to restore a filter/group selection that no longer
-# matches the available options for the new dataframe.
-scope_key = f"deck_{deck_id}_{board_choice}"
-
-if working_df.empty:
-    st.info(f"No cards in the {board_choice.lower()} for this deck.")
-else:
-    multi_facets = [("color_identity", "Color Identity", "Colorless")]
-    if "strategy_tags" in working_df.columns:
-        multi_facets.append(("strategy_tags", "Strategy Tag", None))
-
-    single_facets = [("card_type", "Card Type"), ("rarity", "Rarity"), ("set_code", "Set")]
-    if "board" in working_df.columns:
-        single_facets.append(("board", "Board"))
-
-    bool_toggles = [("is_game_changer", "Game Changer")]
-    if "review_flag" in working_df.columns:
-        bool_toggles.append(("review_flag", "Flagged for review"))
-
-    filtered = cv.render_filter_panel(
-        working_df,
-        key_prefix=scope_key,
-        container=st.sidebar,
-        multi_facets=multi_facets,
-        single_facets=single_facets,
-        bool_toggles=bool_toggles,
-    )
-
-    column_config = cv.base_column_config()
-    extra_cols = []
-    if "quantity" in working_df.columns:
-        column_config["quantity"] = st.column_config.NumberColumn("Qty", width="small")
-        extra_cols.append("quantity")
-    if "strategy_tags" in working_df.columns:
-        column_config["strategy_tags"] = st.column_config.TextColumn("Strategy Tag", width="small")
-        extra_cols.append("strategy_tags")
-    if "board" in working_df.columns:
-        column_config["board"] = st.column_config.TextColumn("Board", width="small")
-        extra_cols.append("board")
-    if "status" in working_df.columns:
-        column_config["status"] = st.column_config.TextColumn("Status", width="small")
-        extra_cols.append("status")
-    if "review_flag" in working_df.columns:
-        column_config["review_flag"] = st.column_config.CheckboxColumn("Review?", width="small")
-        extra_cols.append("review_flag")
-    if "replace_target" in working_df.columns:
-        column_config["replace_target"] = st.column_config.TextColumn("Replaces", width="small")
-        extra_cols.append("replace_target")
-    if "notes" in working_df.columns:
-        column_config["notes"] = st.column_config.TextColumn("Notes", width="large")
-        extra_cols.append("notes")
-
-    group_options = [("card_type", "Type"), ("color_display", "Color Identity"), ("rarity", "Rarity")]
-    if "strategy_tags" in working_df.columns:
-        group_options.append(("strategy_tags", "Strategy Tag"))
-    if "board" in working_df.columns:
-        group_options.append(("board", "Board"))
-
-    cv.render_browser(
-        filtered,
-        key_prefix=scope_key,
-        group_options=group_options,
-        column_config=column_config,
-        extra_table_cols=extra_cols,
-    )
+tab_overview, tab_mana, tab_combos, tab_cards, tab_history = st.tabs(
+    ["Overview", "Mana & Curve", "Combos", "Cards", "History"]
+)
+with tab_overview:
+    _render_overview(conn, deck_id, meta, deck_name, color_identity_raw)
+with tab_mana:
+    _render_mana_curve(conn, deck_id)
+with tab_combos:
+    _render_combos(conn, deck_id, meta)
+with tab_cards:
+    _render_cards(conn, deck_id)
+with tab_history:
+    _render_history(conn, deck_id)

@@ -11,7 +11,8 @@ Top to bottom:
   - deck tiles: clicking one opens the Decks page at `Decks?deck_id=N`,
     which pre-selects that deck
 
-Phase 3 adds a collapsed "📊 Compare all decks" expander under the tiles.
+A collapsed "📊 Compare all decks" expander (moved here from the Decks page
+in Phase 3) sits under the tiles.
 
 Router-only: the st.page_link paths are relative to dashboard.py, so this
 file doesn't run on its own the way the other pages do.
@@ -83,3 +84,46 @@ if workbench_bits:
 
 decks_with_covers = loaders.load_decks_with_covers(conn)
 cv.render_deck_landing_grid(decks_with_covers, status_df=comparison)
+
+# Cross-deck comparison matrix (Workbench rework Phase 5; moved off the Decks
+# page in UI plan Phase 3 since it spans every deck). Collapsed so the tiles
+# stay the landing view.
+with st.expander("📊 Compare all decks"):
+    st.dataframe(
+        comparison.assign(
+            record=comparison.apply(lambda r: f"{int(r['wins'])}-{int(r['losses'])}" if r["games"] else "—", axis=1),
+            win_pct=comparison["win_rate"] * 100,
+        )[["name", "build_state", "bracket", "interaction", "avg_cmc", "value", "record", "win_pct",
+           "game_changers", "combos", "planned", "ideas", "build_pct"]],
+        column_config={
+            "name": st.column_config.TextColumn("Deck"),
+            # Blank for a normal built deck, which is most of them.
+            "build_state": st.column_config.TextColumn(
+                "State",
+                help="Blank = a normal built deck. 'brewing' = the list exists but the "
+                     "cards are still elsewhere; 'dismantled' = taken apart, list kept.",
+            ),
+            "bracket": st.column_config.NumberColumn("Bracket", format="%d"),
+            "interaction": st.column_config.NumberColumn("Interaction", format="%d"),
+            "avg_cmc": st.column_config.NumberColumn("Avg CMC", format="%.2f", help="Non-land mainboard cards, weighted by quantity."),
+            "value": st.column_config.NumberColumn("Value", format="$%.0f"),
+            "record": st.column_config.TextColumn("W-L"),
+            "win_pct": st.column_config.NumberColumn("Win %", format="%.0f%%"),
+            "game_changers": st.column_config.NumberColumn("Game Changers", format="%d"),
+            "combos": st.column_config.NumberColumn(
+                "Combos", format="%d",
+                help="Complete combos in the mainboard per Commander Spellbook. Blank = never checked (not zero).",
+            ),
+            "planned": st.column_config.NumberColumn("Planned", format="%d"),
+            "ideas": st.column_config.NumberColumn("Ideas", format="%d"),
+            "build_pct": st.column_config.NumberColumn(
+                "Built", format="%.0f%%",
+                help="Share of the non-basic mainboard physically located in this deck (Workbench -> Reconcile).",
+            ),
+        },
+        hide_index=True, width="stretch",
+    )
+    st.caption(
+        "Click a column header to sort. Win rates here come from a 4-player pod and a handful of "
+        "games per deck — a signal, not evidence."
+    )

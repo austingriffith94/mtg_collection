@@ -170,3 +170,54 @@ def test_create_deck_selects_new_deck(smoke_db_path, tmp_path, monkeypatch):
     finally:
         st.cache_resource.clear()
         st.cache_data.clear()
+
+
+# Phase 3: the Decks page is split into tabs; Compare-all-decks lives on Home.
+def test_decks_page_has_tabs_for_every_deck():
+    at = AppTest.from_file(os.path.join(PAGES_DIR, "2_Decks.py"), default_timeout=15)
+    at.run()
+    for deck_id in (1, 2):
+        at.session_state["current_deck_id"] = deck_id
+        at.run()
+        assert not at.exception, deck_id
+        labels = [t.label for t in at.tabs]
+        for expected in ("Overview", "Mana & Curve", "Combos", "Cards", "History"):
+            assert expected in labels, (deck_id, labels)
+
+
+def test_compare_all_decks_moved_to_home():
+    home = AppTest.from_file(os.path.join(PROJECT_ROOT, "dashboard.py"), default_timeout=15)
+    home.run()
+    assert "📊 Compare all decks" in [e.label for e in home.expander]
+    decks = AppTest.from_file(os.path.join(PAGES_DIR, "2_Decks.py"), default_timeout=15)
+    decks.run()
+    assert "📊 Compare all decks" not in [e.label for e in decks.expander]
+
+
+def test_decks_page_brewing_deck_and_empty_deck(smoke_db_path, tmp_path, monkeypatch):
+    # Own DB copy: deck 2 becomes a brewing deck (Build Plan open, Sol Ring
+    # sits in deck 1's sleeve) and deck 3 has no cards at all.
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE decks SET build_state = 'brewing' WHERE deck_id = 2")
+    conn.execute(
+        "INSERT INTO decks (deck_id, name, commander, color_identity) VALUES (3, 'Empty Deck', NULL, '')"
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "2_Decks.py"), default_timeout=15)
+        for deck_id in (2, 3):
+            at.session_state["current_deck_id"] = deck_id
+            at.run()
+            assert not at.exception, deck_id
+            assert "Overview" in [t.label for t in at.tabs]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()

@@ -7,9 +7,12 @@ Decks page:
   - render_filter_panel()   sidebar filters (search, facets, colors, price, CMC)
   - render_browser()        the View toggle (Table / Image Grid) + "group by"
                              breakout controls + sort, then dispatches to...
+                             (an st.fragment since UI plan Phase 4)
   - render_table()          st.dataframe with a clickable Scryfall link column
   - render_grid()           paginated image grid, each card image itself
-                             links out to its Scryfall page
+                             links out to its Scryfall page. Local art is
+                             linked as an app/static/ URL, not embedded
+                             (card_image_src / deck_image_src, Phase 4)
 
 Grouping ("layering of toggles") is implemented with ONE st.expander per
 top-level group (Streamlit does not allow nesting expanders inside each
@@ -299,8 +302,16 @@ def render_filter_panel(
 # ------------------------------------------------------------------
 # View toggle + group-by breakout + sort, then dispatch to table/grid
 # ------------------------------------------------------------------
+@st.fragment
 def render_browser(df, key_prefix, group_options, column_config, extra_table_cols=None, columns_per_row=5):
     """
+    A fragment (UI plan Phase 4): changing the view, grouping, sort, page
+    size or page reruns only this browser, not the whole page. A fragment
+    rerun reuses the arguments from the last full run, so callers pass the
+    already-filtered `df` and keep their filter widgets outside it — a
+    filter change is still a full rerun, which re-calls this with new data.
+    Don't draw into the sidebar or other outside containers from in here.
+
     group_options: [(col, label), ...] offered in the "Group / breakout by"
                    multiselect, applied in the order the user picks them
                    (layered breakouts).
@@ -413,7 +424,7 @@ def base_column_config(price=True):
 # ------------------------------------------------------------------
 # Image grid view — each card image itself links out to Scryfall
 # ------------------------------------------------------------------
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=500)
 def _encode_local_image_b64(abs_path, mtime):
     # `mtime` is unused in the body but is part of Streamlit's cache key: without
     # it, replacing the file on disk at the same `abs_path` would keep serving the
@@ -422,33 +433,46 @@ def _encode_local_image_b64(abs_path, mtime):
         return base64.b64encode(f.read()).decode("ascii")
 
 
-def _image_src(row):
-    local_path = fmt.resolve_local_image(row.get("local_image_path"))
-    if local_path:
-        try:
-            mtime = os.path.getmtime(local_path)
-            b64 = _encode_local_image_b64(local_path, mtime)
-            ext = os.path.splitext(local_path)[1].lstrip(".").lower() or "jpg"
-            ext = "jpeg" if ext == "jpg" else ext
-            return f"data:image/{ext};base64,{b64}"
-        except OSError:
-            pass
+def _local_src(local_image_path, embed):
+    """src for a cached image under static/, or None if it isn't on disk.
+
+    On screen (embed=False) this is a static-serving URL, so the browser
+    fetches and caches each image once instead of the page carrying every
+    image's bytes on every rerun (Phase 4 of UI_ACTION_PLAN.md: a 48-card
+    grid used to re-send several MB of base64 per filter change). embed=True
+    returns a self-contained data: URI, for output that has to work outside
+    the app — the downloadable deck sheet — or for st.image, which reads a
+    plain string as a file path rather than a relative URL."""
+    if not embed:
+        return fmt.local_image_url(local_image_path)
+    abs_path = fmt.resolve_local_image(local_image_path)
+    if not abs_path:
+        return None
+    try:
+        b64 = _encode_local_image_b64(abs_path, os.path.getmtime(abs_path))
+    except OSError:
+        return None
+    ext = os.path.splitext(abs_path)[1].lstrip(".").lower() or "jpg"
+    ext = "jpeg" if ext == "jpg" else ext
+    return f"data:image/{ext};base64,{b64}"
+
+
+def card_image_src(row, embed=False):
+    """Best image src for a card row: the local cache (see _local_src for
+    what `embed` changes), else Scryfall's remote image_uri, else None."""
+    src = _local_src(row.get("local_image_path"), embed)
+    if src:
+        return src
     image_uri = row.get("image_uri")
     if isinstance(image_uri, str) and image_uri.startswith("http"):
         return image_uri
     return None
 
 
-# Public alias for callers outside this module (the deck printout builds
-# card images for its "priciest pickups" fan) — same pattern as
-# deck_image_src() below.
-card_image_src = _image_src
-
-
 def _render_card_tile(row):
     name = html.escape(str(row.get("name") or "Unknown card"))
     url = row.get("scryfall_url")
-    src = _image_src(row)
+    src = card_image_src(row)
     qty = row.get("quantity")
     qty_badge = f" ×{int(qty)}" if pd.notna(qty) else ""
 
@@ -504,7 +528,7 @@ def render_grid(df, key_prefix, columns_per_row=5):
 # Home-page deck landing grid (Prompt Pass 4) — image-backed tiles that
 # navigate straight to the Decks page with a deck pre-selected.
 # ------------------------------------------------------------------
-def deck_image_src(row):
+def deck_image_src(row, embed=False):
     """Resolve the best available thumbnail for a deck: a user-set cover
     image first (Editor -> Deck Info -> Cover image), then the
     commander's own card art (local cache, else Scryfall's remote URL),
@@ -518,29 +542,13 @@ def deck_image_src(row):
     `row` needs the same shape queries.list_decks_with_covers() returns
     (cover_image_path, commander_local_image_path,
     commander_image_uri) — a dict or a single pandas Series row both
-    work, since both support .get()."""
-    cover = fmt.resolve_local_image(row.get("cover_image_path"))
-    if cover:
-        try:
-            mtime = os.path.getmtime(cover)
-            b64 = _encode_local_image_b64(cover, mtime)
-            ext = os.path.splitext(cover)[1].lstrip(".").lower() or "png"
-            ext = "jpeg" if ext == "jpg" else ext
-            return f"data:image/{ext};base64,{b64}"
-        except OSError:
-            pass
-
-    commander_local = fmt.resolve_local_image(row.get("commander_local_image_path"))
-    if commander_local:
-        try:
-            mtime = os.path.getmtime(commander_local)
-            b64 = _encode_local_image_b64(commander_local, mtime)
-            ext = os.path.splitext(commander_local)[1].lstrip(".").lower() or "jpg"
-            ext = "jpeg" if ext == "jpg" else ext
-            return f"data:image/{ext};base64,{b64}"
-        except OSError:
-            pass
-
+    work, since both support .get(). `embed` works as in _local_src():
+    a static URL on screen, a data: URI for the downloadable deck sheet."""
+    src = _local_src(row.get("cover_image_path"), embed) or _local_src(
+        row.get("commander_local_image_path"), embed
+    )
+    if src:
+        return src
     remote = row.get("commander_image_uri")
     if isinstance(remote, str) and remote.startswith("http"):
         return remote

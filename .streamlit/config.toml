@@ -1,6 +1,5 @@
 # Streamlit app config. Theme block is Phase 0 of UI_ACTION_PLAN.md; the
-# [server] section (static file serving for image grids) is added in
-# Phase 4 of that plan.
+# [server] section is Phase 4.
 [theme]
 base = "dark"
 primaryColor = "#C0392B"
@@ -8,3 +7,9 @@ backgroundColor = "#0E1117"
 secondaryBackgroundColor = "#1B1F27"
 font = "sans serif"
 baseRadius = "medium"
+
+[server]
+# Serve static/ (next to dashboard.py) at app/static/. Cached card art and
+# deck covers live in static/image_cache/, so image grids link each image by
+# URL instead of embedding its bytes in the page on every rerun.
+enableStaticServing = true

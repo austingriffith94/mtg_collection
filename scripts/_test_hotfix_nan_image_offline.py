@@ -50,7 +50,12 @@ if "streamlit" not in sys.modules:
             return func
         return _decorator
 
+    def _fake_fragment(func=None, **kwargs):
+        # card_view decorates render_browser with a bare @st.fragment (UI plan Phase 4).
+        return func if func is not None else (lambda f: f)
+
     _fake_streamlit.cache_data = _fake_cache_data
+    _fake_streamlit.fragment = _fake_fragment
     sys.modules["streamlit"] = _fake_streamlit
 
 import pandas as pd

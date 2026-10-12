@@ -8,8 +8,15 @@ script without a running dashboard.
 """
 import os
 import re
+from urllib.parse import quote
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Streamlit serves this folder at app/static/ (server.enableStaticServing in
+# .streamlit/config.toml). Stored image paths ('image_cache/<id>.jpg',
+# 'image_cache/deck_covers/<id>.png') are relative to it — Phase 4 of
+# UI_ACTION_PLAN.md moved the cache here so grids can link images by URL.
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+STATIC_URL_PREFIX = "app/static/"
 
 # Priority order used to bucket a (sometimes multi-type) type_line into one
 # primary category for grouping/filtering. Checked top-to-bottom; first match
@@ -95,7 +102,7 @@ def mana_symbol_svg_url(letter):
     same "just link to Scryfall's own asset, don't reinvent it" pattern
     this app already uses for card art itself (cards.image_uri renders
     as a live <img> hotlink whenever no local cache exists — see
-    card_view._image_src()/_deck_image_src()). Unlike card art, there is
+    card_view.card_image_src()/deck_image_src()). Unlike card art, there is
     no local-cache path for these symbols at all (no
     local_image_path-style column, no sync step) — rendering one always
     needs a live network connection; a missing connection just shows a
@@ -385,8 +392,9 @@ def scryfall_card_url(set_code, collector_number):
 
 
 def resolve_local_image(local_image_path):
-    """Return an absolute path if the cached image file actually exists on
-    disk, else None (so callers can fall back to the remote image_uri).
+    """Return an absolute path (stored paths are relative to static/) if the
+    cached image file actually exists on disk, else None (so callers can
+    fall back to the remote image_uri).
 
     Guards against a pandas quirk: when a whole column loaded via
     pd.read_sql_query is NULL for every row (e.g. no deck has a custom
@@ -400,8 +408,29 @@ def resolve_local_image(local_image_path):
     through this function."""
     if not isinstance(local_image_path, str) or not local_image_path.strip():
         return None
-    abs_path = os.path.join(BASE_DIR, local_image_path)
+    abs_path = os.path.join(STATIC_DIR, local_image_path)
     return abs_path if os.path.isfile(abs_path) else None
+
+
+def local_image_url(local_image_path):
+    """Browser URL for a cached image under static/, or None if the file
+    isn't on disk (callers fall back to the remote Scryfall URL). Relative
+    ('app/static/...', no leading slash) as Streamlit's docs use it, so it
+    resolves against the app's own URL. The ?v=<mtime> suffix changes when
+    the file is replaced in place (a new deck cover at the same
+    deck_covers/<id>.png), so the browser doesn't keep the old one cached;
+    the static route ignores the query string."""
+    abs_path = resolve_local_image(local_image_path)
+    if not abs_path:
+        return None
+    rel = os.path.relpath(abs_path, STATIC_DIR).replace(os.sep, "/")
+    return f"{STATIC_URL_PREFIX}{quote(rel)}?v={int(os.path.getmtime(abs_path))}"
+
+
+def static_relative_path(abs_path):
+    """The value to store for a file saved under static/ (e.g. a new deck
+    cover): relative to static/, forward slashes on every OS."""
+    return os.path.relpath(abs_path, STATIC_DIR).replace(os.sep, "/")
 
 
 def format_money(value):

@@ -116,6 +116,13 @@ def run_refresh_card_data():
 def run_dashboard():
     if not require("streamlit", label="the dashboard"):
         return
+    # One-time, idempotent: the image cache moved from image_cache/ to
+    # static/image_cache/ (UI plan Phase 4) so Streamlit can serve it.
+    sys.path.insert(0, SCRIPTS_DIR)
+    from move_image_cache import move_legacy_image_cache
+    moved, _kept = move_legacy_image_cache()
+    if moved:
+        print(f"Moved {moved} cached image file(s) to static/image_cache/.")
     subprocess.run([sys.executable, "-m", "streamlit", "run", "dashboard.py"], cwd=BASE_DIR)
 
 

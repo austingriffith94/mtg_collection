@@ -22,6 +22,10 @@ Phase 3 adds Contention (demand vs. supply per card, counting mainboard
 usage too — not just the shortlist queue plan_availability() sees) and the
 cross-deck Buy list. Phase 4 adds Reconcile: unlocated lots, each deck's
 list-vs-physical diff, and per-deck build status.
+
+UI plan Phase 4: each deck's planned-changes block is an st.fragment
+(_planned_block), so ticking its checkboxes doesn't recompute the whole
+page; every write still ends in a full-app rerun via _refresh().
 """
 import sys
 import os
@@ -60,7 +64,9 @@ def _refresh(collection=False):
     loaders.invalidate_deck_caches()
     if collection:
         loaders.invalidate_collection_caches()
-    st.rerun()
+    # scope="app" even when called from a fragment (_planned_block): a
+    # write changes sections outside it.
+    st.rerun(scope="app")
 
 
 def _flash():
@@ -221,6 +227,72 @@ else:
                         st.session_state[RESULT_KEY] = lines
                         _refresh()
 
+@st.fragment
+def _planned_block(deck_id, deck_rows):
+    """One deck's planned changes: editor + Apply / ← Idea / Drop buttons.
+    A fragment (UI plan Phase 4), so ticking checkboxes reruns only this
+    block instead of the whole page (which recomputes the allocator,
+    contention and the buy list). Every write ends in _refresh(), a
+    full-app rerun, since it changes the conflicts, counts and other
+    decks' verdicts outside this block."""
+    deck_name = deck_rows["deck_name"].iloc[0]
+    with st.expander(f"{deck_name} ({len(deck_rows)})"):
+        table = [{
+            "change_id": int(r["change_id"]),
+            "Add": r["add_card"] if isinstance(r["add_card"], str) else "",
+            "Availability": _verdict_cell(int(r["change_id"])),
+            "Replaces": r["remove_card"] if isinstance(r["remove_card"], str) else "",
+            "Qty": int(r["quantity"]),
+            "Apply": False,
+            "← Idea": False,
+            "Drop": False,
+        } for _, r in deck_rows.iterrows()]
+        edited = st.data_editor(
+            pd.DataFrame(table),
+            column_config={
+                "Add": st.column_config.TextColumn("Add", disabled=True),
+                "Availability": st.column_config.TextColumn("Availability", disabled=True, width="large"),
+                "Replaces": st.column_config.TextColumn("Replaces", disabled=True),
+                "Qty": st.column_config.NumberColumn("Qty", disabled=True, width="small"),
+                "Apply": st.column_config.CheckboxColumn("Apply", width="small"),
+                "← Idea": st.column_config.CheckboxColumn(
+                    "← Idea", width="small", help="Un-stage it, keeping what it replaces."),
+                "Drop": st.column_config.CheckboxColumn("Drop", width="small"),
+            },
+            column_order=["Add", "Availability", "Replaces", "Qty", "Apply", "← Idea", "Drop"],
+            hide_index=True, width="stretch",
+            key=f"workbench_planned_{deck_id}_{ver}",
+        )
+        # Qty is read-only here on purpose: it changes how many cards
+        # the swap cuts, which wants the Shortlist tab's mainboard
+        # context (and its card-count warning) to decide safely.
+        b1, b2, b3 = st.columns(3)
+        if b1.button("✅ Apply checked", key=f"workbench_apply_checked_{deck_id}_{ver}"):
+            checked = [int(r["change_id"]) for _, r in edited.iterrows() if r["Apply"]]
+            if checked:
+                _apply(checked)
+            else:
+                st.warning("Tick **Apply** on at least one row first.")
+        if b2.button("✅ Apply all for this deck", key=f"workbench_apply_all_{deck_id}_{ver}"):
+            _apply([int(r["change_id"]) for _, r in edited.iterrows()])
+        if b3.button("💾 Run checked ← Idea / Drop", key=f"workbench_planned_save_{deck_id}_{ver}"):
+            lines, demoted, dropped = [], 0, 0
+            for _, r in edited.iterrows():
+                cid = int(r["change_id"])
+                try:
+                    if r["Drop"]:
+                        writes.drop_change(conn, cid)
+                        dropped += 1
+                    elif r["← Idea"]:
+                        writes.demote_change(conn, cid)
+                        demoted += 1
+                except ValueError as exc:
+                    lines.append(f"❌ {r['Add']}: {exc}")
+            lines.insert(0, f"✅ Moved {demoted} back to ideas, dropped {dropped}.")
+            st.session_state[RESULT_KEY] = lines
+            _refresh()
+
+
 # ------------------------------------------------------------------
 # Planned changes, by deck — the same table the Shortlist tab shows,
 # with the queue-aware verdict instead of the per-row one.
@@ -239,62 +311,7 @@ else:
             "(creating a starter collection lot) or need a card unsleeved first."
         )
     for deck_id, deck_rows in planned_df.groupby("deck_id", sort=False):
-        deck_name = deck_rows["deck_name"].iloc[0]
-        with st.expander(f"{deck_name} ({len(deck_rows)})"):
-            table = [{
-                "change_id": int(r["change_id"]),
-                "Add": r["add_card"] if isinstance(r["add_card"], str) else "",
-                "Availability": _verdict_cell(int(r["change_id"])),
-                "Replaces": r["remove_card"] if isinstance(r["remove_card"], str) else "",
-                "Qty": int(r["quantity"]),
-                "Apply": False,
-                "← Idea": False,
-                "Drop": False,
-            } for _, r in deck_rows.iterrows()]
-            edited = st.data_editor(
-                pd.DataFrame(table),
-                column_config={
-                    "Add": st.column_config.TextColumn("Add", disabled=True),
-                    "Availability": st.column_config.TextColumn("Availability", disabled=True, width="large"),
-                    "Replaces": st.column_config.TextColumn("Replaces", disabled=True),
-                    "Qty": st.column_config.NumberColumn("Qty", disabled=True, width="small"),
-                    "Apply": st.column_config.CheckboxColumn("Apply", width="small"),
-                    "← Idea": st.column_config.CheckboxColumn(
-                        "← Idea", width="small", help="Un-stage it, keeping what it replaces."),
-                    "Drop": st.column_config.CheckboxColumn("Drop", width="small"),
-                },
-                column_order=["Add", "Availability", "Replaces", "Qty", "Apply", "← Idea", "Drop"],
-                hide_index=True, width="stretch",
-                key=f"workbench_planned_{deck_id}_{ver}",
-            )
-            # Qty is read-only here on purpose: it changes how many cards
-            # the swap cuts, which wants the Shortlist tab's mainboard
-            # context (and its card-count warning) to decide safely.
-            b1, b2, b3 = st.columns(3)
-            if b1.button("✅ Apply checked", key=f"workbench_apply_checked_{deck_id}_{ver}"):
-                checked = [int(r["change_id"]) for _, r in edited.iterrows() if r["Apply"]]
-                if checked:
-                    _apply(checked)
-                else:
-                    st.warning("Tick **Apply** on at least one row first.")
-            if b2.button("✅ Apply all for this deck", key=f"workbench_apply_all_{deck_id}_{ver}"):
-                _apply([int(r["change_id"]) for _, r in edited.iterrows()])
-            if b3.button("💾 Run checked ← Idea / Drop", key=f"workbench_planned_save_{deck_id}_{ver}"):
-                lines, demoted, dropped = [], 0, 0
-                for _, r in edited.iterrows():
-                    cid = int(r["change_id"])
-                    try:
-                        if r["Drop"]:
-                            writes.drop_change(conn, cid)
-                            dropped += 1
-                        elif r["← Idea"]:
-                            writes.demote_change(conn, cid)
-                            demoted += 1
-                    except ValueError as exc:
-                        lines.append(f"❌ {r['Add']}: {exc}")
-                lines.insert(0, f"✅ Moved {demoted} back to ideas, dropped {dropped}.")
-                st.session_state[RESULT_KEY] = lines
-                _refresh()
+        _planned_block(deck_id, deck_rows)
 
 # ------------------------------------------------------------------
 # Ideas flagged for review — the ones you marked "decide on this",

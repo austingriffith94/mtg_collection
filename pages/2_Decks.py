@@ -11,6 +11,10 @@ tabs, each built by a _render_<tab>(conn, deck_id, ...) function below:
   History      - change log
 "Compare all decks" moved to the Home page. st.tabs runs every tab body on
 each rerun, so no tab does network work outside an explicit button press.
+SPEED (UI plan Phase 4): the Export expander is built only while open
+(on_change="rerun" + .open); the Combos tab and the Cards browser are
+st.fragments, so their own controls rerun just that panel; and the header
+image is an app/static/ URL, while the downloadable sheet embeds its art.
 The notes below predate the split but still describe each section's content.
 
 Decks page (renamed from "Decks & Maybeboard" in Prompt Pass 4 — the
@@ -189,7 +193,11 @@ stat_col5.metric("Sleeved in deck", sleeved_label, help="Tracked collection rows
 
 st.caption(f"Estimated deck value: {fmt.format_money(value.get('total_value'))}")
 
-with st.expander("📤 Export"):
+
+def _render_export(conn, deck_id, meta, stats, value, deck_name, color_identity_raw, cover_row):
+    """Export expander body: Moxfield text + printable deck sheet. Only
+    called while the expander is open (see below), because building the
+    sheet loads every panel's data and base64-encodes its art."""
     st.markdown("**📋 Moxfield**")
     export_include_mb = st.checkbox(
         "Include shortlist (as a separate '// Maybeboard' section)",
@@ -228,9 +236,12 @@ with st.expander("📤 Export"):
             .dropna(subset=["current_price_usd"])
             .nlargest(3, "current_price_usd")
         )
-        _showcase = [{"name": r["name"], "src": cv.card_image_src(r)} for _, r in _priciest.iterrows()]
+        # embed=True: the sheet is a downloaded file, so its images must be
+        # data: URIs, not app/static/ URLs that only resolve inside the app.
+        _showcase = [{"name": r["name"], "src": cv.card_image_src(r, embed=True)} for _, r in _priciest.iterrows()]
+        sheet_img_src = cv.deck_image_src(cover_row, embed=True) if cover_row is not None else None
         sheet_html = deck_printout.build_deck_printout_html(
-            meta, stats, value, _sheet_df, header_img_src,
+            meta, stats, value, _sheet_df, sheet_img_src,
             fmt.deck_color_identity_symbol_urls(color_identity_raw),
             fmt.deck_accent_gradient(color_identity_raw), fmt.deck_accent_hex(color_identity_raw),
             loaders.load_deck_rank_list(conn, deck_id, "win_conditions"),
@@ -283,6 +294,17 @@ with st.expander("📤 Export"):
             key=f"deck_{deck_id}_sheet_download",
         )
 
+
+# Built lazily (UI plan Phase 4): a collapsed st.expander still runs its
+# body, so with on_change="rerun" its .open flag tells us whether to build
+# the export at all. The key keeps it open across reruns and lets tests open it.
+export_box = st.expander("📤 Export", key="deck_export_open", on_change="rerun")
+if export_box.open:
+    with export_box:
+        _render_export(
+            conn, deck_id, meta, stats, value, deck_name, color_identity_raw,
+            cover_rows.iloc[0] if not cover_rows.empty else None,
+        )
 
 def _render_overview(conn, deck_id, meta, deck_name, color_identity_raw):
     """Overview tab: win conditions, optimized mana, Game Changers, Reserved List, build plan."""
@@ -575,8 +597,12 @@ def _render_mana_curve(conn, deck_id):
             st.caption("No strategy tags recorded for this deck.")
 
 
+@st.fragment
 def _render_combos(conn, deck_id, meta):
-    """Combos tab: Commander Spellbook panel (cached; network only on button press)."""
+    """Combos tab: Commander Spellbook panel (cached; network only on button press).
+    A fragment (UI plan Phase 4), so opening combos or moving the "how many
+    to show" slider reruns only this tab. A Spellbook check ends in a
+    full-app rerun because it changes the cached combos other parts read."""
     st.subheader("🔗 Combos")
 
     combo_flash_key = f"deck_{deck_id}_combo_flash"
@@ -630,7 +656,7 @@ def _render_combos(conn, deck_id, meta):
             writes.save_deck_combos(conn, deck_id, combo_result)
             loaders.invalidate_combo_caches()
             st.session_state[combo_flash_key] = spellbook.combo_check_summary(combo_result)
-            st.rerun()
+            st.rerun(scope="app")
 
     if combo_sync:
         included_df = loaders.load_deck_combos(conn, deck_id, "included")

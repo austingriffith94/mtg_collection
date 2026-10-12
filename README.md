@@ -57,7 +57,8 @@ mtg_dashboard/
 │   ├── mana_tags.csv                 # your optimized-mana categories
 │   └── deck_themes.csv               # main/sub theme per deck
 ├── moxfield_exports/                  # created on first use — .txt files saved from the dashboard
-├── image_cache/                       # created on first use — one .jpg per printing (sync_images.py),
+├── static/                            # served by Streamlit at app/static/ — see static/README.md
+│   └── image_cache/                   # created on first use — one .jpg per printing (sync_images.py),
 │                                       # plus deck_covers/<deck_id>.png for custom deck thumbnails (Deck Editor)
 └── scripts/
     ├── scryfall_lookup.py            # Scryfall API client (lazy fetch + cache) — also
@@ -67,6 +68,7 @@ mtg_dashboard/
     ├── export_moxfield_collection.py  # collection → Moxfield CSV import format (CLI; dashboard has this too)
     ├── refresh_card_data.py          # refresh Scryfall fields for existing cards (CLI; dashboard has this too)
     ├── sync_images.py                 # local image cache: download + prune
+    ├── move_image_cache.py            # one-time move of an old image_cache/ into static/ (run.py does it for you)
     └── _test_migrate_offline.py      # dev-only: validates logic with fake
                                        # data, no network needed. Not part
                                        # of your real workflow — ignore unless
@@ -912,8 +914,18 @@ browse an actual rendered game history rather than a raw table, on its
 `cards.image_uri` stores the remote Scryfall URL, but the dashboard
 shouldn't have to re-fetch every image over the network on every load.
 `sync_images.py` downloads each referenced printing's image once to
-`image_cache/<scryfall_id>.jpg` (one file per exact printing, matching
-your owned art) and records the local path in `cards.local_image_path`.
+`static/image_cache/<scryfall_id>.jpg` (one file per exact printing,
+matching your owned art) and records the path, relative to `static/`, in
+`cards.local_image_path`.
+
+The cache sits under `static/` so Streamlit can serve it
+(`server.enableStaticServing` in `.streamlit/config.toml`). Card grids and
+deck tiles link each image as an `app/static/...` URL, so the browser
+downloads it once and caches it. Before UI plan Phase 4, every rerun put
+every visible image into the page as base64, about 6 MB for a 48-card grid.
+If you have an older cache at the project root (`image_cache/`), launching
+through `run.py` moves it automatically. If you start Streamlit directly,
+run `python scripts/move_image_cache.py` once.
 
 ```bash
 python sync_images.py              # download missing + prune orphaned

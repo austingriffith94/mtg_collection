@@ -21,6 +21,10 @@ Collection page — browse the full physical collection.
 - "Group / breakout by" lets you layer multiple groupings (e.g. Type, then
   Rarity within each type) — each top-level group is a collapsible
   section.
+- Speed (UI plan Phase 4): the browser and the edit table are st.fragments,
+  so view/sort/paging and cell edits rerun only that panel (the sidebar
+  filters are still full reruns). Grid images are app/static/ URLs, not
+  base64. The Moxfield export is built only while its expander is open.
 """
 import sys
 import os
@@ -50,8 +54,12 @@ def _parse_iso_date(value):
         return None
 
 
+@st.fragment
 def render_edit_table(df):
-    """Editable table over the already-filtered rows; saves only what changed."""
+    """Editable table over the already-filtered rows; saves only what changed.
+    A fragment (UI plan Phase 4): cell edits rerun only this table. `df`
+    comes filtered from outside, so the sidebar filters (full reruns) still
+    drive it, and a save reruns the whole app so the metrics row updates."""
     if df.empty:
         st.info("No cards match the current filters.")
         return
@@ -114,35 +122,13 @@ def render_edit_table(df):
         changed = writes.bulk_update_collection(conn, updates)
         loaders.invalidate_collection_caches()
         st.success(f"Updated {changed} lot(s).")
-        st.rerun()
+        st.rerun(scope="app")
 
 
-cv.setup_page("Collection · MTG Dashboard", "📦")
-
-db.require_db()
-conn = db.get_connection()
-
-MOXFIELD_EXPORT_DIR = os.path.join(db.BASE_DIR, "moxfield_exports")
-
-st.title("📦 Collection")
-
-st.sidebar.header("Collection filters")
-db.refresh_data_button()
-
-full_df = loaders.load_collection_df(conn)
-coll_summary = loaders.load_collection_summary(conn)
-
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Collection lots", coll_summary.get("lots") or 0)
-m2.metric("Unique printings", coll_summary.get("unique_printings") or 0)
-m3.metric("Tracked quantity", coll_summary.get("tracked_quantity") or 0)
-m4.metric("Tracked value", fmt.format_money(coll_summary.get("tracked_value")))
-st.caption(
-    "Tracked figures exclude untracked bulk lots (e.g. basics with no counted "
-    "quantity) — those are in the collection but not summed above."
-)
-
-with st.expander("📋 Export to Moxfield (Collection CSV)"):
+def render_moxfield_export():
+    """Moxfield collection CSV export. Only called while its expander is
+    open: building the CSV walks every lot, which is wasted work on every
+    filter change when nobody is exporting (UI plan Phase 4)."""
     st.caption(
         "Moxfield-compatible collection CSV — one row per printing + foil combination "
         "(quantities summed across any collection lots sharing that exact printing). "
@@ -173,6 +159,41 @@ with st.expander("📋 Export to Moxfield (Collection CSV)"):
             with open(out_path, "w", encoding="utf-8", newline="") as f:
                 f.write(export_csv_text)
             st.success(f"Saved to `{os.path.relpath(out_path, db.BASE_DIR)}`")
+
+
+cv.setup_page("Collection · MTG Dashboard", "📦")
+
+db.require_db()
+conn = db.get_connection()
+
+MOXFIELD_EXPORT_DIR = os.path.join(db.BASE_DIR, "moxfield_exports")
+
+st.title("📦 Collection")
+
+st.sidebar.header("Collection filters")
+db.refresh_data_button()
+
+full_df = loaders.load_collection_df(conn)
+coll_summary = loaders.load_collection_summary(conn)
+
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Collection lots", coll_summary.get("lots") or 0)
+m2.metric("Unique printings", coll_summary.get("unique_printings") or 0)
+m3.metric("Tracked quantity", coll_summary.get("tracked_quantity") or 0)
+m4.metric("Tracked value", fmt.format_money(coll_summary.get("tracked_value")))
+st.caption(
+    "Tracked figures exclude untracked bulk lots (e.g. basics with no counted "
+    "quantity) — those are in the collection but not summed above."
+)
+
+# Built lazily: a collapsed st.expander still runs its body, so with
+# on_change="rerun" its .open flag decides whether to build the export.
+export_box = st.expander(
+    "📋 Export to Moxfield (Collection CSV)", key="collection_export_open", on_change="rerun",
+)
+if export_box.open:
+    with export_box:
+        render_moxfield_export()
 
 filtered = cv.render_filter_panel(
     full_df,

@@ -60,6 +60,8 @@ if "streamlit" not in sys.modules:
         _markdown_calls.append(text)
 
     _fake_streamlit.cache_data = _fake_cache_data
+    # card_view decorates render_browser with a bare @st.fragment (UI plan Phase 4).
+    _fake_streamlit.fragment = lambda func=None, **kw: func if func is not None else (lambda f: f)
     _fake_streamlit.markdown = _fake_markdown
     _fake_streamlit._markdown_calls = _markdown_calls
     sys.modules["streamlit"] = _fake_streamlit

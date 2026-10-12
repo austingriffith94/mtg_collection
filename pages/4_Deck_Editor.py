@@ -44,7 +44,8 @@ import streamlit as st
 from dashboard_lib import db, loaders, writes, card_resolver, formatting as fmt, queries as q
 from dashboard_lib import card_view as cv, nav
 
-DECK_COVER_DIR = os.path.join(db.BASE_DIR, "image_cache", "deck_covers")
+# Under static/ so the cover can be served by URL (UI plan Phase 4).
+DECK_COVER_DIR = os.path.join(fmt.STATIC_DIR, "image_cache", "deck_covers")
 
 cv.setup_page("Deck Editor · MTG Dashboard", "✏️")
 
@@ -185,7 +186,7 @@ with tab_info:
                 dest_path = os.path.join(DECK_COVER_DIR, f"{deck_id}.png")
                 with open(dest_path, "wb") as f:
                     f.write(cover_upload.getbuffer())
-                rel_path = os.path.relpath(dest_path, db.BASE_DIR)
+                rel_path = fmt.static_relative_path(dest_path)
                 writes.set_deck_cover_image(conn, deck_id, rel_path)
                 loaders.invalidate_deck_caches()
                 st.success("Cover image saved.")

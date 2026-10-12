@@ -100,7 +100,7 @@ with tab_gc:
         gc_rows = [
             {
                 "scryfall_id": r["scryfall_id"],
-                "image_uri": fmt.resolve_local_image(r["local_image_path"]) or r["image_uri"],
+                "image_uri": fmt.local_image_url(r["local_image_path"]) or r["image_uri"],
                 "Card": r["name"],
                 "Scryfall flag": bool(r["scryfall_flag"]),
                 "Categories": r["categories"] if pd.notna(r["categories"]) else "",
@@ -237,7 +237,7 @@ with tab_manatags:
         mt_rows = [
             {
                 "scryfall_id": r["scryfall_id"],
-                "image_uri": fmt.resolve_local_image(r["local_image_path"]) or r["image_uri"],
+                "image_uri": fmt.local_image_url(r["local_image_path"]) or r["image_uri"],
                 "Card": r["name"],
                 "Tags": r["tags"] if pd.notna(r["tags"]) else "",
                 "Owned": int(r["owned_qty"]),

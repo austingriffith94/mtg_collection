@@ -362,8 +362,8 @@ def update_deck_meta(conn, deck_id, **fields):
 
 
 def set_deck_cover_image(conn, deck_id, relative_path):
-    """relative_path is expected to already be relative to the project's
-    BASE_DIR (e.g. 'image_cache/deck_covers/12.png'), matching how
+    """relative_path is expected to already be relative to static/
+    (e.g. 'image_cache/deck_covers/12.png'), matching how
     cards.local_image_path is stored — pass None to clear/remove the
     cover image."""
     conn.execute("UPDATE decks SET cover_image_path=? WHERE deck_id=?", (relative_path, deck_id))

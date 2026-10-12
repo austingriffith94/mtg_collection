@@ -10,7 +10,8 @@ from . import card_view as cv
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "mtg_collection.db")
-IMAGE_CACHE_DIR = os.path.join(BASE_DIR, "image_cache")
+# Under static/ so Streamlit can serve cached art by URL (UI plan Phase 4).
+IMAGE_CACHE_DIR = os.path.join(BASE_DIR, "static", "image_cache")
 
 
 def db_exists():

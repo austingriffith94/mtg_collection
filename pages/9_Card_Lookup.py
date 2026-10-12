@@ -59,7 +59,9 @@ if result is None:
 card = result["card"]
 img_col, info_col = st.columns([1, 3])
 with img_col:
-    src = cv.card_image_src(card)
+    # embed=True: st.image reads a plain string as a file path, not an
+    # app/static/ URL, so hand it the data: URI form.
+    src = cv.card_image_src(card, embed=True)
     if src:
         st.image(src, width="stretch")
     else:

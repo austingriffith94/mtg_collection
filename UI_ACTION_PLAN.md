@@ -20,10 +20,11 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] **Phase 1** — Grouped navigation + new Home page. Done: `dashboard.py` is now a router over `dashboard_lib/nav.py`'s `PAGES` registry (4 sections, uppercase titles, explicit `url_path`s, `Decks` kept); old Home content moved to `pages/0_Home.py` with a registry-built `st.page_link` card grid replacing the text guide; `inject_nav_caps_css()` deleted; DB caption moved to a sidebar footer. Checked on 1.63: per-page `set_page_config` still works under `st.navigation` (its `page_title` sets the browser tab), and `AppTest` drives the router incl. `switch_page`. Home is router-only (its `page_link` paths are relative to `dashboard.py`), so the smoke test now runs every page through the router plus every non-Home page standalone; `tests/test_nav.py` covers the registry. Compare-all-decks slot left for Phase 3.
 - [x] **Phase 2** — One shared "current deck" across pages + cross-links. Done: `card_view.render_deck_picker()` now selects by deck *id* and owns the shared `current_deck_id` session key (copied into each page's own widget key before drawing, written back in `on_change`); pure helpers `seed_current_deck()` (a `?deck_id=` param seeds once per value per session, then the session key wins) and `resolve_current_deck()` (falls back to the first deck). Decks, Land Probability, Deck Editor and the Advisor's Analysis tab all share it; the Editor's create flow selects the new deck by id. `nav.render_deck_links()` adds `st.page_link` cross-links (← Decks / ✏️ Edit deck / 🎲 Probabilities / 🧠 Ask the Advisor, minus the current page) and skips itself when a page runs standalone (no router → `StreamlitPageNotFoundError`). Home tiles are full-reload `<a>` links, so a tile click starts a fresh session and the param always seeds. Tests: `tests/test_current_deck.py` (pure) plus AppTest cases in `test_pages_smoke.py` (each page opens on the current deck, the deck carries across pages through the router, param-then-manual-pick, create-deck selects the new deck).
 - [x] **Phase 3** — Split the Decks page into tabs. Done: `pages/2_Decks.py` keeps the branded header, cross-links and Turn 0 stat grid above five tabs (Overview, Mana & Curve, Combos, Cards, History), each a `_render_<tab>()` function in the same file; Moxfield export + printable sheet merged into one "📤 Export" expander (sub-headings, since Streamlit can't nest expanders — still built eagerly until Phase 4); the Cards browser's filters moved from the sidebar into a "🔍 Filters" expander on that tab; "📊 Compare all decks" moved to Home under the tiles. Tests in `test_pages_smoke.py`: tab labels for each deck, brewing + empty deck, Compare on Home and not on Decks.
-- [ ] **Phase 4** — Speed: static images, fragments, lazy exports
+- [x] **Phase 4** — Speed: static images, fragments, lazy exports. Done: `[server] enableStaticServing = true`; the cache moved to `static/image_cache/` (stored `image_cache/...` paths unchanged, now resolved against `formatting.STATIC_DIR`; `scripts/move_image_cache.py` does the idempotent one-time move, called from `run.py` and `sync_images.py`, never from `dashboard.py`, since AppTest runs that against the real tree). `card_view.card_image_src()`/`deck_image_src()` return `app/static/...?v=<mtime>` URLs; `embed=True` keeps data: URIs for the deck sheet and Card Lookup's `st.image`. This also fixed the Card Database art columns, which passed local paths `ImageColumn` can't show. **Payload: Collection grid at 48/page went from 6,190 KiB to 24 KiB of page content per rerun** (measured with AppTest on a copy of the real DB with all 1,867 cached images linked, not with browser devtools; today's live DB has no `local_image_path` set, so the grids fall back to Scryfall URLs until `sync_images` re-links them). Fragments: `render_browser`, Decks Combos tab, Collection edit table, Workbench `_planned_block`; their writes end in `st.rerun(scope="app")`. Lazy exports: both expanders use `on_change="rerun"` and build only while `.open`. Also: `sync_images` prune now skips the `deck_covers/` folder, and four offline harnesses' fake `streamlit` gained a `fragment` stub. Tests: `tests/test_static_images.py`.
 - [ ] **Phase 5** — Better controls: segmented/pills, dialogs, safer edit table
 - [ ] **Phase 6** — Copy cleanup + consistent chart colors
 - [ ] **Phase 7** — Launcher (`run.py`) tidy-up
+- [ ] **Phase 8** — Data hygiene: full Game Changer / Mana Tag lists, orphan cleanup, visible pruning
 
 ---
 
@@ -329,6 +330,89 @@ themselves.
 - Add `python run.py --dashboard` (and make `run.bat`/`run.command`/
   `run.sh` accept it) to launch straight into the app, skipping the menu.
 - Keep `migrate` behind typing the word + `REBUILD` confirmation as now.
+
+## Phase 8 — Data hygiene: reference lists, orphans and pruning
+
+**Problem.** Two separate things, found by checking the live DB (read only,
+2026-10-12).
+
+*1. The Game Changers and Mana Tags lists show the wrong thing.* They are
+hand-maintained reference lists keyed by card **name** (`game_changer_tags`,
+`mana_tags`), but `queries.game_changers_overview()` / `mana_tags_overview()`
+start from the `cards` table and only show names that happen to have a row
+there. 55 of the 63 Game Changer–tagged names and 64 of the 89 mana-tagged
+names have no `cards` row, so the tabs show 8 and 25 rows instead of the whole
+list, and you can't see, correct or remove the rest. Yuriko is visible only
+because her printing is in `cards`; her "Power" tag is still a deliberate list
+entry, and Scryfall no longer flags her as a Game Changer, which is the useful
+signal the page doesn't surface.
+
+*2. Pruning is invisible and never reaches `cards`.* `prune_collection()` deletes
+empty lots and `sync_images.prune_orphaned()` deletes image files, silently.
+510 of 1,902 `cards` rows are referenced by no lot, deck or open shortlist row,
+and 7 `card_tags` rows point at cards that left their deck.
+
+**Changes.**
+
+*Reference lists (the tag tables are the list, `cards` only decorates it):*
+
+- Drive both overviews from the tag tables and LEFT JOIN `cards` for art, owned
+  count, deck count and the Scryfall flag. Every tagged name shows, whether or
+  not it has a `cards` row. Game Changers also keep their existing union with
+  Scryfall-flagged cards, so a newly flagged card appears untagged.
+- **Status columns:** Owned / In decks / Not owned, and for Game Changers a
+  *Scryfall says* column (flagged / not flagged / unknown because the card isn't
+  in `cards`). "Tagged but Scryfall doesn't flag it" is the maintenance signal
+  that finds Yuriko-type leftovers without hiding anything.
+- **Filters** above the table, none applied by default: ownership (All / Owned /
+  In a deck / Not owned), category/tag, and "needs attention" (Scryfall mismatch
+  or no card data).
+- **Remove from list:** a Delete checkbox column in the editor (like the
+  Collection edit table) deleting that name's rows, so a stale entry can be
+  dropped deliberately. Saving also needs this to work for names with no card.
+- **Add by name:** the Mana Tags "Tag a card" search already exists but only
+  searches `cards`. Let both tabs add a name that isn't in `cards` (a free-text
+  add that tries `card_resolver` first, so the name is spelled as Scryfall
+  spells it, and keeps the typed name if offline).
+- **Fill in missing card data:** a "Fetch card data for N unlinked names" button
+  runs `card_resolver.resolve_or_fetch_card` for names with no `cards` row, so
+  they get art and a Scryfall flag. Network only on the button press.
+- **Keep their art:** `sync_images.prune_orphaned` treats a card whose name is in
+  either tag table as active. About 150 cards, so the cost is small and these
+  lists keep their thumbnails.
+- **Back up the lists.** These tables exist only in the DB, and `migrate.py`
+  rebuilds the DB from the CSVs, discarding them. Add an "Export lists to CSV"
+  button writing `data/game_changers.csv` / `data/mana_tags.csv` in the formats
+  `migrate.py` already reads, so a rebuild can't lose hand-curated work.
+
+*Orphans and pruning (everything else stays hidden by default, nothing deletes
+without a confirm step):*
+
+- `queries.orphan_report(conn)`, read only, returning each stale bucket with its
+  rows: `cards` rows referenced by no lot, deck, open shortlist row **or tag
+  list**; `card_tags` for cards no longer in that deck; image files with no DB
+  row; and rows pointing at a missing file. A "Clean up" panel on Card Database
+  shows each bucket and a delete button listing exactly what will go.
+- `writes.delete_orphan_cards(conn, scryfall_ids)` refuses any card with a
+  reference at all; `writes.delete_orphan_card_tags(...)` likewise. Unreferenced
+  `cards` rows stay by default (cheap, re-fetchable); this is opt-in.
+- **Pruning stops being silent.** `sync_images.prune_orphaned` returns the names
+  it removed and `run.py` option 4 prints them. Add `--dry-run`. The Card Data
+  "Refresh" summary already lists `pruned_cards`; add the orphan counts.
+- No schema change; deletes only, additive-only policy intact.
+
+**Tests.** Overviews: a tagged name with no `cards` row appears with blank art and
+"unknown" Scryfall status; an untagged Scryfall-flagged card appears; a Delete
+removes only that name's rows; free-text add of an unknown name. `orphan_report`
+and the two delete writes against the in-memory fixture (a card used only by a
+tag list is *not* reported as orphaned). `prune_orphaned` keeps a tag-listed
+card's image and `--dry-run` deletes nothing. The CSV export round-trips through
+`migrate.py`'s loader. AppTest on Card Database for each tab.
+
+**Done when:** the Game Changers tab shows all 63 tagged cards and the Mana Tags
+tab all 89, Yuriko is flagged "Scryfall: not a Game Changer" rather than hidden,
+the lists can be exported to CSV, and the Clean up panel lists the 510
+unreferenced cards and 7 stale deck tags with a confirm step.
 
 ---
 

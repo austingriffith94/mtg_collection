@@ -9,9 +9,13 @@ Run standalone, or via the launcher (run.py) menu:
     python sync_images.py --no-prune # download only, skip pruning
     python sync_images.py --prune-only
 
-Images are cached as image_cache/<scryfall_id>.<ext>, one file per
+Images are cached as static/image_cache/<scryfall_id>.<ext>, one file per
 PRINTING (not per oracle card) — matches how `cards` is keyed, so the
-exact art you own is what gets cached.
+exact art you own is what gets cached. They live under static/ so the
+dashboard can serve them as plain URLs (Phase 4 of UI_ACTION_PLAN.md);
+cards.local_image_path stores 'image_cache/<file>', relative to static/.
+A cache still in the old root-level image_cache/ is moved over first
+(see move_image_cache.py).
 """
 import os
 import sys
@@ -21,9 +25,11 @@ import requests
 sys.path.insert(0, os.path.dirname(__file__))
 import sqlite3
 
+from move_image_cache import move_legacy_image_cache
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "mtg_collection.db")
-IMAGE_CACHE_DIR = os.path.join(BASE_DIR, "image_cache")
+IMAGE_CACHE_DIR = os.path.join(BASE_DIR, "static", "image_cache")
 
 
 def guess_extension(url):
@@ -53,7 +59,8 @@ def download_missing(conn, session, force=False, verbose=True):
         ext = guess_extension(image_uri)
         filename = f"{scryfall_id}{ext}"
         filepath = os.path.join(IMAGE_CACHE_DIR, filename)
-        rel_path = os.path.join("image_cache", filename)
+        # Forward slashes on every OS: the dashboard turns this into a URL.
+        rel_path = f"image_cache/{filename}"
 
         if os.path.exists(filepath) and not force:
             # file already on disk (e.g. from a prior run) — just record it
@@ -106,11 +113,14 @@ def prune_orphaned(conn, verbose=True):
 
     if not os.path.exists(IMAGE_CACHE_DIR):
         if verbose:
-            print("  No image_cache/ directory yet — nothing to prune.")
+            print("  No static/image_cache/ directory yet — nothing to prune.")
         return 0
 
     removed = 0
     for filename in os.listdir(IMAGE_CACHE_DIR):
+        # Skip folders — deck_covers/ (user uploads) lives in here too.
+        if not os.path.isfile(os.path.join(IMAGE_CACHE_DIR, filename)):
+            continue
         scryfall_id = os.path.splitext(filename)[0]
         if scryfall_id not in active_ids:
             os.remove(os.path.join(IMAGE_CACHE_DIR, filename))
@@ -137,6 +147,10 @@ def main():
     if not os.path.exists(DB_PATH):
         print("No database found — run migrate.py first.")
         sys.exit(1)
+
+    moved, _kept = move_legacy_image_cache()
+    if moved:
+        print(f"Moved {moved} cached file(s) from image_cache/ to static/image_cache/.")
 
     conn = sqlite3.connect(DB_PATH)
     session = requests.Session()

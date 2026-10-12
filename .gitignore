@@ -1,4 +1,7 @@
-# Locally cached card images
+# Locally cached card images (and deck covers). Moved under static/ in UI plan
+# Phase 4 so Streamlit can serve them; the old root path is listed until
+# scripts/move_image_cache.py has moved an existing cache over.
+/static/image_cache/
 /image_cache/
 
 # Python bytecode caches

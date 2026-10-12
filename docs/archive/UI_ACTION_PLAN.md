@@ -4,7 +4,7 @@ Working plan for the UI review of 2026-10-12. The data layer and features
 are in good shape; this pass is about how the app *feels* to use: finding
 pages, keeping context between them, long pages, rerun lag, and visual
 consistency. Previous plans are finished and archived in
-[docs/archive/](docs/archive/README.md).
+[docs/archive/](README.md).
 
 Each phase can ship on its own: the app runs, tests pass, and no page is
 half-converted at a phase boundary. Do them in order. Phase 0 builds the
@@ -68,9 +68,9 @@ runs all 10 pages with no exceptions, and the theme shows.
 
 **Problem.** Ten pages in one flat sidebar list. The ALL-CAPS labels come
 from CSS aimed at Streamlit's internal `data-testid` hooks
-([card_view.py `inject_nav_caps_css`](dashboard_lib/card_view.py)), which
+([card_view.py `inject_nav_caps_css`](../../dashboard_lib/card_view.py)), which
 its own comment flags as likely to break on upgrade. The Home page's
-page guide ([dashboard.py](dashboard.py)) is a long text block that is
+page guide ([dashboard.py](../../dashboard.py)) is a long text block that is
 already out of date: no Workbench, Card Lookup or Advisor, and it still
 calls the two editors "Editor".
 
@@ -140,7 +140,7 @@ means choosing it again, and there are no links between a deck's views.
 - **Store the deck *id*, not its name.** Today the picker's value is the
   deck's name (`deck_labels`), and the Deck Editor's "create deck" flow
   sets `st.session_state["editor_deck_select"] = cn_name.strip()`
-  ([4_Deck_Editor.py:79](pages/4_Deck_Editor.py#L79)). Both break under a
+  ([4_Deck_Editor.py:79](../../pages/4_Deck_Editor.py#L79)). Both break under a
   shared key (and a rename would orphan the saved selection). Change that
   create path to set `current_deck_id` to the new deck's id, and make the
   rename path keep it (the id doesn't change).
@@ -158,7 +158,7 @@ means choosing it again, and there are no links between a deck's views.
 - Cross-links under the deck header (`st.page_link`): **✏️ Edit deck**,
   **🎲 Probabilities**, **🧠 Ask the Advisor**, and **← Decks** from the
   Editor/Probability pages. The Advisor's deck selectbox
-  ([10_Advisor.py](pages/10_Advisor.py)) joins the shared key as well. The
+  ([10_Advisor.py](../../pages/10_Advisor.py)) joins the shared key as well. The
   Advisor selects by `deck_id` already, so it needs the key only, not the
   name mapping.
 
@@ -169,7 +169,7 @@ deck.
 
 ## Phase 3 — Split the Decks page into tabs
 
-**Problem.** [pages/2_Decks.py](pages/2_Decks.py) is about 1,000 lines on
+**Problem.** [pages/2_Decks.py](../../pages/2_Decks.py) is about 1,000 lines on
 one scrolling page: header, stat grid, exports, build plan, win cons,
 mana/Game Changers/Reserved List, combos, themes/curve/types/tags, top-10
 prices, change history and the card browser, with 9 dividers between them.
@@ -189,7 +189,7 @@ tabs. Everything else goes into tabs:
   not history. Put them in a single "Export" expander in the header area
   above the tabs (built lazily, see Phase 4).
 - **Sidebar filters.** The Cards browser's filters are in the sidebar
-  ([2_Decks.py:955](pages/2_Decks.py#L955), `container=st.sidebar`), so
+  ([2_Decks.py:955](../../pages/2_Decks.py#L955), `container=st.sidebar`), so
   after the split they'd show on every tab while only affecting Cards. Move
   them into the Cards tab (a `st.popover` or an expander above the
   browser). `render_filter_panel` already takes a `container=`, so this is
@@ -214,7 +214,7 @@ with no cards; check each tab label is present and nothing raises.
 re-send a lot of data each time.
 
 - **Images as base64.** `card_view` reads each cached image and puts it into
-  HTML as a `data:` URI (around [card_view.py:405-523](dashboard_lib/card_view.py)).
+  HTML as a `data:` URI (around [card_view.py:405-523](../../dashboard_lib/card_view.py)).
   A 48-card grid sends several MB on every rerun. Fix: add
   `[server] enableStaticServing = true` to `.streamlit/config.toml` and
   serve images as `/app/static/<path>`. Static files must live in
@@ -224,11 +224,11 @@ re-send a lot of data each time.
     `image_cache/deck_covers/12.png`), so **no database rewrite is
     needed**. Move the folder to `static/image_cache/` and resolve stored
     paths against `static/` instead of `BASE_DIR`
-    ([formatting.resolve_local_image](dashboard_lib/formatting.py)); the
+    ([formatting.resolve_local_image](../../dashboard_lib/formatting.py)); the
     stored values stay valid. The browser URL is then
     `/app/static/` + the stored path.
   - Places that must change together: `db.IMAGE_CACHE_DIR`,
-    `DECK_COVER_DIR` in [4_Deck_Editor.py:42](pages/4_Deck_Editor.py#L42),
+    `DECK_COVER_DIR` in [4_Deck_Editor.py:42](../../pages/4_Deck_Editor.py#L42),
     the cover-saving code in `writes.py` (~line 366),
     `scripts/sync_images.py` (its own `IMAGE_CACHE_DIR` + `rel_path`),
     `.gitignore` (`/image_cache/` → `/static/image_cache/`), and the
@@ -253,7 +253,7 @@ re-send a lot of data each time.
     with `st.rerun(scope="app")`.
 - **Lazy exports.** A collapsed `st.expander` still runs its code. The
   Collection page's Moxfield expander
-  ([1_Collection.py](pages/1_Collection.py)) builds the full CSV on every
+  ([1_Collection.py](../../pages/1_Collection.py)) builds the full CSV on every
   run, and the Decks page's export and printable sheet do the same. Build
   them only when a "Prepare export" button is clicked, or inside an
   `st.dialog`.
@@ -322,7 +322,7 @@ themselves.
 
 ## Phase 7 — Launcher tidy-up
 
-- [run.py](run.py) repeats the same `if not db_exists` block five times.
+- [run.py](../../run.py) repeats the same `if not db_exists` block five times.
   Replace it with a menu table (`key, label, func, needs_db`) and one
   dispatch loop.
 - When there's no DB, show only `migrate` and Exit instead of tagging every

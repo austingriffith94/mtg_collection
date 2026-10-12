@@ -1,4 +1,5 @@
-// Stacks deck board (VISUAL_DECK_PLAN.md, Phase A read-only view + Phase B edits).
+// Stacks deck board (VISUAL_DECK_PLAN.md, Phase A read-only view + Phase B
+// edits + Phase C Shortlist column and pick mode).
 //
 // CCv2 module: `export default function(component)`. Everything is drawn
 // under `parentElement` (a shadow root — never `document`, so two boards
@@ -8,8 +9,13 @@
 // data (from deck_board.render_deck_board):
 //   cards         [{id,name,qty,cmc,mana_cost,type_line,img,type,is_land,
 //                   colors,tags,price,flags:{game_changer,reserved,
-//                   not_owned,commander}}]  — already sorted commander,
-//                   then mana value, then name
+//                   not_owned,commander},cut_for:[incoming names]}]
+//                   — already sorted commander, then mana value, then name
+//   shortlist     [{change_id,id,name,status:"idea"|"planned",qty,img,
+//                   type_line,price,replaces,verdict_text,badge:"available"|
+//                   "elsewhere"|"buy"|"neutral",unlinked}] — ideas first,
+//                   then planned; an unlinked row is a typed name (no id/img)
+//                   (deck_board.shortlist_payload); [] hides the column
 //   group_by      saved choice, one of group_options
 //   group_options ["Type","Mana value","Strategy tag","Color"]
 //   type_order    stack order for "Type"
@@ -23,6 +29,13 @@
 //     (deck_board.apply_board_action) and the next rerun re-hydrates `data`,
 //     so the database is always the truth: nothing is updated optimistically
 //     here, and the menu just shows "Saving…" until the rerun lands.
+//
+// Pick mode (Phase C): "Swap in for…" on a Shortlist idea dims the board and
+// the NEXT mainboard card clicked is the card to cut — one trigger
+// {op:"plan", change_id, cut_id}. Esc, the banner's Cancel, or the same
+// button again leaves pick mode. It lives only in this browser: nothing is
+// sent until a card is picked. Apply asks for a second click first, since it
+// moves collection lots and has no undo.
 //
 // Card names, tags etc. are set with textContent / attributes, never
 // innerHTML, so a card name can't inject markup.
@@ -139,6 +152,7 @@ export default function (component) {
   const cards = data.cards || [];
   const typeOrder = data.type_order || [];
   const editable = !!data.editable;
+  const shortlist = data.shortlist || [];
   const options = data.group_options || ["Type"];
   let groupBy = options.includes(data.group_by) ? data.group_by : options[0];
 
@@ -178,9 +192,21 @@ export default function (component) {
 
   const layout = el("div", "layout");
   const stacksEl = el("div", "stacks");
+  // One sticky right rail: the Shortlist (its own scroll, capped height) on
+  // top, the preview under it. A separate Shortlist column beside the
+  // preview took ~470px from the stacks and halved how many fit per row.
+  const rail = el("div", "rail");
   const preview = el("aside", "preview");
-  layout.append(stacksEl, preview);
+  const shortlistEl = el("aside", "shortlist");
+  if (shortlist.length) rail.append(shortlistEl);
+  rail.append(preview);
+  layout.append(stacksEl, rail);
   root.appendChild(layout);
+
+  // Banner shown while picking; sits between the toolbar and the board.
+  const banner = el("div", "pick-banner");
+  banner.hidden = true;
+  root.insertBefore(banner, layout);
 
   // ---- hover / tap preview ----
   function showPreview(card) {
@@ -279,9 +305,43 @@ export default function (component) {
     menu.style.top = (r.top - base.top + Math.min(r.height, 40)) + "px";
   }
 
+  // ---- pick mode ----
+  let pick = null;   // the Shortlist idea waiting for a card to cut, or null
+
+  function setPick(item) {
+    pick = item;
+    root.classList.toggle("picking", !!item);
+    banner.hidden = !item;
+    banner.replaceChildren();
+    if (item) {
+      closeMenu();
+      banner.append(
+        el("span", null, "Pick the card to cut for " + item.name + " — Esc to cancel"),
+        menuButton("Cancel", () => setPick(null)),
+      );
+    }
+    renderShortlist();
+  }
+
+  // Everything that sends one trigger and then waits for the rerun to
+  // re-hydrate `data`: the board is inert meanwhile so a double-click can't
+  // send twice. (Python also rejects a stale second click.)
+  function commit(action) {
+    root.classList.add("saving");
+    setTriggerValue("action", action);
+    // A refused edit (stale board, toast shown) may leave `data` unchanged,
+    // in which case this function never re-runs to rebuild a fresh board —
+    // so don't stay inert forever. Pick mode ends with the attempt either way.
+    setTimeout(() => { root.classList.remove("saving"); if (pick) setPick(null); }, 3000);
+  }
+
   // Esc and a click anywhere else close it. Listeners go on `root` (inside
   // the shadow root) plus window for Esc, and are removed in the cleanup.
-  const onKey = ev => { if (ev.key === "Escape") closeMenu(); };
+  const onKey = ev => {
+    if (ev.key !== "Escape") return;
+    closeMenu();
+    if (pick) setPick(null);
+  };
   const onOutside = ev => { if (!menu.hidden && !menu.contains(ev.target)) closeMenu(); };
   if (editable) {
     window.addEventListener("keydown", onKey);
@@ -305,12 +365,24 @@ export default function (component) {
     if (card.qty > 1) badges.appendChild(badge("b-qty", "×" + card.qty, card.qty + " copies"));
     if (card.flags.game_changer) badges.appendChild(badge("b-gc", "GC", "Game Changer"));
     if (card.flags.not_owned) badges.appendChild(badge("b-no", "✗", "Not owned"));
-    if (badges.childElementCount) node.appendChild(badges);
 
     // pointerenter covers mouse; click covers touch (no hover there).
     node.addEventListener("pointerenter", () => showPreview(card));
+    // A planned swap's cut card says what it is being cut for.
+    if (card.cut_for && card.cut_for.length) {
+      node.classList.add("is-cut");
+      badges.appendChild(badge("b-cut", "✂ " + card.cut_for.join(", "), "Planned to be cut for " + card.cut_for.join(", ")));
+    }
+    if (badges.childElementCount) node.appendChild(badges);
+
     node.addEventListener("click", ev => {
       showPreview(card);
+      if (pick) {
+        ev.stopPropagation();
+        if (card.flags.commander) return;   // never offered as the cut
+        commit({ op: "plan", change_id: pick.change_id, cut_id: card.id });
+        return;
+      }
       if (editable) {
         ev.stopPropagation();  // keep the outside-click closer below from eating this open
         openMenu(card, node);
@@ -335,8 +407,91 @@ export default function (component) {
     }
   }
 
+  // ---- Shortlist column ----
+  // The preview wants a mainboard-shaped card; a Shortlist row is close
+  // enough with the missing fields filled in.
+  function previewOf(item) {
+    return {
+      name: item.name, img: item.img, type_line: item.type_line, qty: item.qty,
+      price: item.price, tags: [], flags: {},
+    };
+  }
+
+  function shortlistCard(item) {
+    const box = el("div", "sl-card sl-" + item.status + (pick && pick.change_id === item.change_id ? " sl-picking" : ""));
+    if (item.img) {
+      const img = el("img", "sl-img");
+      img.src = item.img;
+      img.alt = item.name;
+      img.loading = "lazy";
+      box.appendChild(img);
+    }
+    const body = el("div", "sl-body");
+    body.appendChild(el("div", "sl-name", item.qty > 1 ? item.name + " ×" + item.qty : item.name));
+    // Verdict badge: color carries have-it / elsewhere / buy; the text says why.
+    const verdict = el("div", "sl-verdict sl-v-" + item.badge, item.verdict_text || "—");
+    verdict.title = item.verdict_text;
+    body.appendChild(verdict);
+    if (item.status === "planned" && item.replaces) {
+      body.appendChild(el("div", "sl-replaces", "→ replaces " + item.replaces));
+    }
+    if (editable) body.appendChild(shortlistActions(item));
+    box.appendChild(body);
+    if (item.unlinked) box.title = "Name only — linked to a printing when applied";
+    box.addEventListener("pointerenter", () => showPreview(previewOf(item)));
+    return box;
+  }
+
+  function shortlistActions(item) {
+    const row = el("div", "sl-actions");
+    if (item.status === "idea") {
+      const picking = pick && pick.change_id === item.change_id;
+      row.appendChild(menuButton(picking ? "Cancel" : "Swap in for…", () => setPick(picking ? null : item),
+        picking ? "menu-primary" : ""));
+      // Straight into the deck with nothing cut (the other ways an idea
+      // leaves the Shortlist are Swap in for… and Drop).
+      row.appendChild(menuButton("Add", () => commit({ op: "add", change_id: item.change_id })));
+    } else {
+      row.appendChild(menuButton("Unpair", () => commit({ op: "unpair", change_id: item.change_id })));
+      const apply = menuButton("Apply", () => {
+        // Two clicks: apply moves collection lots and cannot be undone.
+        if (!apply.dataset.armed) {
+          apply.dataset.armed = "1";
+          apply.textContent = "Confirm apply?";
+          apply.classList.add("menu-danger");
+          setTimeout(() => {
+            if (apply.isConnected) {
+              delete apply.dataset.armed;
+              apply.textContent = "Apply";
+              apply.classList.remove("menu-danger");
+            }
+          }, 4000);
+          return;
+        }
+        commit({ op: "apply", change_id: item.change_id });
+      }, "menu-primary");
+      row.appendChild(apply);
+    }
+    // Both kinds can be dropped; no confirm, since the Undo button reopens it.
+    row.appendChild(menuButton("Drop", () => commit({ op: "drop", change_id: item.change_id }), "menu-danger"));
+    return row;
+  }
+
+  function renderShortlist() {
+    shortlistEl.replaceChildren();
+    for (const [status, label] of [["idea", "Ideas"], ["planned", "Planned"]]) {
+      const items = shortlist.filter(i => i.status === status);
+      if (!items.length) continue;
+      const head = el("header", "stack-head");
+      head.append(el("span", "stack-title", label), el("span", "stack-count", String(items.length)));
+      shortlistEl.appendChild(head);
+      for (const item of items) shortlistEl.appendChild(shortlistCard(item));
+    }
+  }
+
   renderPreviewHint();
   renderStacks();
+  renderShortlist();
 
   const cleanup = () => {
     window.removeEventListener("keydown", onKey);

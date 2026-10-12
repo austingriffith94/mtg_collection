@@ -431,3 +431,104 @@ def test_board_edit_glue_undo_button(smoke_db_path, tmp_path, monkeypatch):
     finally:
         st.cache_resource.clear()
         st.cache_data.clear()
+
+
+def test_deck_editor_board_tab_with_shortlist(smoke_db_path, tmp_path, monkeypatch):
+    # VISUAL_DECK_PLAN.md Phase C: the Board carries the Shortlist (with
+    # cross-deck verdicts) once the deck has ideas, then a planned swap. The
+    # empty-Shortlist case is test_deck_editor_board_tab above.
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO cards (scryfall_id, name, set_code, collector_number, oracle_id, type_line, cmc)"
+        " VALUES ('arcane-sign-1', 'Arcane Signet', 'cmd', '2', 'oracle-arcane', 'Artifact', 2)"
+    )
+    conn.execute(
+        "INSERT INTO deck_changes (deck_id, status, add_scryfall_id, quantity) VALUES (1, 'idea', 'arcane-sign-1', 1)"
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "4_Deck_Editor.py"), default_timeout=15)
+        at.session_state["current_deck_id"] = 1
+        _forget_deck_board()
+        at.run()
+        assert not at.exception
+
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "UPDATE deck_changes SET status='planned', planned_at=CURRENT_TIMESTAMP,"
+            " remove_scryfall_id='sol-ring-cmd-1' WHERE add_scryfall_id='arcane-sign-1'"
+        )
+        conn.commit()
+        conn.close()
+        st.cache_data.clear()
+        _forget_deck_board()
+        at.run()
+        assert not at.exception
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_board_glue_plan_then_apply(smoke_db_path, tmp_path, monkeypatch):
+    # Phase C's ops through the page glue: `plan` leaves an Undo (unpair);
+    # `apply` has no inverse, so it clears that Undo rather than leaving one
+    # that would act on a deck that has moved on.
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO cards (scryfall_id, name, set_code, collector_number, oracle_id, type_line, cmc)"
+        " VALUES ('arcane-sign-1', 'Arcane Signet', 'cmd', '2', 'oracle-arcane', 'Artifact', 2)"
+    )
+    change_id = conn.execute(
+        "INSERT INTO deck_changes (deck_id, status, add_scryfall_id, quantity) VALUES (1, 'idea', 'arcane-sign-1', 1)"
+    ).lastrowid
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+
+    def script():
+        import streamlit as st
+        from dashboard_lib import db, deck_board
+
+        conn = db.get_connection()
+        if st.session_state.get("edit"):
+            deck_board.run_board_action(conn, 1, "k", st.session_state.pop("edit"))
+        deck_board.render_undo_button(conn, 1, "k")
+
+    def status():
+        return sqlite3.connect(path).execute(
+            "SELECT status FROM deck_changes WHERE change_id=?", (change_id,)
+        ).fetchone()[0]
+
+    try:
+        at = AppTest.from_function(script, default_timeout=15)
+        at.session_state["edit"] = {"op": "plan", "change_id": change_id, "cut_id": "sol-ring-cmd-1"}
+        at.run()
+        assert not at.exception
+        assert status() == "planned"
+        assert at.button(key="k__undo_btn").label.startswith("↶ Undo: Planned")
+
+        at.session_state["edit"] = {"op": "apply", "change_id": change_id}
+        at.run()
+        assert not at.exception
+        assert status() == "applied"
+        assert "k__undo_btn" not in [b.key for b in at.button]
+        assert sqlite3.connect(path).execute(
+            "SELECT scryfall_id FROM deck_cards WHERE deck_id=1"
+        ).fetchall() == [("arcane-sign-1",)]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()

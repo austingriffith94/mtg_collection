@@ -37,11 +37,17 @@
 .layout { display: flex; gap: 16px; align-items: flex-start; }
 .stacks { flex: 1; display: flex; flex-wrap: wrap; gap: 18px 14px; align-items: flex-start; min-width: 0; }
 
-.preview {
+/* Right rail: Shortlist above, preview below; sticks while the stacks scroll. */
+.rail {
   position: sticky;
   top: 60px;
   width: 260px;
   flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.preview {
   box-sizing: border-box;
   background: var(--st-secondary-background-color, #1b1f27);
   border: 1px solid var(--st-border-color, #444);
@@ -96,9 +102,11 @@
 .b-no { background: #7a1f1f; }
 
 /* Narrow screens: preview drops below the stacks. */
+/* Narrow screens: the rail goes ABOVE the stacks with the preview first (as
+   in Phase A — tap a card, see it without scrolling), Shortlist under it. */
 @media (max-width: 760px) {
   .layout { flex-direction: column-reverse; }
-  .preview { position: static; width: 100%; }
+  .rail { position: static; width: 100%; flex-direction: column-reverse; }
 }
 
 /* ---- edit menu (Phase B) ---- */
@@ -125,4 +133,52 @@
   font: inherit; color: inherit; padding: 5px 8px; box-sizing: border-box; width: 100%;
   background: var(--st-secondary-background-color, #1b1f27);
   border: 1px solid var(--st-border-color, #444); border-radius: 6px;
+}
+
+/* ---- Shortlist column + pick mode (Phase C) ---- */
+/* Capped so the ~480px preview below stays on screen (rail sticks at 60px);
+   scrolls on its own. Never under 160px, so two or three rows always show. */
+.shortlist {
+  max-height: max(160px, calc(100vh - 560px)); overflow-y: auto; box-sizing: border-box; padding-right: 4px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.sl-card {
+  display: flex; gap: 6px; padding: 4px 6px; box-sizing: border-box; flex: none;
+  background: var(--st-secondary-background-color, #1b1f27);
+  border: 1px solid var(--st-border-color, #444); border-radius: var(--st-base-radius, 8px);
+}
+.sl-card.sl-picking { border-color: var(--st-primary-color, #c0392b); box-shadow: 0 0 0 2px var(--st-primary-color, #c0392b); }
+.sl-img { width: 36px; height: fit-content; border-radius: 3px; flex: none; }
+.sl-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.sl-name, .sl-replaces, .sl-verdict { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sl-name { font-weight: 600; font-size: 13px; }
+.sl-replaces { font-size: 11px; opacity: 0.8; }
+.sl-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 1px; }
+.sl-actions .menu-btn { padding: 1px 7px; font-size: 12px; }
+/* One line; the full reason is in the tooltip (title). */
+.sl-verdict { font-size: 11px; line-height: 1.3; padding: 0 5px; border-radius: 4px; border: 1px solid transparent; }
+/* Color carries the decision; the text beside it says why. */
+.sl-v-available { background: rgba(46, 160, 67, 0.2); border-color: #2ea043; }
+.sl-v-elsewhere { background: rgba(210, 153, 34, 0.2); border-color: #d29922; }
+.sl-v-buy { background: rgba(218, 54, 51, 0.2); border-color: #da3633; }
+.sl-v-neutral { background: transparent; border-color: var(--st-border-color, #444); opacity: 0.8; }
+
+.pick-banner {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 6px 10px;
+  background: var(--st-primary-color, #c0392b); color: #fff; border-radius: var(--st-base-radius, 8px);
+}
+.pick-banner[hidden] { display: none; }
+.pick-banner .menu-btn { color: #fff; background: rgba(0, 0, 0, 0.25); border-color: rgba(255, 255, 255, 0.4); }
+
+/* Pick mode: every card dims except on hover, so the target is obvious;
+   the commander never highlights because it can't be picked. */
+.board.picking .card { cursor: crosshair; opacity: 0.55; }
+.board.picking .card:hover { opacity: 1; outline: 2px solid var(--st-primary-color, #c0392b); }
+/* Waiting for the rerun after a committed action: inert, so no double sends. */
+.board.saving { pointer-events: none; opacity: 0.7; }
+.b-cut { background: #7a3b1f; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card.is-cut .card-img { filter: saturate(0.6); }
+
+@media (max-width: 760px) {
+  .shortlist { max-height: max(160px, 40vh); }   /* keep the stacks reachable */
 }

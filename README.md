@@ -45,7 +45,7 @@ mtg_dashboard/
 │   ├── db.py                         # cached connection + "no DB yet" guard
 │   ├── loaders.py                    # st.cache_data-wrapped versions of queries.py
 │   ├── card_view.py                  # shared table/grid browser + filter UI
-│   ├── deck_board.py                 # Moxfield-style Stacks view of a deck (custom component; JS/CSS in components/)
+│   ├── deck_board.py                 # Moxfield-style Stacks view of a deck + its Shortlist (custom component; JS/CSS in components/)
 │   └── nav.py                        # page registry: sidebar sections, titles, URLs, Home link cards
 ├── tests/                             # pytest suite on an in-memory DB (python -m pytest tests) — see tests/README.md
 ├── data/                              # your source CSVs go here
@@ -266,6 +266,17 @@ jump to the same deck's other views.
     bar above, watch the stats strip (count vs. 100, lands, average mana
     value, curve) and reverse the last edit with **↶ Undo**. Each edit is one
     rerun; undo adds its own history row rather than erasing the first.
+    The **Shortlist rail** beside the stacks lists the deck's ideas, then its
+    planned swaps, each with an availability badge worked out across *all*
+    your decks (so two decks wanting your one copy show up here, unlike the
+    Shortlist tab, which checks one deck at a time). **Swap in for…** on an
+    idea dims the board; click the card to cut (Esc cancels) and the pair
+    becomes a planned swap, with a ✂ badge on the card being cut. A planned
+    swap can be **Unpaired** or **Applied** (asks for a second click: it moves
+    collection copies and can't be undone). Apply does exactly what the
+    Shortlist tab and the Workbench do. An idea can also be **Added** straight
+    to the deck with nothing cut, and either kind can be **Dropped** (the row
+    is kept in history; **↶ Undo** reopens it).
   - **Deck Info** — rename a deck (with an option to also update any
     `collection.location` rows that matched the old name, so "sleeved in
     this deck" tracking stays correct), edit commander/partner/colors/

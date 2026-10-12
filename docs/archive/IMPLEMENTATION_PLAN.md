@@ -60,7 +60,7 @@ backfilled from existing data so nothing is lost and nothing is retyped.
 ### Schema
 
 Added through the existing additive-upgrade path, *not* a re-migration — see
-`_SCHEMA_TABLE_UPGRADES` in [`dashboard_lib/queries.py:95`](dashboard_lib/queries.py#L95)
+`_SCHEMA_TABLE_UPGRADES` in [`dashboard_lib/queries.py:95`](../../dashboard_lib/queries.py#L95)
 and the policy in README.md ("Schema changes without re-migrating").
 
 ```sql
@@ -145,8 +145,8 @@ swap in one click, never retyping a card name.
 
 ### UI
 
-Deck Editor's `tab_maybe` ([`pages/4_Deck_Editor.py:491`](pages/4_Deck_Editor.py#L491))
-and `tab_swap` ([`pages/4_Deck_Editor.py:576`](pages/4_Deck_Editor.py#L576))
+Deck Editor's `tab_maybe` ([`pages/4_Deck_Editor.py:491`](../../pages/4_Deck_Editor.py#L491))
+and `tab_swap` ([`pages/4_Deck_Editor.py:576`](../../pages/4_Deck_Editor.py#L576))
 collapse into one **Shortlist** tab with three sections:
 
 ```
@@ -209,7 +209,7 @@ apply_change(conn, change_id)                 # wraps execute_swap
 apply_changes(conn, change_ids)               # batch, ordered, allocator-aware
 ```
 
-`execute_swap()` ([`dashboard_lib/writes.py:883`](dashboard_lib/writes.py#L883))
+`execute_swap()` ([`dashboard_lib/writes.py:883`](../../dashboard_lib/writes.py#L883))
 keeps its current body — it already does the right thing (update `deck_cards`,
 move the cut card's lot back to storage, sleeve the added card from an
 available lot or create a starter one). Phase 1 wraps it so that on success it
@@ -218,7 +218,7 @@ than clearing a queue row. That single change is what gives Phase 5 its
 history for free.
 
 Also repoint `add_deck_card`/`remove_deck_card`/`bulk_update_deck_cards`
-([`writes.py:507-543`](dashboard_lib/writes.py#L507)) to write an `applied`
+([`writes.py:507-543`](../../dashboard_lib/writes.py#L507)) to write an `applied`
 `deck_changes` row, so hand edits appear in history too, not just swaps.
 
 ### Every reader of `maybeboard` that must be repointed
@@ -227,15 +227,15 @@ Miss one of these and something breaks silently:
 
 | Location | What it does | Change |
 |---|---|---|
-| [`queries.py:704`](dashboard_lib/queries.py#L704) `maybeboard_dataframe` | powers the Decks page browser | new `deck_changes_dataframe(conn, deck_id, statuses=...)`; keep old fn as a thin shim until Phase 2 |
-| [`queries.py:1200`](dashboard_lib/queries.py#L1200) summary count | home-page caption | count `status='idea'` |
-| [`loaders.py:53`](dashboard_lib/loaders.py#L53) `load_maybeboard_df` | cache wrapper | → `load_deck_changes_df`, added to `invalidate_deck_caches()` |
-| [`moxfield_export.py:50-60`](dashboard_lib/moxfield_export.py#L50) | `// Maybeboard` export section | read `status='idea'` — **otherwise exports silently lose all 187 ideas** |
-| [`writes.py:672`](dashboard_lib/writes.py#L672) `prune_collection` | protects maybeboard cards from pruning | must protect `idea`/`planned` cards — **otherwise pruning deletes lots your ideas depend on** |
-| [`writes.py:433`](dashboard_lib/writes.py#L433) `delete_deck` cascade | deletes deck's child rows | add `deck_changes` to the list |
-| [`pages/2_Decks.py:682`](pages/2_Decks.py#L682) Board toggle | Mainboard / Maybeboard / Both | relabel to Mainboard / Shortlist / Both |
-| [`dashboard.py:97`](dashboard.py#L97) | maybeboard-rows caption | ideas + planned counts |
-| [`refresh.py:14`](dashboard_lib/refresh.py#L14) comment | stale doc reference | update text |
+| [`queries.py:704`](../../dashboard_lib/queries.py#L704) `maybeboard_dataframe` | powers the Decks page browser | new `deck_changes_dataframe(conn, deck_id, statuses=...)`; keep old fn as a thin shim until Phase 2 |
+| [`queries.py:1200`](../../dashboard_lib/queries.py#L1200) summary count | home-page caption | count `status='idea'` |
+| [`loaders.py:53`](../../dashboard_lib/loaders.py#L53) `load_maybeboard_df` | cache wrapper | → `load_deck_changes_df`, added to `invalidate_deck_caches()` |
+| [`moxfield_export.py:50-60`](../../dashboard_lib/moxfield_export.py#L50) | `// Maybeboard` export section | read `status='idea'` — **otherwise exports silently lose all 187 ideas** |
+| [`writes.py:672`](../../dashboard_lib/writes.py#L672) `prune_collection` | protects maybeboard cards from pruning | must protect `idea`/`planned` cards — **otherwise pruning deletes lots your ideas depend on** |
+| [`writes.py:433`](../../dashboard_lib/writes.py#L433) `delete_deck` cascade | deletes deck's child rows | add `deck_changes` to the list |
+| [`pages/2_Decks.py:682`](../../pages/2_Decks.py#L682) Board toggle | Mainboard / Maybeboard / Both | relabel to Mainboard / Shortlist / Both |
+| [`dashboard.py:97`](../../dashboard.py#L97) | maybeboard-rows caption | ideas + planned counts |
+| [`refresh.py:14`](../../dashboard_lib/refresh.py#L14) comment | stale doc reference | update text |
 
 ### Tests (`tests/test_deck_changes.py`)
 
@@ -318,7 +318,7 @@ stops lying when two plans want the same physical card.
 ### The allocator (the actual fix for point 2)
 
 Today `card_inventory_status()`
-([`queries.py`](dashboard_lib/queries.py)) is called **once per row against
+([`queries.py`](../../dashboard_lib/queries.py)) is called **once per row against
 current DB state**, so two planned swaps that both want your single
 `Blood Crypt` each independently report "Available in storage." Neither is
 wrong alone; together they're impossible.
@@ -513,7 +513,7 @@ Ideas where `owned_qty = 0`, grouped by card across decks, with
 running total. Plus contention rows where buying a second copy resolves the
 shortfall — those are the "you already decided you want this twice" buys.
 Export as plain text, matching the existing Moxfield-export pattern in
-[`moxfield_export.py`](dashboard_lib/moxfield_export.py).
+[`moxfield_export.py`](../../dashboard_lib/moxfield_export.py).
 
 ### Page: `pages/9_Card_Lookup.py`
 
@@ -635,7 +635,7 @@ Three work queues, as Workbench sections:
 **1. Unlocated lots (178 on the live DB, ≈$1.57k).** Lots where `location`
 is NULL or blank. Shown as an editable table — the same `st.data_editor` +
 `bulk_update_collection` pattern the Collection page's Edit mode already uses
-([`pages/1_Collection.py`](pages/1_Collection.py)) — with a Location dropdown
+([`pages/1_Collection.py`](../../pages/1_Collection.py)) — with a Location dropdown
 from `location_catalog`, sorted by price descending so the expensive unknowns
 get boxed first. Also: bulk-assign all checked to one location, since these
 likely came in as a batch.
@@ -759,7 +759,7 @@ show.
 
 ### Home-page tile status strips
 
-[`card_view.render_deck_landing_grid`](dashboard_lib/card_view.py#L533)
+[`card_view.render_deck_landing_grid`](../../dashboard_lib/card_view.py#L533)
 currently renders art + name only. Add one line under each name:
 
 ```
@@ -864,7 +864,7 @@ built almost entirely out of machinery those phases already deliver.
 
 Right now a brew is indistinguishable from a broken deck, and dismantling is
 a blunt `delete_deck()` that dumps every lot into "Box"
-([`writes.py:495`](dashboard_lib/writes.py#L495)) — throwing away the one
+([`writes.py:495`](../../dashboard_lib/writes.py#L495)) — throwing away the one
 piece of information you actually wanted, which is *which cards should go
 straight into the next deck*.
 
@@ -914,7 +914,7 @@ and the plan should say so before you sleeve anything.
 
 **Printable pull sheet** — grouped by source location, not by card type,
 because you work the box in location order. Reuses the HTML/CSS approach in
-[`deck_printout.py:466`](dashboard_lib/deck_printout.py#L466)
+[`deck_printout.py:466`](../../dashboard_lib/deck_printout.py#L466)
 (`build_deck_printout_html`), as a sibling function `build_pull_sheet_html`
 rather than a flag on the existing one: it's a different document with a
 different ordering, and overloading the printout builder would tangle both.

@@ -55,8 +55,12 @@ plus pytest (`pip install -r requirements-dev.txt`):
   (commander first, MDFC land flags, not-owned flags, URL-only images,
   payload size), plus Phase B's `apply_board_action()`: each op's effect on
   `deck_cards`, `deck_changes` history rows and tags, each returned undo
-  restoring the prior state, and malformed / stale actions raising. The JS
-  itself is checked by hand; smoke tests in `test_pages_smoke.py` cover the Decks page (View = Stacks), the Deck Editor Board tab (add bar) and the edit/undo glue.
+  restoring the prior state, and malformed / stale actions raising; and
+  Phase C's Shortlist payload (verdicts across decks, name-only planned
+  swaps, "cut for" marks) and plan / unpair / apply, with `apply` compared
+  table-for-table against `writes.apply_changes()` (the Shortlist tab's
+  path), plus drop / add / reopen (including typed-name ideas linked through
+  the resolver). The JS itself is checked by hand; smoke tests in `test_pages_smoke.py` cover the Decks page (View = Stacks), the Deck Editor Board tab (add bar, Shortlist ideas / planned swap) and the edit/undo glue (incl. plan then apply).
 - `test_static_images.py` — UI plan Phase 4: cached images become
   `app/static/` URLs on screen and data: URIs only when embedded (the deck
   sheet), the one-time `image_cache/` → `static/image_cache/` move

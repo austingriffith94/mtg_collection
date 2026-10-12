@@ -1,4 +1,4 @@
-"""Moxfield-style "Stacks" deck board (VISUAL_DECK_PLAN.md, Phases A-B).
+"""Moxfield-style "Stacks" deck board (VISUAL_DECK_PLAN.md, Phases A-C).
 
 Shows a deck as overlapping card stacks grouped by type / mana value /
 strategy tag / color, with a full-card hover preview. Grouping, hovering and
@@ -13,6 +13,9 @@ Split so the logic stays testable:
     component sent back ({"op": "inc", "id": ...}) through the existing
     writes.* functions and returns a message plus the inverse action for
     one-level undo. No Streamlit and no SQL of its own; unit-tested.
+    Phase C adds the Shortlist ops (plan / unpair / apply / drop / add) to it.
+  - shortlist_payload() / planned_cuts(): PURE. Phase C's Shortlist column,
+    with each row's availability verdict allocated across every deck.
   - render_deck_board(): the page-facing wrapper that mounts the component.
 
 The JS and CSS live as real files under dashboard_lib/components/ (editor
@@ -36,7 +39,7 @@ import os
 import pandas as pd
 import streamlit as st
 
-from dashboard_lib import card_view, formatting as fmt, loaders, queries as q, writes
+from dashboard_lib import card_resolver, card_view, formatting as fmt, loaders, queries as q, writes
 
 _COMPONENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "components")
 
@@ -80,7 +83,7 @@ def _front_face(name):
     return (name or "").split(" // ")[0].strip().lower()
 
 
-def board_payload(cards_df, deck_meta, owned_qty):
+def board_payload(cards_df, deck_meta, owned_qty, cut_for=None):
     """The mainboard as a list of card dicts for the component (one per
     deck_cards row — a card with quantity 30 is one dict with qty 30).
 
@@ -91,6 +94,9 @@ def board_payload(cards_df, deck_meta, owned_qty):
     owned_qty  : loaders.load_owned_card_quantities() — {front-face-lowercase
                  name: {...}}; a card with no entry is flagged not_owned
                  (basic lands never are: they're untracked by design).
+    cut_for    : planned_cuts() — {scryfall_id: [incoming card names]}; each
+                 card a planned swap would cut carries those names as
+                 `cut_for` (empty list otherwise) for its "cut for Y" badge.
 
     Sorted commander(s) first, then mana value, then name; the JS relies on
     this order within each stack.
@@ -104,6 +110,7 @@ def board_payload(cards_df, deck_meta, owned_qty):
         if _clean_str(n)
     }
     owned_qty = owned_qty or {}
+    cut_for = cut_for or {}
 
     cards = []
     for _, row in cards_df.iterrows():
@@ -126,6 +133,7 @@ def board_payload(cards_df, deck_meta, owned_qty):
             "colors": _split_csv(row.get("color_identity")),
             "tags": _split_csv(row.get("strategy_tags")),
             "price": float(price) if pd.notna(price) else None,
+            "cut_for": list(cut_for.get(row["scryfall_id"], [])),
             "flags": {
                 "game_changer": bool(row.get("is_game_changer")) if pd.notna(row.get("is_game_changer")) else False,
                 "reserved": bool(row.get("is_reserved")) if pd.notna(row.get("is_reserved")) else False,
@@ -136,6 +144,143 @@ def board_payload(cards_df, deck_meta, owned_qty):
 
     cards.sort(key=lambda c: (not c["flags"]["commander"], c["cmc"], c["name"].lower()))
     return cards
+
+
+# ------------------------------------------------------------------
+# Phase C: the Shortlist column.
+#
+# Availability comes from queries.plan_availability() run over EVERY deck's
+# open changes, not just this deck's: the allocator only sees a collision
+# (two decks wanting your one copy) when both rows are in its input — the
+# Workbench's view. The Deck Editor's Shortlist tab still allocates over one
+# deck; the Board deliberately matches the Workbench instead.
+# ------------------------------------------------------------------
+# plan_availability verdict -> the badge's color class in the component.
+# Three colors carry the decision (have it / unsleeve or settle a conflict /
+# buy); the two verdicts that need no sourcing get a neutral badge.
+VERDICT_BADGES = {
+    "available": "available",
+    "claimed_by": "elsewhere",
+    "in_other_deck": "elsewhere",
+    "not_owned": "buy",
+    "already_here": "neutral",
+    "no_add": "neutral",
+}
+SHORTLIST_STATUS_ORDER = ("idea", "planned")   # the column's Ideas, then Planned
+
+
+def shortlist_availability(conn, open_changes_df):
+    """{change_id: verdict} over every deck's open rows. `open_changes_df` is
+    loaders.load_open_changes_df(conn, statuses=("idea", "planned")) with no
+    deck filter (the loader's default status is planned only, which would
+    hide ideas competing for the same copy). A thin wrapper so the page and
+    the tests can't drift on which rows go in."""
+    if open_changes_df is None or open_changes_df.empty:
+        return {}
+    return q.plan_availability(conn, open_changes_df)
+
+
+def shortlist_payload(shortlist_df, availability, unlinked_df=None):
+    """The deck's open Shortlist as card dicts for the side column, ideas
+    first then planned, each by name.
+
+    shortlist_df : loaders.load_shortlist_df() (card columns + change_id,
+                   status, quantity, replace_target, replace_id, notes).
+    availability : shortlist_availability() — keyed by change_id; a row with
+                   no verdict gets a neutral badge and no text.
+    unlinked_df  : this deck's open rows whose add side is a typed NAME with
+                   no printing (open_changes_dataframe() shape: change_id,
+                   status, quantity, add_card, remove_card,
+                   remove_scryfall_id, price). shortlist_df's INNER join
+                   drops them, and they are most real planned swaps — every
+                   swap backfilled from the old queue is one. They come out
+                   with `unlinked: True`, no `id` and no image; `apply` links
+                   the printing (deck_board.run_board_action passes a
+                   resolver), the same as the Shortlist tab.
+
+    `id` is the card's scryfall_id (for the image / preview); edits are keyed
+    by `change_id`, since the same card can't sit on one deck's Shortlist
+    twice but a change row is what the writes act on."""
+    availability = availability or {}
+    items = []
+    if shortlist_df is None:
+        shortlist_df = pd.DataFrame()
+    for _, row in shortlist_df.iterrows():
+        status = _clean_str(row.get("status"))
+        if status not in SHORTLIST_STATUS_ORDER:
+            continue
+        change_id = int(row["change_id"])
+        verdict = availability.get(change_id) or {}
+        qty = row.get("quantity")
+        price = row.get("current_price_usd")
+        type_line = _clean_str(row.get("type_line")) or ""
+        items.append({
+            "change_id": change_id,
+            "id": row["scryfall_id"],
+            "name": _clean_str(row.get("name")) or "Unknown card",
+            "status": status,
+            "qty": int(qty) if pd.notna(qty) else 1,
+            "img": card_view.card_image_src(row),
+            "type_line": type_line,
+            "type": fmt.derive_card_type(type_line),
+            "price": float(price) if pd.notna(price) else None,
+            "replaces": _clean_str(row.get("replace_target")),
+            "replaces_id": _clean_str(row.get("replace_id")),
+            "notes": _clean_str(row.get("notes")),
+            "verdict": verdict.get("verdict"),
+            "verdict_text": verdict.get("text") or "",
+            "badge": VERDICT_BADGES.get(verdict.get("verdict"), "neutral"),
+            "unlinked": False,
+        })
+    if unlinked_df is not None:
+        for _, row in unlinked_df.iterrows():
+            status = _clean_str(row.get("status"))
+            name = _clean_str(row.get("add_card"))
+            if status not in SHORTLIST_STATUS_ORDER or not name:
+                continue   # a pure removal has nothing to show in this column
+            change_id = int(row["change_id"])
+            verdict = availability.get(change_id) or {}
+            qty = row.get("quantity")
+            price = row.get("price")
+            items.append({
+                "change_id": change_id, "id": None, "name": name, "status": status,
+                "qty": int(qty) if pd.notna(qty) else 1, "img": None,
+                "type_line": "", "type": None,
+                "price": float(price) if pd.notna(price) else None,
+                "replaces": _clean_str(row.get("remove_card")),
+                "replaces_id": _clean_str(row.get("remove_scryfall_id")),
+                "notes": _clean_str(row.get("notes")),
+                "verdict": verdict.get("verdict"),
+                "verdict_text": verdict.get("text") or "",
+                "badge": VERDICT_BADGES.get(verdict.get("verdict"), "neutral"),
+                "unlinked": True,
+            })
+    items.sort(key=lambda i: (SHORTLIST_STATUS_ORDER.index(i["status"]), i["name"].lower()))
+    return items
+
+
+def load_board_shortlist(conn, deck_id):
+    """shortlist_payload() for one deck, verdicts allocated over every
+    deck's ideas and planned rows. Cached reads (both cleared by
+    loaders.invalidate_deck_caches); plan_availability itself reads the
+    collection live, so a collection edit elsewhere shows on the next run."""
+    open_df = loaders.load_open_changes_df(conn, statuses=SHORTLIST_STATUS_ORDER)
+    unlinked = (open_df[(open_df["deck_id"] == deck_id) & open_df["add_scryfall_id"].isna()]
+                if not open_df.empty else None)
+    return shortlist_payload(loaders.load_shortlist_df(conn, deck_id),
+                             shortlist_availability(conn, open_df), unlinked)
+
+
+def planned_cuts(shortlist_items):
+    """{scryfall_id cut: [incoming names]} from shortlist_payload()'s planned
+    rows — the other half of "→ replaces X": the mainboard card X gets a
+    "cut for Y" badge. An idea's replace target is only a suggestion, so it
+    doesn't mark the board."""
+    cuts = {}
+    for item in shortlist_items:
+        if item["status"] == "planned" and item["replaces_id"]:
+            cuts.setdefault(item["replaces_id"], []).append(item["name"])
+    return cuts
 
 
 # ------------------------------------------------------------------
@@ -155,9 +300,26 @@ def board_payload(cards_df, deck_meta, owned_qty):
 #   set_tags                  tags aren't history -> no row
 # Undo never deletes history: undoing a remove logs the re-add as its own
 # applied row, so history records the mistake and the fix (plan decision).
+#
+# Phase C adds CHANGE_OPS, sent from the Shortlist column and keyed by
+# `change_id` (plus `cut_id`, the mainboard card picked, for `plan`). They
+# move a deck_changes row through the same writes.* transitions the Deck
+# Editor's Shortlist tab and the Workbench use:
+#   plan     idea -> planned, paired with cut_id      undo: unpair
+#   unpair   planned -> idea, pairing kept            undo: plan (same cut)
+#   apply    planned -> applied via apply_changes()   no undo: it moves
+#            collection lots, so the component confirms before sending it
+#   drop     idea/planned -> dropped (row kept)       undo: reopen
+#   add      idea -> the card joins the mainboard     undo: to_shortlist
+#            with no cut (add_deck_card); the idea is retired
+#   reopen   dropped -> idea; only ever an undo (the menu never sends it)
 # ------------------------------------------------------------------
 BOARD_OPS = ("inc", "dec", "remove", "to_shortlist", "set_tags")
 UNDO_OPS = ("set_qty", "from_shortlist")
+CHANGE_OPS = ("plan", "unpair", "apply", "drop", "add", "reopen")
+# Ops whose writes touch the collection table, so the page must also drop
+# collection-derived caches (owned quantities, locations) after them.
+COLLECTION_OPS = ("apply",)
 STRATEGY_TAG_TYPE = "strategy"
 
 
@@ -180,8 +342,15 @@ def _validate_action(action):
     if not isinstance(action, dict):
         raise ValueError("That edit didn't come through properly — nothing changed.")
     op = action.get("op")
-    if op not in BOARD_OPS + UNDO_OPS:
+    if op not in BOARD_OPS + UNDO_OPS + CHANGE_OPS:
         raise ValueError(f"Unknown board action {op!r} — nothing changed.")
+    if op in CHANGE_OPS:
+        # Keyed by the Shortlist row, not a card; `id` is not needed.
+        _positive_int(action.get("change_id"), "Shortlist entry")
+        cut_id = action.get("cut_id")
+        if op == "plan" and (not isinstance(cut_id, str) or not cut_id.strip()):
+            raise ValueError("That swap didn't say which card to cut — nothing changed.")
+        return op, None
     scryfall_id = action.get("id")
     if not isinstance(scryfall_id, str) or not scryfall_id.strip():
         raise ValueError("That edit didn't say which card it was for — nothing changed.")
@@ -196,13 +365,15 @@ def _validate_action(action):
     return op, scryfall_id.strip()
 
 
-def apply_board_action(conn, deck_id, action):
+def apply_board_action(conn, deck_id, action, resolve_add=None):
     """Apply one board edit and return {"message", "undo"}.
 
     `message` is a short past-tense line for a toast / the Undo button
     ("Removed Sol Ring"). `undo` is the action that reverses this one —
     itself a valid input here, so the page just feeds it back — or None
-    when nothing changed.
+    when there is none (nothing changed, or an `apply`, which can't be
+    undone). A no-op also carries "changed": False; anything else changed
+    the database.
 
     Quantities are read from the database, never from the action: the
     browser's payload can be a rerun stale, and a double-click on −1 must be
@@ -210,8 +381,15 @@ def apply_board_action(conn, deck_id, action):
 
     Raises ValueError (user-facing message, nothing written) for a
     malformed action, a card that isn't in the deck any more, or a write
-    function's own refusal (e.g. the card is already on the Shortlist)."""
+    function's own refusal (e.g. the card is already on the Shortlist).
+
+    `resolve_add(name) -> (scryfall_id, was_new, error)` links a name-only
+    Shortlist row's printing on `apply` (writes.apply_changes' hook); without
+    it such a row is refused with apply_change's own message. Tests leave it
+    out to stay offline; the page passes card_resolver's."""
     op, sid = _validate_action(action)
+    if op in CHANGE_OPS:
+        return _apply_change_action(conn, deck_id, op, action, resolve_add)
     entry = q.deck_card_entry(conn, deck_id, sid)
     if entry is None:
         raise ValueError("That card isn't in the card database any more — nothing changed.")
@@ -250,7 +428,7 @@ def apply_board_action(conn, deck_id, action):
         old = writes.get_card_tags_by_type(conn, deck_id, STRATEGY_TAG_TYPE).get(sid, [])
         new = action["tags"]
         if {t.strip().lower() for t in old} == {t.strip().lower() for t in new if t.strip()}:
-            return {"message": f"No tag changes on {name}", "undo": None}
+            return {"message": f"No tag changes on {name}", "undo": None, "changed": False}
         writes.set_card_tags(conn, deck_id, sid, STRATEGY_TAG_TYPE, new)
         labels = ", ".join(t.strip() for t in new if t.strip())
         return {"message": f"Tagged {name}: {labels}" if labels else f"Cleared tags on {name}",
@@ -260,7 +438,7 @@ def apply_board_action(conn, deck_id, action):
 
     if op == "set_qty":
         if qty == target:
-            return {"message": f"{_qty_label(name, qty)} is already in the deck", "undo": None}
+            return {"message": f"{_qty_label(name, qty)} is already in the deck", "undo": None, "changed": False}
         if qty is None:
             # A genuine re-add: add_deck_card logs the applied add row.
             writes.add_deck_card(conn, deck_id, sid, target)
@@ -281,6 +459,99 @@ def apply_board_action(conn, deck_id, action):
         writes.add_deck_card(conn, deck_id, sid, target)
     return {"message": f"Moved {_qty_label(name, target)} back from the Shortlist",
             "undo": {"op": "to_shortlist", "id": sid}}
+
+
+def _card_label(conn, deck_id, scryfall_id, fallback):
+    entry = q.deck_card_entry(conn, deck_id, scryfall_id) if scryfall_id else None
+    return (entry and entry["name"]) or fallback or "that card"
+
+
+def _apply_change_action(conn, deck_id, op, action, resolve_add=None):
+    """CHANGE_OPS for apply_board_action(). The row is re-read here and its
+    state checked before writing, so a click from a stale board (the row was
+    applied or dropped in another tab) gets a plain-English refusal instead
+    of the write functions' terser one."""
+    change_id = int(action["change_id"])
+    change = writes.get_change(conn, change_id)
+    if change is None or change["deck_id"] != deck_id:
+        raise ValueError("That Shortlist entry isn't on this deck any more — the board was out of date, nothing changed.")
+    status = change["status"]
+    add_name = _card_label(conn, deck_id, change["add_scryfall_id"], change["add_name"])
+    wanted = {"plan": ("idea",), "add": ("idea",), "unpair": ("planned",), "apply": ("planned",),
+              "drop": ("idea", "planned"), "reopen": ("dropped",)}[op]
+    if status not in wanted:
+        now = {"idea": "an idea", "planned": "already planned", "dropped": "already dropped",
+               "applied": "already applied"}.get(status, status)
+        raise ValueError(f"{add_name} is {now} — the board was out of date, nothing changed.")
+
+    if op == "drop":
+        writes.drop_change(conn, change_id)
+        return {"message": f"Dropped {add_name} from the Shortlist",
+                "undo": {"op": "reopen", "change_id": change_id}}
+
+    if op == "reopen":
+        # A dropped swap comes back as an idea (its pairing is kept), the same
+        # as the Shortlist tab's reopen.
+        writes.reopen_change(conn, change_id)
+        return {"message": f"Brought {add_name} back to the Shortlist",
+                "undo": {"op": "drop", "change_id": change_id}}
+
+    if op == "add":
+        sid = change["add_scryfall_id"]
+        if not sid:
+            # A typed name with no printing yet: link it the way apply does.
+            if resolve_add is None:
+                raise ValueError(f"{add_name} isn't linked to a printing yet.")
+            sid, _, err = resolve_add(change["add_name"])
+            if err:
+                raise ValueError(f"Couldn't find {add_name}: {err}")
+        entry = q.deck_card_entry(conn, deck_id, sid)
+        if entry and entry["quantity"] is not None:
+            # add_deck_card would quietly bump the quantity instead.
+            raise ValueError(f"{add_name} is already in the deck — drop the idea instead. Nothing changed.")
+        qty = change["quantity"] or 1
+        writes.add_deck_card(conn, deck_id, sid, qty)
+        # add_deck_card retires an idea it can match by printing/oracle; a
+        # typed-name idea it can't, so finish the job here.
+        again = writes.get_change(conn, change_id)
+        if again and again["status"] in writes.OPEN_CHANGE_STATUSES:
+            writes.drop_change(conn, change_id)
+        return {"message": f"Added {_qty_label(add_name, qty)} to the deck",
+                "undo": {"op": "to_shortlist", "id": sid}}
+
+    if op == "plan":
+        cut_id = action["cut_id"].strip()
+        cut = q.deck_card_entry(conn, deck_id, cut_id)
+        if cut is None or cut["quantity"] is None:
+            raise ValueError("The card picked to cut isn't in this deck any more — nothing changed.")
+        if cut_id == change["add_scryfall_id"]:
+            raise ValueError(f"{add_name} can't replace itself — pick a different card to cut.")
+        writes.promote_change(conn, change_id, remove_scryfall_id=cut_id)
+        return {"message": f"Planned: {add_name} in for {cut['name']}",
+                "undo": {"op": "unpair", "change_id": change_id}}
+
+    cut_name = _card_label(conn, deck_id, change["remove_scryfall_id"], change["remove_name"])
+    if op == "unpair":
+        # demote_change keeps the pairing, so the undo is the same plan.
+        writes.demote_change(conn, change_id)
+        undo = ({"op": "plan", "change_id": change_id, "cut_id": change["remove_scryfall_id"]}
+                if change["remove_scryfall_id"] else None)
+        return {"message": f"Unpaired {add_name} from {cut_name} — back to an idea", "undo": undo}
+
+    # apply: the same path as the Shortlist tab and the Workbench, so history
+    # and collection locations move identically — including linking a
+    # name-only row's printing through resolve_add.
+    (result,) = writes.apply_changes(conn, [change_id], resolve_add=resolve_add)
+    if not result["ok"]:
+        raise ValueError(f"Couldn't apply {add_name}: {result['error']}")
+    outcome = result["outcome"] or {}
+    if outcome.get("created_lot"):
+        lot = " (not owned — added a starter collection lot)"
+    elif outcome.get("assigned_lot_id"):
+        lot = " (owned copy moved into the deck)"
+    else:
+        lot = ""
+    return {"message": f"Applied: {add_name} in, {cut_name} out{lot}", "undo": None}
 
 
 # ------------------------------------------------------------------
@@ -341,18 +612,27 @@ def run_board_action(conn, deck_id, key, action, *, is_undo=False):
     An undo itself leaves nothing to undo (one level); a failed or no-op
     edit leaves the previous Undo in place."""
     try:
-        result = apply_board_action(conn, deck_id, action)
+        result = apply_board_action(
+            conn, deck_id, action,
+            resolve_add=lambda name: card_resolver.resolve_or_fetch_card(conn, name=name),
+        )
     except ValueError as exc:
         st.toast(str(exc), icon="⚠️")
         return False
     st.toast(result["message"], icon="↩️" if is_undo else "✅")
     if is_undo:
         st.session_state.pop(_undo_key(key), None)
+    elif not result.get("changed", True):
+        return True  # no-op: nothing changed, so no cache clear or rerun
     elif result["undo"]:
         st.session_state[_undo_key(key)] = {"label": result["message"], "action": result["undo"]}
     else:
-        return True  # no-op: nothing changed, so no cache clear or rerun
+        # A change with no inverse (apply): an older Undo would now act on
+        # a deck that has moved on, so it goes.
+        st.session_state.pop(_undo_key(key), None)
     loaders.invalidate_deck_caches(deck_id)
+    if isinstance(action, dict) and action.get("op") in COLLECTION_OPS:
+        loaders.invalidate_collection_caches()
     st.session_state[_dirty_key(key)] = True
     return True
 
@@ -383,9 +663,13 @@ def render_undo_button(conn, deck_id, key):
     )
 
 
-def render_deck_board(cards_df, deck_meta, owned_qty, *, key, editable=False, conn=None, deck_id=None):
+def render_deck_board(cards_df, deck_meta, owned_qty, *, key, editable=False, conn=None, deck_id=None,
+                      shortlist=None):
     """Mount the Stacks board. `key` must be unique per deck: it also keys the
     saved group-by in session_state.
+
+    `shortlist` (load_board_shortlist()) feeds the Shortlist column and the
+    "cut for Y" badges; None leaves both out (the read-only Decks page).
 
     editable=True (needs conn + deck_id) lets the card menu send edits back;
     each one runs run_board_action() in the component callback — before the
@@ -408,7 +692,8 @@ def render_deck_board(cards_df, deck_meta, owned_qty, *, key, editable=False, co
     return _BOARD(
         key=key,
         data={
-            "cards": board_payload(cards_df, deck_meta, owned_qty),
+            "cards": board_payload(cards_df, deck_meta, owned_qty, cut_for=planned_cuts(shortlist or [])),
+            "shortlist": shortlist or [],
             "group_by": group_by,
             "group_options": GROUP_BY_OPTIONS,
             "type_order": BOARD_TYPE_ORDER,

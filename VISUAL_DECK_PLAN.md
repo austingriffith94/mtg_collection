@@ -13,7 +13,7 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 
 - [x] **Phase A** — Read-only Stacks view (custom component). Done 2026-10-12: payload ~29–36 KB for 73–91-card decks (real DB, under the 50 KB target); JS not yet eyeballed in a browser.
 - [x] **Phase B** — Edit in place on the board. Done 2026-10-12: 🃏 Board tab (card menu, add bar, stats strip, one-level Undo) on `deck_board.apply_board_action()`; full-page rerun kept (measured ~0.2s). JS menu not yet clicked through in a browser.
-- [ ] **Phase C** — Shortlist alongside the deck; pair and apply swaps visually.
+- [x] **Phase C** — Shortlist alongside the deck; pair and apply swaps visually. Done 2026-10-12. Python side started 2026-10-12: `plan` / `unpair` / `apply` ops in `apply_board_action()` (apply matches `writes.apply_changes()` table-for-table, tested), and the Shortlist payload (`load_board_shortlist()`, verdicts allocated across every deck; largest real Shortlist ~10 KB, so board + Shortlist stays under ~50 KB) plus `cut_for` badges, passed to the component as `data.shortlist`. JS side: Shortlist in a sticky right rail above the preview, pick mode, two-click Apply — clicked through in headless Edge on a DB copy (plan / unpair / apply round-trips, Esc / cancel, commander not pickable). Name-only planned swaps (all 44 real ones, backfilled from the old queue) now show too; `apply` links their printing like the Shortlist tab. `drop`, `add` (no cut) and their Undo (`reopen` / `to_shortlist`) added; Drop/Undo/Add and plan → Workbench → apply → Workbench checked in headless Edge on a DB copy (the Workbench lists a Board-planned swap and stops listing it once the Board applies it). Docs updated. C2 drag-and-drop not built (optional; click-to-pair hasn't been used enough to judge).
 
 ---
 
@@ -230,6 +230,8 @@ the re-add (or the dropped Shortlist idea) is its own row.
 
 **Result (2026-10-12):** a full Deck Editor rerun after an edit (deck caches invalidated, real DB copy, AppTest) takes ~0.21 s of script time, so the Phase 4 convention stays: a board edit ends in `st.rerun(scope="app")` (`deck_board.BOARD_RERUN_SCOPE`). It also avoids a real hazard: after a fragment-only rerun the Mainboard tab's `data_editor` would still hold the old quantities, and its Save would write them back over the edit. Browser-side latency (component re-mount) is not covered by this number.
 
+**Browser-side, Phase C (2026-10-12):** click to re-drawn board, measured in headless Edge with `requestAnimationFrame`, Gisa (100 cards, 27-row Shortlist), real DB copy, 5 runs each: `scope="app"` ~315 ms median for plan / unpair / +1 / −1 alike; `scope="fragment"` ~355 ms, not faster, so `"app"` stays. Of that, ~130 ms is Phase C's all-decks `plan_availability()` (231 open rows), run uncached on every Board render — the one obvious saving if it ever feels slow (cache it in `loaders` and clear it from both `invalidate_deck_caches` and `invalidate_collection_caches`).
+
 Original question:
 
 Phase 4's convention is that writes inside a fragment end in
@@ -287,7 +289,11 @@ another deck / need to buy).
 ### Layout
 
 - A narrow Shortlist column to the right of the stacks (below them on a
-  narrow screen), grouped **Ideas** then **Planned**.
+  narrow screen), grouped **Ideas** then **Planned**. *As built:* a single
+  sticky right rail with the Shortlist above the preview (its own scroll,
+  height capped to the window) — a separate column beside the preview left
+  the stacks too narrow. On narrow screens the rail goes above the stacks,
+  preview first.
 - A planned swap draws on both sides: the Shortlist card shows
   "→ replaces X", and the mainboard card X gets a "cut for Y" badge.
 

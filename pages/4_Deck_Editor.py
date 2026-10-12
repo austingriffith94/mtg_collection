@@ -6,9 +6,12 @@ when needed), and the Shortlist — ideas for the deck, the swaps staged from
 them, and the history of what was applied. No CSV editing or re-migration
 required for any of this.
 
-The Board tab (VISUAL_DECK_PLAN.md Phase B) is the visual way to edit the
+The Board tab (VISUAL_DECK_PLAN.md Phases B-C) is the visual way to edit the
 mainboard: the Stacks view with a card menu (+1 / −1 / Remove / Move to
-Shortlist / Tags…), the add bar, a stats strip and a one-level Undo. The
+Shortlist / Tags…), the add bar, a stats strip and a one-level Undo, plus a
+Shortlist rail to pair an idea with a card to cut, unpair it, apply it, add
+it with no cut, or drop it (apply is the same as the Shortlist tab's;
+availability is checked across every deck, as on the Workbench). The
 Mainboard tab keeps its table for changing many quantities at once.
 
 Card Tags (bulk-editing any tag_type across a deck's mainboard) lives
@@ -206,6 +209,7 @@ def _board_fragment(deck_id):
     deck_board.render_deck_board(
         cards_df, loaders.load_deck_meta(conn, deck_id), loaders.load_owned_card_quantities(conn),
         key=board_key, editable=True, conn=conn, deck_id=deck_id,
+        shortlist=deck_board.load_board_shortlist(conn, deck_id),
     )
 
 

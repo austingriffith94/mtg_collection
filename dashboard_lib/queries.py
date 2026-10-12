@@ -915,10 +915,14 @@ def shortlist_dataframe(conn, deck_id):
     INNER join on the add card, so a row not yet linked to a printing is not
     shown here: the browser needs a real card (image, type, set) to render a
     tile. That is every swap backfilled from the old queue; they still appear
-    on the Deck Editor's Shortlist tab and link up when applied."""
+    on the Deck Editor's Shortlist tab and link up when applied.
+
+    `replace_id` (the cut's scryfall_id) lets the Board badge the mainboard
+    card a planned swap would cut; `quantity` is the row's own copy count."""
     return pd.read_sql_query(
         f"""SELECT {CARD_COLUMNS}, dc.change_id, dc.status, dc.review_flag,
                    COALESCE(rc.name, dc.remove_name) AS replace_target,
+                   dc.remove_scryfall_id AS replace_id, dc.quantity,
                    dc.notes
             FROM deck_changes dc
             JOIN cards c ON c.scryfall_id = dc.add_scryfall_id

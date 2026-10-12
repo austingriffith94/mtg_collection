@@ -7,7 +7,7 @@ as inline strings.
 
 | Component | Files | Python side |
 |---|---|---|
-| Stacks deck board (read-only on the Decks page, editable on the Deck Editor's Board tab) | `deck_board.js`, `deck_board.css` | [../deck_board.py](../deck_board.py) |
+| Stacks deck board + Shortlist rail (read-only on the Decks page, editable on the Deck Editor's Board tab) | `deck_board.js`, `deck_board.css` | [../deck_board.py](../deck_board.py) |
 
 Rules for editing these:
 
@@ -16,10 +16,17 @@ Rules for editing these:
   returning a cleanup. No v1 APIs (`Streamlit.setComponentValue`,
   `postMessage`, `streamlit-component-lib`).
 - Keep logic in Python where possible; AppTest can't click inside the JS,
-  so JS behavior is checked by hand in the running app.
+  so JS behavior is checked by hand in the running app, or scripted in
+  headless Edge over the DevTools protocol against a COPY of the database
+  (never the real one). There is no node here: parse-check the JS with
+  `esprima` (`parseModule`) installed into a scratch directory.
 - Edits go back as `setTriggerValue("action", {...})`, one per committed
   choice; Python (`deck_board.apply_board_action`) is the source of truth
   and every rerun re-hydrates `data`, so don't update state optimistically.
+- Pick mode ("Swap in for…" -> click the card to cut) is browser-only state:
+  nothing is sent until a card is picked, and Esc / Cancel leaves it. A
+  committed action makes the board inert until the rerun re-draws it, with a
+  timeout in case Python refuses the edit and `data` doesn't change.
 - Colors come from Streamlit's `--st-*` theme variables so light/dark work
   without separate styling.
 - Set card text with `textContent`, never `innerHTML`.

@@ -641,7 +641,7 @@ def bulk_update_deck_cards(conn, deck_id, updates):
 # ------------------------------------------------------------------
 # Deck changes — the idea -> planned -> applied / dropped lifecycle
 # (Workbench rework, Phase 1; table in schema.sql, plan in
-# IMPLEMENTATION_PLAN.md). One table replaces what used to be the
+# docs/archive/IMPLEMENTATION_PLAN.md). One table replaces what used to be the
 # maybeboard, the Swap Manager queue, and nothing at all for history:
 #
 #   idea     a card under consideration; may or may not name a card it

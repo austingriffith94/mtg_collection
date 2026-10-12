@@ -624,7 +624,7 @@ dashboard.
 One limit worth knowing: each row's availability is checked on its own, so
 if two planned swaps (in this deck or different ones) both want your single
 copy of a card, both will read "available". Checking them against each
-other is the next phase of the Workbench rework (see `IMPLEMENTATION_PLAN.md`).
+other is the next phase of the Workbench rework (see `docs/archive/IMPLEMENTATION_PLAN.md`).
 
 ## Deck change lifecycle
 
@@ -647,7 +647,7 @@ win/loss record.
 The superseded `maybeboard` and `deck_swap_queue` tables are deliberately
 left in place and untouched as a frozen pre-rework backup, per the
 additive/non-destructive schema policy above — nothing reads or writes them
-any more. See `IMPLEMENTATION_PLAN.md` for the phase-by-phase plan and
+any more. See `docs/archive/IMPLEMENTATION_PLAN.md` for the phase-by-phase plan and
 `schema.sql` for the full table comment.
 
 ## Deck lifecycle: brewing and dismantling

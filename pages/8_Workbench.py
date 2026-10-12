@@ -1,6 +1,6 @@
 """
 Workbench page — every deck's pending shortlist work in one place
-(Workbench rework, Phase 2; see IMPLEMENTATION_PLAN.md).
+(Workbench rework, Phase 2; see docs/archive/IMPLEMENTATION_PLAN.md).
 
 The Deck Editor's Shortlist tab answers "what's planned for THIS deck".
 Nothing answered "what's planned at all", so 44 staged swaps across 10

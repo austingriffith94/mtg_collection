@@ -1,5 +1,5 @@
 """Contention table, buy list, and Card Lookup — Phase 3 of the Workbench
-rework (see IMPLEMENTATION_PLAN.md).
+rework (see docs/archive/IMPLEMENTATION_PLAN.md).
 
 Contention answers "demand vs. supply per card", counting both mainboard
 usage (deck_cards) and open shortlist demand (deck_changes idea/planned),

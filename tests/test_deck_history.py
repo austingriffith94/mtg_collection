@@ -1,5 +1,5 @@
 """Change history, deck comparison and tile status strips — Phase 5 of the
-Workbench rework (see IMPLEMENTATION_PLAN.md).
+Workbench rework (see docs/archive/IMPLEMENTATION_PLAN.md).
 """
 import pandas as pd
 

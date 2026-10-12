@@ -2,7 +2,7 @@
 Provider layer: one interface, so the grounding code never knows which model
 answered. Phase 1 shipped Gemini, Phase 5 adds Anthropic (Claude Sonnet /
 Opus), plus a scripted FakeProvider for tests. Ollama (Phase 2) is skipped
-for now (user decision; see ADVISOR_PLAN.md). All adapters share one call:
+for now (user decision; see docs/archive/ADVISOR_PLAN.md). All adapters share one call:
 `chat(messages, system=None, schema=None, tools=None) -> ProviderResponse`.
 
 Messages are normally [{"role": "user"|"assistant", "content": str}]. Chat
@@ -225,7 +225,7 @@ def _to_anthropic_messages(messages):
 
 
 class AnthropicProvider:
-    """Anthropic Claude over the Messages API (ADVISOR_PLAN.md Phase 5).
+    """Anthropic Claude over the Messages API (docs/archive/ADVISOR_PLAN.md Phase 5).
     Claude has no native "respond with this JSON schema" parameter the way
     Gemini does, so a `schema` request is sent as a single tool named
     "respond" with `tool_choice` forced to it; the tool's `input` becomes

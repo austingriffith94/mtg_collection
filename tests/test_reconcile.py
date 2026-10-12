@@ -1,5 +1,5 @@
 """Reconciliation — Phase 4 of the Workbench rework (see
-IMPLEMENTATION_PLAN.md): unlocated lots, the per-deck list-vs-physical diff
+docs/archive/IMPLEMENTATION_PLAN.md): unlocated lots, the per-deck list-vs-physical diff
 in both directions, per-deck build status, and splitting a lot when only
 some of its copies move.
 """

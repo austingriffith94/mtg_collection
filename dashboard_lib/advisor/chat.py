@@ -1,5 +1,5 @@
 """
-Chat mode: free-form conversation with read-only tool calls (ADVISOR_PLAN.md
+Chat mode: free-form conversation with read-only tool calls (docs/archive/ADVISOR_PLAN.md
 Phase 3). Gated to providers that declare `capabilities.tools`.
 
 run_chat_turn drives one turn: loop the provider against `tools.TOOL_SPECS`
@@ -9,7 +9,7 @@ in schema-constrained JSON, so guard.py can check each one against the
 database. That restate step is a separate request (never combined with
 `tools` in the same call — see providers.GeminiProvider.chat) because chat
 has no small pre-filtered pool to enum card names against the way analysis
-mode does (ADVISOR_PLAN.md guardrail #2), so the check happens after the
+mode does (docs/archive/ADVISOR_PLAN.md guardrail #2), so the check happens after the
 fact against the whole database instead.
 
 If the restate call fails or returns unusable JSON, the answer is still

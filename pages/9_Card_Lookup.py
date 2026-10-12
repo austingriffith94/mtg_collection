@@ -1,6 +1,6 @@
 """
 Card Lookup page — one card, everything about it (Workbench rework,
-Phase 3; see IMPLEMENTATION_PLAN.md).
+Phase 3; see docs/archive/IMPLEMENTATION_PLAN.md).
 
 No existing page answers "what's going on with THIS card" in one place.
 The Collection page shows lots; the Decks page shows one deck's mainboard

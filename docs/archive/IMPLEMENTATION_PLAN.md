@@ -1,5 +1,10 @@
 # Implementation Plan — Swap Rethink, Workbench, and Reconciliation
 
+> **Archived — complete.** All six phases of the Workbench rework shipped
+> (2026-10-04). Kept for the "as built" notes that code comments point to.
+> The two open questions at the bottom moved to the backlog in
+> [UI_ACTION_PLAN.md](../../UI_ACTION_PLAN.md#backlog-carried-over).
+
 Working spec for the five-point rework agreed on 2026-10-04. Each phase
 below is independently shippable: the app runs, tests pass, and nothing is
 half-migrated at any phase boundary. Work them in order — Phase 1 depends

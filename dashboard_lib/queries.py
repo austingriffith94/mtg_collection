@@ -123,7 +123,7 @@ def _seed_location_catalog(conn):
 
 def _seed_deck_changes(conn):
     """Backfill the unified deck_changes lifecycle table (Workbench
-    rework, Phase 0 — see IMPLEMENTATION_PLAN.md) from the two tables it
+    rework, Phase 0 — see docs/archive/IMPLEMENTATION_PLAN.md) from the two tables it
     supersedes, so no existing idea or queued swap has to be retyped:
 
       maybeboard rows      -> status='idea'
@@ -2005,7 +2005,7 @@ def contention_table(conn):
     printing) — a name match alone would double-count a modal double-faced
     card referenced by either face as two different cards.
 
-    A function rather than a SQL view (per IMPLEMENTATION_PLAN.md): the
+    A function rather than a SQL view (per docs/archive/IMPLEMENTATION_PLAN.md): the
     deck_changes half of demand needs status filtering ('idea', 'planned')
     that Phase 5 will extend as history grows, and a view would freeze
     today's definition.

@@ -1,5 +1,5 @@
 """deck_changes lifecycle table — Phase 0 of the Workbench rework (see
-IMPLEMENTATION_PLAN.md).
+docs/archive/IMPLEMENTATION_PLAN.md).
 
 Covers the additive-upgrade path that creates the table on a database
 built before it existed, and the one-time backfill that folds the

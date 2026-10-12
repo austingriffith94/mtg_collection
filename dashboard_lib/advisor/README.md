@@ -1,12 +1,12 @@
 # advisor/
 
 Grounded MTG deck analysis and chat with a swappable model. Design and
-phasing live in [ADVISOR_PLAN.md](../../ADVISOR_PLAN.md); this file
+phasing live in [ADVISOR_PLAN.md](../../docs/archive/ADVISOR_PLAN.md); this file
 describes what is built.
 
 **Status: Phase 5** — analysis mode (four skills) and tool-based chat, on
 Gemini or Anthropic (Claude Sonnet/Opus), switchable from the page sidebar.
-No Ollama adapter (skipped, see ADVISOR_PLAN.md). Read-only: nothing here
+No Ollama adapter (skipped, see docs/archive/ADVISOR_PLAN.md). Read-only: nothing here
 writes to the database.
 
 ## How it works

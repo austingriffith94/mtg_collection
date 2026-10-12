@@ -1,5 +1,5 @@
 """Deck lifecycle — Phase 6 of the Workbench rework (see
-IMPLEMENTATION_PLAN.md): brewing a deck whose cards are still elsewhere
+docs/archive/IMPLEMENTATION_PLAN.md): brewing a deck whose cards are still elsewhere
 (the sourcing plan and its donor-impact warnings), taking a deck apart to
 feed another one, and the build_state flag that separates a brew from a
 built deck whose locations were never recorded.

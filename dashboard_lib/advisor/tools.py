@@ -1,5 +1,5 @@
 """
-Chat-mode tools: read-only functions the model can call (ADVISOR_PLAN.md
+Chat-mode tools: read-only functions the model can call (docs/archive/ADVISOR_PLAN.md
 Phase 3). Each tool takes `conn` first (bound by `dispatch`, never exposed to
 the model) and returns a small JSON-safe dict; a tool never raises — a bad
 or unknown argument comes back as {"error": ...} so the model can recover

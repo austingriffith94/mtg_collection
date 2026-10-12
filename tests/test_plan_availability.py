@@ -1,5 +1,5 @@
 """The plan allocator — Phase 2 of the Workbench rework (see
-IMPLEMENTATION_PLAN.md).
+docs/archive/IMPLEMENTATION_PLAN.md).
 
 What's under test is the difference between asking "is this card
 available?" once per shortlist row and asking it once for a whole queue.

@@ -153,7 +153,7 @@ Automatic combo detection per deck, via [Commander Spellbook](https://commanders
 
 ## Workbench rework (2026-10-04) — all six phases complete
 
-A six-phase rework, now finished — see `IMPLEMENTATION_PLAN.md`, which carries
+A six-phase rework, now finished — see `docs/archive/IMPLEMENTATION_PLAN.md`, which carries
 the full spec, the per-phase test plan, and the live-database observations
 that motivated each phase. Summary of intent:
 
@@ -179,7 +179,7 @@ that motivated each phase. Summary of intent:
    de-duplicated across decks), both added to the Workbench page; a new
    `pages/9_Card_Lookup.py` rolling one card's price, every owned lot, every
    mainboard/shortlist appearance, and recent applied-change history into
-   one oracle_id-matched view. See IMPLEMENTATION_PLAN.md's "Phase 3 as
+   one oracle_id-matched view. See docs/archive/IMPLEMENTATION_PLAN.md's "Phase 3 as
    built" for the live-database numbers (43 contention rows, $158.50 buy
    total) and what changed from the original spec.
 5. **Phase 4 (done)** — reconciliation: 178 unlocated lots, and per-deck
@@ -190,7 +190,7 @@ that motivated each phase. Summary of intent:
    (`queries.deck_change_history()`, Decks page "🕓 Changes"), a 12-deck
    comparison matrix (`queries.deck_comparison()`, Decks page "📊 Compare
    all decks"), and home-tile status strips plus a Workbench summary line.
-   See IMPLEMENTATION_PLAN.md's "Phase 5 as built".
+   See docs/archive/IMPLEMENTATION_PLAN.md's "Phase 5 as built".
 7. **Phase 6 (done)** — deck lifecycle, the two operations the app had no
    concept of. A **Build Plan** for a brew (`queries.deck_sourcing_plan()`,
    Decks page): every non-basic copy the list needs allocated to exactly
@@ -209,7 +209,7 @@ that motivated each phase. Summary of intent:
    is stored, completion stays derived) and `deck_changes.dest_location`
    (where a removal's copy goes; NULL = the old "Box" behaviour).
    `delete_deck()` is unchanged — deleting destroys the record, dismantling
-   keeps the list and history. See IMPLEMENTATION_PLAN.md's "Phase 6 as
+   keeps the list and history. See docs/archive/IMPLEMENTATION_PLAN.md's "Phase 6 as
    built" for the live numbers and the five places the build diverged from
    the spec.
 

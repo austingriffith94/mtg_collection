@@ -2,7 +2,8 @@
 MTG Dashboard — launcher.
 
 Double-click run.bat (Windows) / run.command (Mac) / run.sh (Linux),
-or just run `python run.py` / `python3 run.py` from a terminal —
+or just run `python run.py` / `python3 run.py` from a terminal
+(add `--dashboard` to skip the menu and launch the app straight away) —
 after activating whatever conda/venv environment you're managing
 yourself (see requirements.txt / README for the two packages needed:
 pandas and requests). This script does NOT install anything on its
@@ -126,12 +127,41 @@ def run_dashboard():
     subprocess.run([sys.executable, "-m", "streamlit", "run", "dashboard.py"], cwd=BASE_DIR)
 
 
+# Numbered menu: (label, function, needs_db). The Exit entry is appended by
+# main() so it is always last. Migration is deliberately not here — it's
+# destructive, so it's only reachable by typing the word 'migrate'.
+MENU = [
+    ("Launch dashboard", run_dashboard, True),
+    ("Export a deck to Moxfield format", run_export, True),
+    ("Export collection to Moxfield CSV", run_export_collection, True),
+    ("Sync image cache (download new + prune unused)", run_image_sync, True),
+    ("Refresh Scryfall card data (Reserved List/Game Changer/legality/price)",
+     run_refresh_card_data, True),
+]
+
+
+def launch_dashboard_directly():
+    """`python run.py --dashboard`: skip the menu and start the app."""
+    if not os.path.exists(DB_PATH):
+        print("No database found yet — run `python run.py` and type 'migrate' "
+              "first.")
+        sys.exit(1)
+    run_dashboard()
+
+
 def main():
     check_python_version()
+    if "--dashboard" in sys.argv[1:]:
+        launch_dashboard_directly()
+        return
 
     while True:
         db_exists = os.path.exists(DB_PATH)
-        needs_migration_tag = "" if db_exists else "  [needs the initial migration first — see below]"
+        # With no DB nothing but migrate/Exit can work, so don't list the rest.
+        items = [(label, func) for label, func, needs_db in MENU
+                 if db_exists or not needs_db]
+        items.append(("Exit", None))
+
         print("=" * 50)
         print("MTG Collection Dashboard")
         print(f"(using: {sys.executable})")
@@ -140,48 +170,21 @@ def main():
             print("No database found yet — type 'migrate' below to run the initial "
                   "migration from your CSVs in data/.\n")
 
-        print("1) Launch dashboard" + needs_migration_tag)
-        print("2) Export a deck to Moxfield format" + needs_migration_tag)
-        print("3) Export collection to Moxfield CSV" + needs_migration_tag)
-        print("4) Sync image cache (download new + prune unused)" + needs_migration_tag)
-        print("5) Refresh Scryfall card data (Reserved List/Game Changer/legality/price)" + needs_migration_tag)
-        print("6) Exit")
+        for n, (label, _func) in enumerate(items, start=1):
+            print(f"{n}) {label}")
         print()
         print("Rarely needed once you're up and running — type the word, not a number:")
         print("  migrate) Rebuild the database from CSVs in data/ "
               "(⚠ discards any dashboard-made edits since your last migration)")
         choice = input("> ").strip()
-        choice_lower = choice.lower()
 
-        if choice_lower == "migrate":
+        if choice.lower() == "migrate":
             run_migration()
-        elif choice == "1":
-            if not db_exists:
-                print("Type 'migrate' first to set up the database.\n")
-                continue
-            run_dashboard()
-        elif choice == "2":
-            if not db_exists:
-                print("Type 'migrate' first to set up the database.\n")
-                continue
-            run_export()
-        elif choice == "3":
-            if not db_exists:
-                print("Type 'migrate' first to set up the database.\n")
-                continue
-            run_export_collection()
-        elif choice == "4":
-            if not db_exists:
-                print("Type 'migrate' first to set up the database.\n")
-                continue
-            run_image_sync()
-        elif choice == "5":
-            if not db_exists:
-                print("Type 'migrate' first to set up the database.\n")
-                continue
-            run_refresh_card_data()
-        elif choice == "6":
-            break
+        elif choice.isdigit() and 1 <= int(choice) <= len(items):
+            func = items[int(choice) - 1][1]
+            if func is None:
+                break
+            func()
         else:
             print("Not a valid option.\n")
         print()

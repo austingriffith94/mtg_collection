@@ -8,6 +8,7 @@ Run standalone, or via the launcher (run.py) menu:
     python sync_images.py            # download missing + prune orphans
     python sync_images.py --no-prune # download only, skip pruning
     python sync_images.py --prune-only
+    python sync_images.py --dry-run  # list what pruning would remove, change nothing
 
 Images are cached as static/image_cache/<scryfall_id>.<ext>, one file per
 PRINTING (not per oracle card) — matches how `cards` is keyed, so the
@@ -95,45 +96,57 @@ def download_missing(conn, session, force=False, verbose=True):
     return downloaded, skipped, failed
 
 
-def prune_orphaned(conn, verbose=True):
+def prune_orphaned(conn, verbose=True, dry_run=False):
     """Delete cached image files for printings no longer referenced by
-    your collection, any decklist, or any open shortlist row — but leave the
-    `cards` metadata row alone (cheap to keep, just clears local_image_path
-    so a future re-reference would re-download rather than serve a stale
-    dangling path)."""
+    your collection, any decklist, any open shortlist row, or a Game
+    Changer / Mana Tag list entry (those lists keep their art) — but leave
+    the `cards` metadata row alone (cheap to keep, just clears
+    local_image_path so a future re-reference would re-download rather than
+    serve a stale dangling path).
+
+    Returns the [(scryfall_id, card_name)] it removed (or, with dry_run=True,
+    would remove — nothing is deleted), and prints each one."""
     active_ids = set(
         sid for (sid,) in conn.execute(
             """SELECT scryfall_id FROM collection
                UNION SELECT scryfall_id FROM deck_cards
                UNION SELECT add_scryfall_id FROM deck_changes
                      WHERE status IN ('idea', 'planned')
-                       AND add_scryfall_id IS NOT NULL"""
+                       AND add_scryfall_id IS NOT NULL
+               UNION SELECT scryfall_id FROM cards
+                     WHERE name IN (SELECT card_name FROM game_changer_tags
+                                    UNION SELECT card_name FROM mana_tags)"""
         )
     )
 
     if not os.path.exists(IMAGE_CACHE_DIR):
         if verbose:
             print("  No static/image_cache/ directory yet — nothing to prune.")
-        return 0
+        return []
 
-    removed = 0
-    for filename in os.listdir(IMAGE_CACHE_DIR):
+    removed = []
+    for filename in sorted(os.listdir(IMAGE_CACHE_DIR)):
         # Skip folders — deck_covers/ (user uploads) lives in here too.
         if not os.path.isfile(os.path.join(IMAGE_CACHE_DIR, filename)):
             continue
         scryfall_id = os.path.splitext(filename)[0]
         if scryfall_id not in active_ids:
-            os.remove(os.path.join(IMAGE_CACHE_DIR, filename))
-            conn.execute(
-                "UPDATE cards SET local_image_path = NULL WHERE scryfall_id = ?",
-                (scryfall_id,),
-            )
-            removed += 1
+            row = conn.execute("SELECT name FROM cards WHERE scryfall_id = ?", (scryfall_id,)).fetchone()
+            removed.append((scryfall_id, row[0] if row else filename))
+            if not dry_run:
+                os.remove(os.path.join(IMAGE_CACHE_DIR, filename))
+                conn.execute(
+                    "UPDATE cards SET local_image_path = NULL WHERE scryfall_id = ?",
+                    (scryfall_id,),
+                )
 
     conn.commit()
     if verbose:
-        print(f"  Pruned {removed} orphaned image(s) "
-              f"(no longer in collection, any decklist, or any open shortlist row).")
+        verb = "Would prune" if dry_run else "Pruned"
+        print(f"  {verb} {len(removed)} orphaned image(s) "
+              f"(no longer in collection, any decklist, any open shortlist row, or a tag list).")
+        for _sid, name in removed:
+            print(f"    - {name}")
     return removed
 
 
@@ -141,6 +154,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--no-prune", action="store_true", help="Download only, skip pruning")
     parser.add_argument("--prune-only", action="store_true", help="Prune only, skip downloading")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Report what would be pruned without downloading or deleting anything")
     parser.add_argument("--force", action="store_true", help="Re-download everything, even if already cached")
     args = parser.parse_args()
 
@@ -156,13 +171,15 @@ def main():
     session = requests.Session()
     session.headers.update({"User-Agent": "MTGCollectionDashboard/1.0 (personal use)"})
 
-    if not args.prune_only:
+    if args.dry_run:
+        print("Dry run — nothing will be downloaded or deleted.")
+    if not args.prune_only and not args.dry_run:
         print("Downloading missing images...")
         download_missing(conn, session, force=args.force)
 
     if not args.no_prune:
         print("Pruning orphaned images...")
-        prune_orphaned(conn)
+        prune_orphaned(conn, dry_run=args.dry_run)
 
     conn.close()
 

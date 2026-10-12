@@ -126,6 +126,31 @@ def resolve_or_fetch_card(conn, name=None, set_code=None, collector_number=None)
     return row["scryfall_id"], True, None
 
 
+def canonical_card_name(conn, typed):
+    """(name, error) for a name typed into a reference list. Tries
+    resolve_or_fetch_card first so the name is spelled the way Scryfall
+    spells it; if that fails (offline, unknown), the typed name is kept and
+    `error` says why, so the caller can still add it."""
+    typed = (typed or "").strip()
+    sid, _fetched, error = resolve_or_fetch_card(conn, name=typed)
+    if sid:
+        row = conn.execute("SELECT name FROM cards WHERE scryfall_id=?", (sid,)).fetchone()
+        return row[0], None
+    return typed, error
+
+
+def fetch_missing_names(conn, names, progress_callback=None):
+    """Fetch card data for names with no `cards` row. Network access, so
+    only called from an explicit button. Returns (fetched, failed) name lists."""
+    fetched, failed = [], []
+    for i, name in enumerate(names, start=1):
+        sid, _new, error = resolve_or_fetch_card(conn, name=name)
+        (failed if error or not sid else fetched).append(name)
+        if progress_callback:
+            progress_callback(i, len(names), name)
+    return fetched, failed
+
+
 def resolve_exact_printing(conn, set_code, collector_number):
     """Like resolve_or_fetch_card(), but for callers (e.g. order_import.py)
     that already know the exact printing they want and must NOT accept a

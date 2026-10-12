@@ -5,6 +5,7 @@ module can be unit-tested directly against mtg_collection.db (or the
 offline _test_mtg_collection.db) without launching the dashboard.
 """
 import itertools
+import os
 import sqlite3
 import pandas as pd
 
@@ -2430,87 +2431,168 @@ def collection_summary(conn):
 
 
 # ------------------------------------------------------------------
-# Game Changers overview (Editor -> Game Changers tab) — every card that's
-# EITHER Scryfall-flagged (c.is_game_changer) or carries a custom category
-# tag (game_changer_tags), across the whole database (not deck-scoped),
-# with art plus owned/assigned counters. Matches by card NAME (not
-# scryfall_id) for "owned"/"assigned" since the same Game Changer can be
-# owned across multiple printings and game_changer_tags is itself
-# name-keyed.
+# Game Changers / Mana Tags overviews (Card Database tabs) — UI plan
+# Phase 8. The tag tables (game_changer_tags, mana_tags) ARE the list:
+# they're hand-maintained and keyed by card NAME, so every tagged name
+# shows whether or not it has a `cards` row. `cards` only decorates it
+# (art, Scryfall flag) via a LEFT JOIN onto one representative printing,
+# and owned/deck counts match by NAME across printings. Game Changers also
+# keep every Scryfall-flagged card in the list (a newly flagged card
+# appears untagged), which is what makes the "Scryfall says" column useful:
+# tagged-but-not-flagged is the signal for stale entries.
 # ------------------------------------------------------------------
+def _tag_list_overview(conn, tag_table, with_scryfall_flag):
+    flagged_names = (
+        "UNION SELECT name FROM cards WHERE is_game_changer = 1" if with_scryfall_flag else ""
+    )
+    df = pd.read_sql_query(
+        f"""SELECT n.name,
+                  -- one representative printing: prefer one with art
+                  (SELECT c.scryfall_id FROM cards c WHERE c.name = n.name
+                   ORDER BY (c.local_image_path IS NULL), (c.image_uri IS NULL), c.scryfall_id
+                   LIMIT 1) AS scryfall_id,
+                  (SELECT MAX(c.is_game_changer) FROM cards c WHERE c.name = n.name) AS flag_raw,
+                  (SELECT GROUP_CONCAT(t.tag) FROM
+                       (SELECT DISTINCT tag FROM {tag_table} WHERE card_name = n.name ORDER BY tag) t
+                  ) AS tags
+           FROM (SELECT card_name AS name FROM {tag_table} {flagged_names}) n
+           GROUP BY n.name
+           ORDER BY n.name COLLATE NOCASE""",
+        conn,
+    )
+    cards = pd.read_sql_query(
+        "SELECT scryfall_id, image_uri, local_image_path FROM cards", conn
+    )
+    df = df.merge(cards, on="scryfall_id", how="left")
+    owned = pd.read_sql_query(
+        """SELECT c.name AS name, SUM(col.quantity) AS owned_qty
+           FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
+           GROUP BY c.name""",
+        conn,
+    )
+    assigned = pd.read_sql_query(
+        """SELECT c.name AS name, COUNT(DISTINCT dc.deck_id) AS deck_count
+           FROM deck_cards dc JOIN cards c ON c.scryfall_id = dc.scryfall_id
+           GROUP BY c.name""",
+        conn,
+    )
+    df = df.merge(owned, on="name", how="left").merge(assigned, on="name", how="left")
+    df["owned_qty"] = df["owned_qty"].fillna(0).astype(int)
+    df["deck_count"] = df["deck_count"].fillna(0).astype(int)
+    df["has_card"] = df["scryfall_id"].notna()
+    df["tags"] = df["tags"].fillna("")
+    tagged = df["tags"] != ""
+    if with_scryfall_flag:
+        df["scryfall_flag"] = df["flag_raw"].fillna(0).astype(int)
+        df["scryfall_status"] = [
+            "unknown (no card data)" if not has else ("flagged" if flag else "not flagged")
+            for has, flag in zip(df["has_card"], df["scryfall_flag"])
+        ]
+        # Maintenance signal: no card data, tagged but Scryfall disagrees, or
+        # Scryfall flags it and nothing has categorised it yet.
+        df["needs_attention"] = (
+            ~df["has_card"] | (tagged & (df["scryfall_flag"] == 0)) | (~tagged & (df["scryfall_flag"] == 1))
+        )
+    else:
+        df["needs_attention"] = ~df["has_card"]
+    df["ownership"] = [
+        "In a deck" if decks else ("Owned" if owned_qty else "Not owned")
+        for decks, owned_qty in zip(df["deck_count"], df["owned_qty"])
+    ]
+    return df.drop(columns=["flag_raw"])
+
+
 def game_changers_overview(conn):
-    df = pd.read_sql_query(
-        """SELECT c.scryfall_id, c.name, c.image_uri, c.local_image_path,
-                  c.is_game_changer AS scryfall_flag,
-                  GROUP_CONCAT(DISTINCT gct.tag) AS categories
-           FROM cards c
-           LEFT JOIN game_changer_tags gct ON gct.card_name = c.name
-           WHERE c.is_game_changer = 1 OR c.name IN (SELECT DISTINCT card_name FROM game_changer_tags)
-           GROUP BY c.name
-           ORDER BY c.name COLLATE NOCASE""",
-        conn,
-    )
-    if df.empty:
-        return df
-
-    owned = pd.read_sql_query(
-        """SELECT c.name AS name, SUM(col.quantity) AS owned_qty
-           FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
-           GROUP BY c.name""",
-        conn,
-    )
-    assigned = pd.read_sql_query(
-        """SELECT c.name AS name, COUNT(DISTINCT dc.deck_id) AS deck_count
-           FROM deck_cards dc JOIN cards c ON c.scryfall_id = dc.scryfall_id
-           GROUP BY c.name""",
-        conn,
-    )
-    df = df.merge(owned, on="name", how="left").merge(assigned, on="name", how="left")
-    df["owned_qty"] = df["owned_qty"].fillna(0).astype(int)
-    df["deck_count"] = df["deck_count"].fillna(0).astype(int)
-    return df
+    """One row per name in game_changer_tags OR flagged by Scryfall.
+    `categories` is the comma-joined custom categories."""
+    return _tag_list_overview(conn, "game_changer_tags", True).rename(columns={"tags": "categories"})
 
 
-# ------------------------------------------------------------------
-# Mana Tags overview (Editor -> Mana Tags tab, Prompt Pass 12) — every
-# card that already carries at least one optimized-mana category
-# (mana_tags), across the whole database (not deck-scoped), with art plus
-# owned/assigned counters. Unlike Game Changers, mana_tags has no
-# Scryfall-derived flag to fall back on (it's 100% hand-curated), so a
-# card only appears here once it's been tagged at least once — the
-# Editor's own "tag a card" search covers assigning a first-ever tag to a
-# card that isn't in this list yet. Matches by card NAME (not
-# scryfall_id), same reasoning as game_changers_overview.
-# ------------------------------------------------------------------
 def mana_tags_overview(conn):
-    df = pd.read_sql_query(
-        """SELECT c.scryfall_id, c.name, c.image_uri, c.local_image_path,
-                  GROUP_CONCAT(DISTINCT mt.tag) AS tags
-           FROM cards c
-           JOIN mana_tags mt ON mt.card_name = c.name
-           GROUP BY c.name
-           ORDER BY c.name COLLATE NOCASE""",
-        conn,
-    )
-    if df.empty:
-        return df
+    """One row per name in mana_tags; `tags` is the comma-joined tags."""
+    return _tag_list_overview(conn, "mana_tags", False)
 
-    owned = pd.read_sql_query(
-        """SELECT c.name AS name, SUM(col.quantity) AS owned_qty
-           FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
-           GROUP BY c.name""",
+
+# ------------------------------------------------------------------
+# Orphan report (Card Database -> Card Data "Clean up", UI plan Phase 8).
+# Read only: nothing here deletes. Every column that can point at a `cards`
+# row is listed once, so "unreferenced" means no reference of ANY kind (a
+# delete would otherwise fail a foreign key or lose history).
+# ------------------------------------------------------------------
+CARD_REFERENCES = [
+    ("collection", "scryfall_id"),
+    ("deck_cards", "scryfall_id"),
+    ("maybeboard", "scryfall_id"),
+    ("maybeboard", "replace_scryfall_id"),
+    ("deck_swap_queue", "remove_scryfall_id"),
+    ("deck_changes", "add_scryfall_id"),
+    ("deck_changes", "remove_scryfall_id"),
+    ("card_tags", "scryfall_id"),
+]
+
+
+def unreferenced_card_sql(conn):
+    """WHERE-clause fragment (against alias `c`) true for a card nothing
+    refers to: no lot, deck, shortlist/history row, tag, or tag-list name."""
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    parts = [
+        f"c.scryfall_id NOT IN (SELECT {col} FROM {tbl} WHERE {col} IS NOT NULL)"
+        for tbl, col in CARD_REFERENCES if tbl in tables
+    ]
+    parts.append("c.name NOT IN (SELECT card_name FROM game_changer_tags)")
+    parts.append("c.name NOT IN (SELECT card_name FROM mana_tags)")
+    return " AND ".join(parts)
+
+
+def orphan_report(conn, image_dir=None):
+    """Stale buckets, each a DataFrame: `unreferenced_cards`,
+    `stale_card_tags` (tag rows for a card no longer in that deck),
+    `orphan_image_files` (files in the image cache with no `cards` row) and
+    `missing_image_files` (cards whose local_image_path file is gone)."""
+    unreferenced = pd.read_sql_query(
+        f"""SELECT c.scryfall_id, c.name, c.set_code, c.collector_number
+            FROM cards c WHERE {unreferenced_card_sql(conn)}
+            ORDER BY c.name COLLATE NOCASE""",
         conn,
     )
-    assigned = pd.read_sql_query(
-        """SELECT c.name AS name, COUNT(DISTINCT dc.deck_id) AS deck_count
-           FROM deck_cards dc JOIN cards c ON c.scryfall_id = dc.scryfall_id
-           GROUP BY c.name""",
+    stale_tags = pd.read_sql_query(
+        """SELECT ct.deck_id, d.name AS deck, ct.scryfall_id, c.name AS card, t.label AS tag
+           FROM card_tags ct
+           JOIN tags t ON t.tag_id = ct.tag_id
+           LEFT JOIN decks d ON d.deck_id = ct.deck_id
+           LEFT JOIN cards c ON c.scryfall_id = ct.scryfall_id
+           WHERE NOT EXISTS (SELECT 1 FROM deck_cards dc
+                             WHERE dc.deck_id = ct.deck_id AND dc.scryfall_id = ct.scryfall_id)
+           ORDER BY d.name, c.name""",
         conn,
     )
-    df = df.merge(owned, on="name", how="left").merge(assigned, on="name", how="left")
-    df["owned_qty"] = df["owned_qty"].fillna(0).astype(int)
-    df["deck_count"] = df["deck_count"].fillna(0).astype(int)
-    return df
+
+    if image_dir is None:
+        from . import formatting
+        image_dir = os.path.join(formatting.STATIC_DIR, "image_cache")
+    known_ids = {r[0] for r in conn.execute("SELECT scryfall_id FROM cards")}
+    orphan_files = []
+    if os.path.isdir(image_dir):
+        for filename in sorted(os.listdir(image_dir)):
+            # deck_covers/ (user uploads) is a folder in here; skip folders.
+            if os.path.isfile(os.path.join(image_dir, filename)) \
+                    and os.path.splitext(filename)[0] not in known_ids:
+                orphan_files.append(filename)
+    static_dir = os.path.dirname(image_dir)  # local_image_path is relative to static/
+    missing = [
+        (sid, name, path)
+        for sid, name, path in conn.execute(
+            "SELECT scryfall_id, name, local_image_path FROM cards "
+            "WHERE local_image_path IS NOT NULL AND local_image_path != ''"
+        )
+        if not os.path.isfile(os.path.join(static_dir, path))
+    ]
+    return {
+        "unreferenced_cards": unreferenced,
+        "stale_card_tags": stale_tags,
+        "orphan_image_files": pd.DataFrame({"file": orphan_files}),
+        "missing_image_files": pd.DataFrame(missing, columns=["scryfall_id", "name", "local_image_path"]),
+    }
 
 
 # ------------------------------------------------------------------

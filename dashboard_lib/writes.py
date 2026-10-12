@@ -15,6 +15,7 @@ initial import, then manage things here from then on.
 """
 import datetime
 import logging
+import os
 import sqlite3
 
 from . import queries as q
@@ -232,6 +233,120 @@ def bulk_set_mana_tags(conn, edits):
             set_mana_tags(conn, card_name, tags)
             changed += 1
     return changed
+
+
+# ------------------------------------------------------------------
+# Reference-list maintenance (UI plan Phase 8) — remove names from a tag
+# list outright, and back the lists up as the CSVs migrate.py reads.
+# ------------------------------------------------------------------
+def delete_game_changer_names(conn, names):
+    """Remove every game_changer_tags row for each name (a stale list entry
+    dropped on purpose). Returns how many names had rows."""
+    return _delete_tag_list_names(conn, "game_changer_tags", names)
+
+
+def delete_mana_tag_names(conn, names):
+    """Remove every mana_tags row for each name. Returns how many names had rows."""
+    return _delete_tag_list_names(conn, "mana_tags", names)
+
+
+def _delete_tag_list_names(conn, table, names):
+    removed = 0
+    for name in names:
+        cur = conn.execute(f"DELETE FROM {table} WHERE card_name=?", (name,))
+        removed += 1 if cur.rowcount else 0
+    conn.commit()
+    return removed
+
+
+# Column headers match what migrate.py's load_static_reference_lists reads.
+# utf-8-sig + CRLF mirrors the hand-made files already in data/.
+REFERENCE_LIST_EXPORTS = [
+    ("game_changers.csv", "game_changer_tags", "Game Changers"),
+    ("mana_tags.csv", "mana_tags", "Optimized Mana"),
+]
+
+
+def export_reference_lists(conn, data_dir):
+    """Write game_changers.csv / mana_tags.csv into `data_dir` from the
+    live tag tables, so a migrate.py rebuild can't discard hand-curated
+    work. Returns {filename: row_count}."""
+    import csv
+    counts = {}
+    for filename, table, header in REFERENCE_LIST_EXPORTS:
+        rows = conn.execute(
+            f"SELECT card_name, tag FROM {table} ORDER BY card_name COLLATE NOCASE, tag COLLATE NOCASE"
+        ).fetchall()
+        with open(os.path.join(data_dir, filename), "w", encoding="utf-8-sig", newline="") as f:
+            out = csv.writer(f, lineterminator="\r\n")
+            out.writerow([header, "Tag"])
+            out.writerows([(r[0], r[1]) for r in rows])
+        counts[filename] = len(rows)
+    return counts
+
+
+# ------------------------------------------------------------------
+# Orphan cleanup (UI plan Phase 8). Each delete re-checks the reference
+# rules itself rather than trusting the ids it is handed, so a stale
+# report can never remove something that has since become used.
+# ------------------------------------------------------------------
+def delete_orphan_cards(conn, scryfall_ids):
+    """Delete `cards` rows that nothing references at all (see
+    queries.unreferenced_card_sql); any id that is referenced is skipped.
+    Returns the list of (scryfall_id, name) actually deleted."""
+    ok = {
+        r[0]: r[1]
+        for r in conn.execute(
+            f"SELECT c.scryfall_id, c.name FROM cards c WHERE {q.unreferenced_card_sql(conn)}"
+        )
+    }
+    deleted = [(sid, ok[sid]) for sid in scryfall_ids if sid in ok]
+    for sid, _ in deleted:
+        conn.execute("DELETE FROM cards WHERE scryfall_id=?", (sid,))
+    conn.commit()
+    if deleted:
+        logger.info("Deleted %d unreferenced card row(s): %s", len(deleted), ", ".join(n for _, n in deleted))
+    return deleted
+
+
+def delete_orphan_card_tags(conn, keys):
+    """Delete card_tags rows for a card that is no longer in that deck.
+    `keys` is [(deck_id, scryfall_id), ...]; a pair whose card is still in
+    the deck is skipped. Returns the number of tag rows deleted."""
+    deleted = 0
+    for deck_id, sid in keys:
+        cur = conn.execute(
+            """DELETE FROM card_tags WHERE deck_id=? AND scryfall_id=?
+               AND NOT EXISTS (SELECT 1 FROM deck_cards dc
+                               WHERE dc.deck_id=card_tags.deck_id AND dc.scryfall_id=card_tags.scryfall_id)""",
+            (deck_id, sid),
+        )
+        deleted += cur.rowcount
+    conn.commit()
+    return deleted
+
+
+def delete_orphan_image_files(conn, filenames, image_dir):
+    """Delete image-cache files that have no `cards` row. Only plain files
+    directly inside `image_dir` whose stem is not a known scryfall_id are
+    removed. Returns the filenames deleted."""
+    known = {r[0] for r in conn.execute("SELECT scryfall_id FROM cards")}
+    deleted = []
+    for filename in filenames:
+        path = os.path.join(image_dir, os.path.basename(filename))
+        if os.path.isfile(path) and os.path.splitext(os.path.basename(filename))[0] not in known:
+            os.remove(path)
+            deleted.append(filename)
+    return deleted
+
+
+def clear_missing_image_paths(conn, scryfall_ids):
+    """Null local_image_path on cards whose cached file no longer exists, so
+    they fall back to the remote image (and the next sync re-downloads)."""
+    for sid in scryfall_ids:
+        conn.execute("UPDATE cards SET local_image_path = NULL WHERE scryfall_id=?", (sid,))
+    conn.commit()
+    return len(scryfall_ids)
 
 
 # ------------------------------------------------------------------

@@ -3,6 +3,15 @@ Card Database page — whole-database, card-name-keyed reference data that
 isn't scoped to any one deck: Game Changer categories, optimized-mana
 tags, and a Scryfall data refresh across every card already tracked.
 
+The Game Changers and Mana Tags tabs show the WHOLE hand-maintained list
+(the tag tables), not just names that happen to have a `cards` row. Each
+has ownership / tag / "needs attention" filters, a Delete column, an "add by
+name" form, a "fetch card data" button for names with no card row, and an
+"Export lists to CSV" backup (migrate.py rebuilds the DB from CSVs and would
+otherwise discard these lists). The Card Data tab also has a "Clean up" panel
+listing stale rows (unreferenced cards, tags for cards no longer in a deck,
+orphaned image files) with a confirm step before anything is deleted.
+
 The Card Data tab also carries the bulk "Check all decks" Commander
 Spellbook combo refresh — the per-deck version lives on the Decks page,
 where the results are actually read; this is the "I've been editing
@@ -38,13 +47,177 @@ conn = db.get_connection()
 st.title("🗄️ Card Database")
 cv.how_it_works(
     "Everything here writes straight to the database — no CSV editing or re-migration needed.",
-    "**Game Changers** lists every card that's either flagged by Scryfall's live Game Changer "
-    "field or already carries one of your custom categories — across your whole database, not "
-    "just one deck. *Owned* sums collection quantity across all printings; *In decks* counts how "
-    "many of your decks currently run the card.",
+    "**Game Changers** lists every name on your custom list plus every card Scryfall flags as a "
+    "Game Changer — whether or not it's in your collection. *Scryfall says* flags entries that "
+    "Scryfall no longer lists. *Owned* sums collection quantity across all printings; *In decks* "
+    "counts how many of your decks currently run the card.",
 )
 
 db.refresh_data_button()
+
+ORPHAN_LABELS = {
+    "unreferenced_cards": "unreferenced card(s)",
+    "stale_card_tags": "stale deck tag(s)",
+    "orphan_image_files": "orphan image file(s)",
+    "missing_image_files": "missing image file(s)",
+}
+
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+OWNERSHIP_FILTERS = ["All", "Owned", "In a deck", "Not owned"]
+
+
+def _split_labels(raw):
+    return [] if pd.isna(raw) or not str(raw).strip() else [x.strip() for x in str(raw).split(",")]
+
+
+def _render_reference_list(cfg):
+    """Shared body of the Game Changers / Mana Tags tabs: the tag table is
+    the list, `cards` only decorates it (see queries._tag_list_overview)."""
+    pre = cfg["prefix"]
+    col_label, tags_col = cfg["noun"], cfg["tags_col"]
+    df = cfg["load"](conn)
+    unlinked = df.loc[~df["has_card"], "name"].tolist()
+
+    st.caption(
+        f"{len(df)} name(s) on this list · {len(unlinked)} with no card data yet "
+        f"(no art" + (" or Scryfall status" if cfg["has_flag"] else "") + ")."
+    )
+
+    with st.expander("➕ Add a card by name"):
+        st.caption(
+            "Works for cards that aren't in your database. The name is looked up on Scryfall so "
+            "it's spelled the way Scryfall spells it; offline, it's kept exactly as typed."
+        )
+        add_name = st.text_input("Card name", key=f"{pre}_add_name")
+        add_labels = st.text_input(f"{col_label} (comma-separated)", key=f"{pre}_add_labels")
+        if st.button("Add to list", key=f"{pre}_add_btn"):
+            labels = _split_labels(add_labels)
+            if not add_name.strip() or not labels:
+                st.warning("Enter a card name and at least one entry.")
+            else:
+                name, error = card_resolver.canonical_card_name(conn, add_name)
+                cfg["set_tags"](conn, name, cfg["get_map"](conn).get(name, []) + labels)
+                loaders.invalidate_reference_caches()
+                st.toast(f"Added '{name}'.", icon="✅")
+                if error:
+                    st.toast("Couldn't look it up on Scryfall, so it was kept as typed.", icon="⚠️")
+                st.rerun()
+
+    if unlinked:
+        if not card_resolver.scryfall_available():
+            st.caption("Install the `requests` package to fetch card data for the unlinked names.")
+        elif st.button(f"🌐 Fetch card data for {len(unlinked)} unlinked name(s)", key=f"{pre}_fetch_btn",
+                       help="Looks each name up on Scryfall (network) so it gets art and a Game Changer "
+                            "flag. Only runs when you press this."):
+            bar = st.progress(0.0)
+            fetched, failed = card_resolver.fetch_missing_names(
+                conn, unlinked, progress_callback=lambda i, n, _name: bar.progress(i / n))
+            loaders.invalidate_reference_caches()
+            st.toast(f"Fetched {len(fetched)} card(s)" + (f"; {len(failed)} not found." if failed else "."), icon="✅")
+            if failed:
+                st.session_state[f"{pre}_fetch_failed"] = failed
+            st.rerun()
+    if st.session_state.get(f"{pre}_fetch_failed"):
+        st.warning("Not found on Scryfall: " + ", ".join(st.session_state[f"{pre}_fetch_failed"]))
+
+    if df.empty:
+        st.info("This list is empty — add a card by name above.")
+    else:
+        f1, f2, f3 = st.columns([2, 2, 3])
+        search = f1.text_input("Search by card name", key=f"{pre}_search")
+        own = f2.selectbox("Ownership", OWNERSHIP_FILTERS, key=f"{pre}_f_own")
+        all_labels = sorted({t for v in df[tags_col] for t in v.split(",") if t}, key=str.lower)
+        picked = f3.multiselect(col_label, all_labels, key=f"{pre}_f_tags")
+        attn = st.checkbox(
+            "Needs attention only", key=f"{pre}_f_attn",
+            help=cfg["attn_help"],
+        )
+
+        scoped = df
+        if search:
+            scoped = scoped[scoped["name"].str.contains(search, case=False, na=False, regex=False)]
+        if own == "Owned":
+            scoped = scoped[scoped["owned_qty"] > 0]
+        elif own == "In a deck":
+            scoped = scoped[scoped["deck_count"] > 0]
+        elif own == "Not owned":
+            scoped = scoped[scoped["owned_qty"] == 0]
+        if picked:
+            scoped = scoped[scoped[tags_col].apply(lambda v: bool(set(v.split(",")) & set(picked)))]
+        if attn:
+            scoped = scoped[scoped["needs_attention"]]
+        st.caption(f"Showing {len(scoped)} of {len(df)}.")
+
+        rows = []
+        for _, r in scoped.iterrows():
+            local = r["local_image_path"] if pd.notna(r["local_image_path"]) else None
+            row = {
+                "image_uri": (fmt.local_image_url(local) if local else None)
+                             or (r["image_uri"] if pd.notna(r["image_uri"]) else None),
+                "Card": r["name"],
+            }
+            if cfg["has_flag"]:
+                row["Scryfall says"] = r["scryfall_status"]
+            row[col_label] = r[tags_col]
+            row["Status"] = r["ownership"]
+            row["Owned"] = int(r["owned_qty"])
+            row["In decks"] = int(r["deck_count"])
+            row["Delete"] = False
+            rows.append(row)
+        order = ["image_uri", "Card"] + (["Scryfall says"] if cfg["has_flag"] else []) + [
+            col_label, "Status", "Owned", "In decks", "Delete"]
+        edited = st.data_editor(
+            pd.DataFrame(rows),
+            column_config={
+                "image_uri": st.column_config.ImageColumn("Art", width="small"),
+                "Card": st.column_config.TextColumn("Card", disabled=True),
+                "Scryfall says": st.column_config.TextColumn("Scryfall says", disabled=True),
+                col_label: st.column_config.TextColumn(f"{col_label} (comma-separated)"),
+                "Status": st.column_config.TextColumn("Status", disabled=True),
+                "Owned": st.column_config.NumberColumn("Owned", disabled=True),
+                "In decks": st.column_config.NumberColumn("In decks", disabled=True),
+                "Delete": st.column_config.CheckboxColumn(
+                    "Delete", help="Tick, then save, to remove this name from the list entirely."),
+            },
+            column_order=order, hide_index=True, width="stretch",
+            # Keyed by every filter (not a static key) so changing one gives a
+            # genuinely fresh widget instead of Streamlit reapplying this
+            # editor's in-progress edits to a different set of rows by position.
+            key=f"{pre}_editor_{hash((search, own, tuple(picked), attn))}",
+        )
+        if st.button("💾 Save changes", key=f"{pre}_save"):
+            to_delete = [row["Card"] for _, row in edited.iterrows() if row["Delete"]]
+            edits = {row["Card"]: _split_labels(row[col_label])
+                     for _, row in edited.iterrows() if not row["Delete"]}
+            removed = cfg["delete_names"](conn, to_delete)
+            changed = cfg["bulk_set"](conn, edits)
+            loaders.invalidate_reference_caches()
+            st.toast(f"Updated {changed} card(s)" + (f", removed {removed} from the list." if removed else "."), icon="✅")
+            st.rerun()
+
+    st.divider()
+    if st.button("💾 Export lists to CSV", key=f"{pre}_export",
+                 help="Writes data/game_changers.csv and data/mana_tags.csv from the database, "
+                      "so re-running the migration can't discard your edits to these lists."):
+        counts = writes.export_reference_lists(conn, DATA_DIR)
+        st.toast("Wrote " + ", ".join(f"data/{f} ({n} rows)" for f, n in counts.items()), icon="✅")
+
+
+GC_CFG = {
+    "prefix": "editor_gc", "noun": "Categories", "tags_col": "categories", "has_flag": True,
+    "load": loaders.load_game_changers_overview,
+    "set_tags": writes.set_game_changer_tags, "get_map": writes.get_game_changer_tags_map,
+    "bulk_set": writes.bulk_set_game_changer_tags, "delete_names": writes.delete_game_changer_names,
+    "attn_help": "No card data, tagged but Scryfall no longer flags it, or Scryfall flags it but "
+                 "it has no category.",
+}
+MT_CFG = {
+    "prefix": "editor_mt", "noun": "Tags", "tags_col": "tags", "has_flag": False,
+    "load": loaders.load_mana_tags_overview,
+    "set_tags": writes.set_mana_tags, "get_map": writes.get_mana_tags_map,
+    "bulk_set": writes.bulk_set_mana_tags, "delete_names": writes.delete_mana_tag_names,
+    "attn_help": "Names with no card data (no art yet).",
+}
 
 tab_gc, tab_manatags, tab_carddata = st.tabs(["Game Changers", "Mana Tags", "Card Data"])
 
@@ -96,58 +269,7 @@ with tab_gc:
 
     st.divider()
 
-    gc_df = loaders.load_game_changers_overview(conn)
-    if gc_df.empty:
-        st.info(
-            "No Game Changers found yet — cards only show up here once they're already in "
-            "your database (owned, or run in a deck) and either Scryfall-flagged or carrying "
-            "one of your custom categories."
-        )
-    else:
-        gc_search = st.text_input("Search by card name", key="editor_gc_search")
-        gc_scoped = gc_df[gc_df["name"].str.contains(gc_search, case=False, na=False, regex=False)] if gc_search else gc_df
-
-        gc_rows = [
-            {
-                "scryfall_id": r["scryfall_id"],
-                "image_uri": fmt.local_image_url(r["local_image_path"]) or r["image_uri"],
-                "Card": r["name"],
-                "Scryfall flag": bool(r["scryfall_flag"]),
-                "Categories": r["categories"] if pd.notna(r["categories"]) else "",
-                "Owned": int(r["owned_qty"]),
-                "In decks": int(r["deck_count"]),
-            }
-            for _, r in gc_scoped.iterrows()
-        ]
-        gc_editor_df = pd.DataFrame(gc_rows)
-        gc_edited = st.data_editor(
-            gc_editor_df,
-            column_config={
-                "image_uri": st.column_config.ImageColumn("Art", width="small"),
-                "Card": st.column_config.TextColumn("Card", disabled=True),
-                "Scryfall flag": st.column_config.CheckboxColumn("Scryfall flag", disabled=True),
-                "Categories": st.column_config.TextColumn("Categories (comma-separated)"),
-                "Owned": st.column_config.NumberColumn("Owned", disabled=True),
-                "In decks": st.column_config.NumberColumn("In decks", disabled=True),
-            },
-            column_order=["image_uri", "Card", "Scryfall flag", "Categories", "Owned", "In decks"],
-            hide_index=True, width="stretch",
-            # Keyed by the search text (not a static key) so changing the
-            # search gives a genuinely fresh widget instead of Streamlit
-            # reapplying this editor's in-progress edits against a
-            # different set of rows by row position.
-            key=f"editor_gc_editor_{gc_search}",
-        )
-        if st.button("💾 Save category changes", key="editor_gc_save"):
-            gc_edits = {}
-            for _, row in gc_edited.iterrows():
-                raw = row["Categories"]
-                labels = [] if pd.isna(raw) or not str(raw).strip() else [x.strip() for x in str(raw).split(",")]
-                gc_edits[row["Card"]] = labels
-            changed = writes.bulk_set_game_changer_tags(conn, gc_edits)
-            loaders.invalidate_reference_caches()
-            st.toast(f"Updated categories on {changed} card(s).", icon="✅")
-            st.rerun()
+    _render_reference_list(GC_CFG)
 
 # ------------------------------------------------------------------
 # Mana Tags (Prompt Pass 12 / prompt5.txt) — card_name-keyed (NOT
@@ -245,51 +367,7 @@ with tab_manatags:
 
     st.divider()
 
-    mt_df = loaders.load_mana_tags_overview(conn)
-    if mt_df.empty:
-        st.caption("No cards carry an optimized-mana tag yet — use **Tag a card** above to assign the first one.")
-    else:
-        mt_bulk_search = st.text_input("Search by card name", key="editor_mt_bulk_search")
-        mt_scoped = (
-            mt_df[mt_df["name"].str.contains(mt_bulk_search, case=False, na=False, regex=False)]
-            if mt_bulk_search else mt_df
-        )
-
-        mt_rows = [
-            {
-                "scryfall_id": r["scryfall_id"],
-                "image_uri": fmt.local_image_url(r["local_image_path"]) or r["image_uri"],
-                "Card": r["name"],
-                "Tags": r["tags"] if pd.notna(r["tags"]) else "",
-                "Owned": int(r["owned_qty"]),
-                "In decks": int(r["deck_count"]),
-            }
-            for _, r in mt_scoped.iterrows()
-        ]
-        mt_editor_df = pd.DataFrame(mt_rows)
-        mt_edited = st.data_editor(
-            mt_editor_df,
-            column_config={
-                "image_uri": st.column_config.ImageColumn("Art", width="small"),
-                "Card": st.column_config.TextColumn("Card", disabled=True),
-                "Tags": st.column_config.TextColumn("Tags (comma-separated)"),
-                "Owned": st.column_config.NumberColumn("Owned", disabled=True),
-                "In decks": st.column_config.NumberColumn("In decks", disabled=True),
-            },
-            column_order=["image_uri", "Card", "Tags", "Owned", "In decks"],
-            hide_index=True, width="stretch",
-            key=f"editor_mt_editor_{mt_bulk_search}",
-        )
-        if st.button("💾 Save tag changes", key="editor_mt_save_bulk"):
-            mt_edits = {}
-            for _, row in mt_edited.iterrows():
-                raw = row["Tags"]
-                labels = [] if pd.isna(raw) or not str(raw).strip() else [x.strip() for x in str(raw).split(",")]
-                mt_edits[row["Card"]] = labels
-            changed = writes.bulk_set_mana_tags(conn, mt_edits)
-            loaders.invalidate_reference_caches()
-            st.toast(f"Updated mana tags on {changed} card(s).", icon="✅")
-            st.rerun()
+    _render_reference_list(MT_CFG)
 
 # ------------------------------------------------------------------
 # Card Data — refresh Reserved List / Game Changer / legality / price
@@ -340,8 +418,77 @@ with tab_carddata:
             )
         else:
             st.caption("Nothing to prune from the collection this time.")
+        _orphans = q.orphan_report(conn)
+        st.caption(
+            "Stale data left (see **Clean up** below): "
+            + ", ".join(f"{len(_orphans[k])} {label}" for k, label in ORPHAN_LABELS.items())
+        )
 
     st.divider()
+
+    st.divider()
+
+    # ------------------------------------------------------------------
+    # Clean up (UI plan Phase 8): read-only report of stale rows; each bucket
+    # deletes only after its confirm box is ticked, and the delete helpers
+    # re-check the reference rules themselves.
+    # ------------------------------------------------------------------
+    st.markdown(
+        "**Clean up**",
+        help=(
+            "Stale rows nothing uses. Hidden by default and never deleted automatically — each "
+            "group lists exactly what will go and needs its confirm box ticked first. A card used "
+            "by a lot, deck, shortlist, tag or one of your Game Changer / Mana Tag lists is never "
+            "listed."
+        ),
+    )
+    orphans = q.orphan_report(conn)
+    image_dir = os.path.join(fmt.STATIC_DIR, "image_cache")
+    if not any(len(df) for df in orphans.values()):
+        st.caption("Nothing stale — every card, tag and image is accounted for.")
+
+    def _cleanup_bucket(key, title, note, cols, action):
+        frame = orphans[key]
+        if frame.empty:
+            return
+        with st.expander(f"{title} ({len(frame)})"):
+            st.caption(note)
+            st.dataframe(frame[cols], hide_index=True, width="stretch")
+            ok = st.checkbox(f"Yes, delete these {len(frame)}", key=f"carddb_clean_{key}_ok")
+            if st.button("🗑️ Delete", key=f"carddb_clean_{key}_btn", disabled=not ok):
+                n = action(frame)
+                loaders.invalidate_reference_caches()
+                loaders.invalidate_deck_caches()
+                loaders.invalidate_collection_caches()
+                st.toast(f"Deleted {n}.", icon="✅")
+                st.rerun()
+
+    _cleanup_bucket(
+        "unreferenced_cards", "Unreferenced cards",
+        "Card rows with no lot, deck, shortlist, tag or list entry. Cheap to keep and re-fetchable, "
+        "so this is opt-in.",
+        ["name", "set_code", "collector_number"],
+        lambda f: len(writes.delete_orphan_cards(conn, f["scryfall_id"].tolist())),
+    )
+    _cleanup_bucket(
+        "stale_card_tags", "Deck tags for cards no longer in that deck",
+        "Strategy/rule-0 tags left behind when a card left its deck.",
+        ["deck", "card", "tag"],
+        lambda f: writes.delete_orphan_card_tags(
+            conn, list(f[["deck_id", "scryfall_id"]].drop_duplicates().itertuples(index=False, name=None))),
+    )
+    _cleanup_bucket(
+        "orphan_image_files", "Image files with no card row",
+        "Files in static/image_cache/ that no card refers to.",
+        ["file"],
+        lambda f: len(writes.delete_orphan_image_files(conn, f["file"].tolist(), image_dir)),
+    )
+    _cleanup_bucket(
+        "missing_image_files", "Cards pointing at a missing image file",
+        "Clears the dead path; the next image sync re-downloads it.",
+        ["name", "local_image_path"],
+        lambda f: writes.clear_missing_image_paths(conn, f["scryfall_id"].tolist()),
+    )
 
     # ------------------------------------------------------------------
     # Commander Spellbook combos — all decks at once. The per-deck version

@@ -169,8 +169,12 @@ The one-time/rare CSV migration is deliberately **not** a numbered option —
 run (see "Migration is one-way" below), so it's tucked behind typing the
 word `migrate` instead of a digit, and asks you to type `REBUILD` to
 confirm before it actually touches anything. The first time you run
-`run.py` with no `mtg_collection.db` yet, it'll tell you to type
-`migrate` to get started.
+`run.py` with no `mtg_collection.db` yet, the menu shows only Exit and
+tells you to type `migrate` to get started.
+
+To skip the menu and open the app directly, run `python run.py --dashboard`
+(`run.bat --dashboard`, `./run.sh --dashboard` and `./run.command --dashboard`
+work too). It exits with a message if there's no database yet.
 
 If `requirements.txt` ever changes again, you'll need to install the new
 package yourself into your active environment — the launcher won't do it
@@ -318,9 +322,13 @@ jump to the same deck's other views.
   mode instead, so you can filter and edit in the same view.
 - **Card Database** — whole-database, card-name-keyed reference data, not
   scoped to any one deck, no CSV editing required:
-  - **Game Changers** — every card that's either Scryfall-flagged or
-    already carries one of your custom categories, across your whole
-    database (not just one deck), shown with card art. Edit categories
+  - **Game Changers** — your whole custom list plus every
+    Scryfall-flagged card, whether or not it's in your database (names with
+    no card data show without art; a *Scryfall says* column flags entries
+    Scryfall no longer lists). Filter by ownership, category or "needs
+    attention", delete stale names, add a name directly, fetch missing card
+    data, and **Export lists to CSV** so a re-migration can't lose your
+    edits. The Mana Tags tab works the same way. Edit categories
     per card (picked from a master category dropdown you manage, same
     pattern as Themes), and see at a glance how many copies you own and
     how many of your decks currently run it.

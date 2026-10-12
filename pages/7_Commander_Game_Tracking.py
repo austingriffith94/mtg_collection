@@ -11,7 +11,9 @@ edited in place, not just deleted and re-logged from scratch.
 
 Two tabs:
   - "Log & manage games" — the log-a-new-game form, the rendered game
-    history, and Edit/Delete expanders.
+    history, and Edit/Delete buttons that open st.dialog modals (Phase 5;
+    Delete's dialog adds a confirm checkbox — the old inline expander had
+    none).
   - "Player & deck stats" — win-rate-by-deck/by-player tables, plus a
     Prompt-Pass-7 ELO rating table and head-to-head win-rate matrix —
     moved into its own tab so long game logs don't push these metrics
@@ -100,6 +102,108 @@ def _render_seat_widgets(key_prefix, seat_num, deck_index=0, opp_default="", pla
     return (deck_pick, opp_pick, opp_free, player_pick, player_free, is_winner)
 
 
+@st.dialog("✏️ Edit a logged game")
+def _edit_game_dialog(games_df, game_ids):
+    """Phase 5: was an inline st.expander. A dialog keeps the edit form off
+    the main page and, per the dialog rules (one open at a time, no
+    nesting), is a single self-contained job."""
+    st.caption("Pick a game to load it into an editable form below, then save your changes.")
+    edit_gid = st.selectbox(
+        "Pick a game", game_ids,
+        format_func=lambda gid: gf.format_game_option(gid, games_df),
+        key="gt_edit_choice",
+    )
+    detail = q.game_detail(conn, edit_gid)
+    if detail is None:
+        st.info("That game no longer exists — pick another.")
+        return
+
+    existing_by_seat = {p["seat"]: p for p in detail["participants"]}
+    key_prefix = f"gt_edit_{edit_gid}"  # keying by game_id forces fresh
+    # defaults whenever a different game is selected, since
+    # Streamlit widgets otherwise keep whatever value they
+    # last held under a given key rather than re-reading
+    # `value=`/`index=` on every rerun.
+
+    with st.form(f"{key_prefix}_form"):
+        default_date = (
+            datetime.date.fromisoformat(detail["date"]) if detail["date"] else datetime.date.today()
+        )
+        edit_date = st.date_input("Date", value=default_date, key=f"{key_prefix}_date")
+
+        edit_seat_widgets = []
+        for i in range(1, 5):
+            existing = existing_by_seat.get(i)
+            if existing and existing["deck_id"] is not None and existing["deck_name"] in deck_names:
+                deck_index = ([FREE_TEXT_OPTION] + deck_names).index(existing["deck_name"])
+            else:
+                deck_index = 0
+            opp_default = existing["deck_name"] if existing and existing["deck_id"] is None else ""
+            player_default = (existing.get("player_name") or "") if existing else ""
+            winner_default = bool(existing["is_winner"]) if existing else False
+            edit_seat_widgets.append(
+                _render_seat_widgets(
+                    key_prefix, i, deck_index=deck_index, opp_default=opp_default,
+                    player_default=player_default, winner_default=winner_default,
+                )
+            )
+
+        edit_note = st.text_area(
+            "Notes (optional)", value=detail.get("note") or "", key=f"{key_prefix}_note"
+        )
+        save_clicked = st.form_submit_button("💾 Save changes")
+
+    if save_clicked:
+        participants, val_err = gf.validate_and_build_participants(edit_seat_widgets, label_to_id)
+        if val_err:
+            st.error(val_err)
+        else:
+            ok, err = writes.update_game(
+                conn, edit_gid, date=edit_date.isoformat(),
+                note=edit_note.strip() or None, participants=participants,
+            )
+            if err:
+                st.error(err)
+            else:
+                loaders.invalidate_game_tracking_caches()
+                st.toast("Game updated.", icon="✅")
+                cv.close_dialog("gt_edit_dialog")
+                st.rerun()
+    if st.button("Cancel", key="gt_edit_cancel"):
+        cv.close_dialog("gt_edit_dialog")
+        st.rerun()
+
+
+@st.dialog("🗑️ Delete a logged game")
+def _delete_game_dialog(games_df, game_ids):
+    """Phase 5: the old inline expander had no confirmation step at all —
+    one misclick deleted a game outright. This adds one."""
+    st.caption("For correcting a mis-entered log — not part of normal play.")
+    del_gid = st.selectbox(
+        "Pick a game", game_ids,
+        format_func=lambda gid: gf.format_game_option(gid, games_df),
+        key="gt_delete_choice",
+    )
+    game_row = games_df[games_df["game_id"] == del_gid].iloc[0]
+    st.warning(f"This will permanently delete the game logged on **{game_row['date'] or 'Unknown date'}**.")
+    for line in game_row["participants"]:
+        st.caption(f"- {line}")
+    confirmed = st.checkbox("I understand this cannot be undone", key="gt_delete_confirm")
+    del_col1, del_col2 = st.columns(2)
+    if del_col1.button("🗑️ Delete this game", key="gt_delete_btn", type="primary", disabled=not confirmed):
+        deleted, err = writes.delete_game(conn, del_gid)
+        if err:
+            st.error(err)
+        else:
+            loaders.invalidate_game_tracking_caches()
+            st.toast("Game deleted.", icon="✅")
+            cv.close_dialog("gt_delete_dialog")
+            st.rerun()
+    if del_col2.button("Cancel", key="gt_delete_cancel"):
+        cv.close_dialog("gt_delete_dialog")
+        st.rerun()
+
+
 tab_log, tab_stats = st.tabs(["\U0001F4DD Log & manage games", "\U0001F4CA Player & deck stats"])
 
 # ------------------------------------------------------------------
@@ -133,7 +237,7 @@ with tab_log:
                 st.error(err)
             else:
                 loaders.invalidate_game_tracking_caches()
-                st.success("Game logged.")
+                st.toast("Game logged.", icon="✅")
                 st.rerun()
 
     st.divider()
@@ -157,83 +261,15 @@ with tab_log:
 
         game_ids = games_df["game_id"].tolist()
 
-        with st.expander("✏️ Edit a logged game"):
-            st.caption("Pick a game to load it into an editable form below, then save your changes.")
-            edit_gid = st.selectbox(
-                "Pick a game", game_ids,
-                format_func=lambda gid: gf.format_game_option(gid, games_df),
-                key="gt_edit_choice",
-            )
-            detail = q.game_detail(conn, edit_gid)
-            if detail is None:
-                st.info("That game no longer exists — pick another.")
-            else:
-                existing_by_seat = {p["seat"]: p for p in detail["participants"]}
-                key_prefix = f"gt_edit_{edit_gid}"  # keying by game_id forces fresh
-                # defaults whenever a different game is selected, since
-                # Streamlit widgets otherwise keep whatever value they
-                # last held under a given key rather than re-reading
-                # `value=`/`index=` on every rerun.
-
-                with st.form(f"{key_prefix}_form"):
-                    default_date = (
-                        datetime.date.fromisoformat(detail["date"]) if detail["date"] else datetime.date.today()
-                    )
-                    edit_date = st.date_input("Date", value=default_date, key=f"{key_prefix}_date")
-
-                    edit_seat_widgets = []
-                    for i in range(1, 5):
-                        existing = existing_by_seat.get(i)
-                        if existing and existing["deck_id"] is not None and existing["deck_name"] in deck_names:
-                            deck_index = ([FREE_TEXT_OPTION] + deck_names).index(existing["deck_name"])
-                        else:
-                            deck_index = 0
-                        opp_default = existing["deck_name"] if existing and existing["deck_id"] is None else ""
-                        player_default = (existing.get("player_name") or "") if existing else ""
-                        winner_default = bool(existing["is_winner"]) if existing else False
-                        edit_seat_widgets.append(
-                            _render_seat_widgets(
-                                key_prefix, i, deck_index=deck_index, opp_default=opp_default,
-                                player_default=player_default, winner_default=winner_default,
-                            )
-                        )
-
-                    edit_note = st.text_area(
-                        "Notes (optional)", value=detail.get("note") or "", key=f"{key_prefix}_note"
-                    )
-                    save_clicked = st.form_submit_button("💾 Save changes")
-
-                if save_clicked:
-                    participants, val_err = gf.validate_and_build_participants(edit_seat_widgets, label_to_id)
-                    if val_err:
-                        st.error(val_err)
-                    else:
-                        ok, err = writes.update_game(
-                            conn, edit_gid, date=edit_date.isoformat(),
-                            note=edit_note.strip() or None, participants=participants,
-                        )
-                        if err:
-                            st.error(err)
-                        else:
-                            loaders.invalidate_game_tracking_caches()
-                            st.success("Game updated.")
-                            st.rerun()
-
-        with st.expander("🗑️ Delete a logged game"):
-            st.caption("For correcting a mis-entered log — not part of normal play.")
-            del_gid = st.selectbox(
-                "Pick a game", game_ids,
-                format_func=lambda gid: gf.format_game_option(gid, games_df),
-                key="gt_delete_choice",
-            )
-            if st.button("🗑️ Delete this game", key="gt_delete_btn"):
-                deleted, err = writes.delete_game(conn, del_gid)
-                if err:
-                    st.error(err)
-                else:
-                    loaders.invalidate_game_tracking_caches()
-                    st.success("Game deleted.")
-                    st.rerun()
+        manage_col1, manage_col2 = st.columns(2)
+        if manage_col1.button("✏️ Edit a logged game", key="gt_edit_open"):
+            cv.open_dialog("gt_edit_dialog")
+        if manage_col2.button("🗑️ Delete a logged game", key="gt_delete_open"):
+            cv.open_dialog("gt_delete_dialog")
+        if cv.dialog_is_open("gt_edit_dialog"):
+            _edit_game_dialog(games_df, game_ids)
+        if cv.dialog_is_open("gt_delete_dialog"):
+            _delete_game_dialog(games_df, game_ids)
 
 # ------------------------------------------------------------------
 # Tab 2: win rate comparisons, ELO, head-to-head (Prompt Pass 7 moved

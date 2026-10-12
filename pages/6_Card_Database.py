@@ -56,7 +56,9 @@ with tab_gc:
         "'In decks' counts how many of your decks currently run it."
     )
 
-    with st.expander("⚙️ Manage the master category list"):
+    @st.dialog("⚙️ Manage the master category list")
+    def _manage_gc_catalog_dialog():
+        """Phase 5: was an inline st.expander."""
         st.caption(
             "Adding/removing here only changes what's offered below — it never touches any "
             "card's existing category assignments."
@@ -67,7 +69,7 @@ with tab_gc:
             if new_gc_category.strip():
                 writes.add_game_changer_category(conn, new_gc_category.strip())
                 loaders.invalidate_reference_caches()
-                st.success(f"Added '{new_gc_category.strip()}' to the master list.")
+                st.toast(f"Added '{new_gc_category.strip()}' to the master list.", icon="✅")
                 st.rerun()
             else:
                 st.warning("Enter a category name.")
@@ -79,10 +81,19 @@ with tab_gc:
             if st.button("🗑️ Remove from master list", key="editor_gc_catalog_remove_btn"):
                 writes.remove_game_changer_category(conn, gc_catalog_remove)
                 loaders.invalidate_reference_caches()
-                st.success(f"Removed '{gc_catalog_remove}' from the master list.")
+                st.toast(f"Removed '{gc_catalog_remove}' from the master list.", icon="✅")
                 st.rerun()
         else:
             st.caption("Master category list is empty.")
+
+        if st.button("Close", key="editor_gc_catalog_close"):
+            cv.close_dialog("editor_gc_catalog_dialog")
+            st.rerun()
+
+    if st.button("⚙️ Manage the master category list", key="editor_gc_catalog_open"):
+        cv.open_dialog("editor_gc_catalog_dialog")
+    if cv.dialog_is_open("editor_gc_catalog_dialog"):
+        _manage_gc_catalog_dialog()
 
     st.divider()
 
@@ -136,7 +147,7 @@ with tab_gc:
                 gc_edits[row["Card"]] = labels
             changed = writes.bulk_set_game_changer_tags(conn, gc_edits)
             loaders.invalidate_reference_caches()
-            st.success(f"Updated categories on {changed} card(s).")
+            st.toast(f"Updated categories on {changed} card(s).", icon="✅")
             st.rerun()
 
 # ------------------------------------------------------------------
@@ -159,7 +170,9 @@ with tab_manatags:
         "whole database, not deck-scoped, same as Game Changers."
     )
 
-    with st.expander("⚙️ Manage the master tag list"):
+    @st.dialog("⚙️ Manage the master tag list")
+    def _manage_mt_catalog_dialog():
+        """Phase 5: was an inline st.expander."""
         st.caption(
             "Adding/removing here only changes what's offered below — it never touches any "
             "card's existing tag assignments."
@@ -170,7 +183,7 @@ with tab_manatags:
             if new_mt_tag.strip():
                 writes.add_mana_tag_to_catalog(conn, new_mt_tag.strip())
                 loaders.invalidate_reference_caches()
-                st.success(f"Added '{new_mt_tag.strip()}' to the master list.")
+                st.toast(f"Added '{new_mt_tag.strip()}' to the master list.", icon="✅")
                 st.rerun()
             else:
                 st.warning("Enter a tag name.")
@@ -182,10 +195,19 @@ with tab_manatags:
             if st.button("🗑️ Remove from master list", key="editor_mt_catalog_remove_btn"):
                 writes.remove_mana_tag_from_catalog(conn, mt_catalog_remove)
                 loaders.invalidate_reference_caches()
-                st.success(f"Removed '{mt_catalog_remove}' from the master list.")
+                st.toast(f"Removed '{mt_catalog_remove}' from the master list.", icon="✅")
                 st.rerun()
         else:
             st.caption("Master tag list is empty.")
+
+        if st.button("Close", key="editor_mt_catalog_close"):
+            cv.close_dialog("editor_mt_catalog_dialog")
+            st.rerun()
+
+    if st.button("⚙️ Manage the master tag list", key="editor_mt_catalog_open"):
+        cv.open_dialog("editor_mt_catalog_dialog")
+    if cv.dialog_is_open("editor_mt_catalog_dialog"):
+        _manage_mt_catalog_dialog()
 
     st.divider()
 
@@ -216,7 +238,7 @@ with tab_manatags:
             labels = [x.strip() for x in mt_tags_input.split(",") if x.strip()]
             writes.set_mana_tags(conn, mt_pick, labels)
             loaders.invalidate_reference_caches()
-            st.success(f"Updated mana tags on '{mt_pick}'.")
+            st.toast(f"Updated mana tags on '{mt_pick}'.", icon="✅")
             st.rerun()
 
     st.divider()
@@ -267,7 +289,7 @@ with tab_manatags:
                 mt_edits[row["Card"]] = labels
             changed = writes.bulk_set_mana_tags(conn, mt_edits)
             loaders.invalidate_reference_caches()
-            st.success(f"Updated mana tags on {changed} card(s).")
+            st.toast(f"Updated mana tags on {changed} card(s).", icon="✅")
             st.rerun()
 
 # ------------------------------------------------------------------

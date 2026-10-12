@@ -62,7 +62,9 @@ deck_id = cv.render_deck_picker(
     decks_df, key="editor_deck_select", empty_message="No decks yet — create one below."
 )
 
-with st.sidebar.expander("➕ Create a new deck"):
+@st.dialog("➕ Create a new deck")
+def _create_deck_dialog():
+    """Phase 5: was a sidebar st.expander."""
     cn_name = st.text_input("Deck name (required)", key="editor_newdeck_name")
     cn_commander = st.text_input("Commander", key="editor_newdeck_commander")
     cn_partner = st.text_input("Partner", key="editor_newdeck_partner")
@@ -81,10 +83,17 @@ with st.sidebar.expander("➕ Create a new deck"):
                 st.error(err)
             else:
                 loaders.invalidate_deck_caches()
-                st.success(f"Created '{cn_name.strip()}'.")
+                st.toast(f"Created '{cn_name.strip()}'.", icon="✅")
                 # Select the new deck by id (Phase 2's shared current deck).
                 st.session_state[cv.CURRENT_DECK_KEY] = new_id
+                cv.close_dialog("editor_newdeck_dialog")
                 st.rerun()
+
+
+if st.sidebar.button("➕ Create a new deck", key="editor_newdeck_open"):
+    cv.open_dialog("editor_newdeck_dialog")
+if cv.dialog_is_open("editor_newdeck_dialog"):
+    _create_deck_dialog()
 
 if deck_id is not None:
     nav.render_deck_links("Deck_Editor")
@@ -118,7 +127,7 @@ with tab_info:
                     st.error(err)
                 else:
                     loaders.invalidate_deck_caches()
-                    st.success(f"Renamed to '{new_name.strip()}'.")
+                    st.toast(f"Renamed to '{new_name.strip()}'.", icon="✅")
                     st.rerun()
             else:
                 st.info("No change to save.")
@@ -164,7 +173,7 @@ with tab_info:
                 tutors=tutors.strip() or None,
             )
             loaders.invalidate_deck_caches()
-            st.success("Saved deck details.")
+            st.toast("Saved deck details.", icon="✅")
             st.rerun()
 
         st.divider()
@@ -189,12 +198,12 @@ with tab_info:
                 rel_path = fmt.static_relative_path(dest_path)
                 writes.set_deck_cover_image(conn, deck_id, rel_path)
                 loaders.invalidate_deck_caches()
-                st.success("Cover image saved.")
+                st.toast("Cover image saved.", icon="✅")
                 st.rerun()
             if rm_col.button("🗑️ Remove cover image", key=f"editor_{deck_id}_cover_remove", disabled=not meta.get("cover_image_path")):
                 writes.set_deck_cover_image(conn, deck_id, None)
                 loaders.invalidate_deck_caches()
-                st.success("Cover image removed.")
+                st.toast("Cover image removed.", icon="✅")
                 st.rerun()
 
         st.divider()
@@ -228,7 +237,7 @@ with tab_info:
             for kind, _ in rank_kinds:
                 writes.set_deck_rank_list(conn, deck_id, kind, rank_inputs[kind])
             loaders.invalidate_deck_caches()
-            st.success("Saved.")
+            st.toast("Saved.", icon="✅")
             st.rerun()
 
         st.divider()
@@ -457,7 +466,7 @@ with tab_themes:
                 t = theme_options[theme_choice]
                 writes.remove_deck_theme(conn, deck_id, t["theme"], t["role"])
                 loaders.invalidate_deck_caches()
-                st.success(f"Removed '{theme_choice}'.")
+                st.toast(f"Removed '{theme_choice}'.", icon="✅")
                 st.rerun()
         else:
             st.caption("Nothing to remove yet.")
@@ -481,10 +490,12 @@ with tab_themes:
                 writes.add_deck_theme(conn, deck_id, theme_name.strip(), theme_role)
                 loaders.invalidate_deck_caches()
                 loaders.invalidate_reference_caches()
-                st.success(f"Added '{theme_name.strip()}' ({theme_role}).")
+                st.toast(f"Added '{theme_name.strip()}' ({theme_role}).", icon="✅")
                 st.rerun()
 
-        with st.expander("⚙️ Manage the master theme list"):
+        @st.dialog("⚙️ Manage the master theme list")
+        def _manage_theme_catalog_dialog(theme_catalog, deck_id):
+            """Phase 5: was an inline st.expander."""
             st.caption(
                 "Adding/removing here only changes what's offered above — it never touches "
                 "any deck's existing theme assignments."
@@ -494,7 +505,7 @@ with tab_themes:
                 if new_catalog_theme.strip():
                     writes.add_theme_to_catalog(conn, new_catalog_theme.strip())
                     loaders.invalidate_reference_caches()
-                    st.success(f"Added '{new_catalog_theme.strip()}' to the master list.")
+                    st.toast(f"Added '{new_catalog_theme.strip()}' to the master list.", icon="✅")
                     st.rerun()
                 else:
                     st.warning("Enter a theme name.")
@@ -506,10 +517,19 @@ with tab_themes:
                 if st.button("🗑️ Remove from master list", key=f"editor_{deck_id}_theme_catalog_remove_btn"):
                     writes.remove_theme_from_catalog(conn, catalog_remove_choice)
                     loaders.invalidate_reference_caches()
-                    st.success(f"Removed '{catalog_remove_choice}' from the master list.")
+                    st.toast(f"Removed '{catalog_remove_choice}' from the master list.", icon="✅")
                     st.rerun()
             else:
                 st.caption("Master theme list is empty.")
+
+            if st.button("Close", key=f"editor_{deck_id}_theme_catalog_close"):
+                cv.close_dialog("editor_theme_catalog_dialog")
+                st.rerun()
+
+        if st.button("⚙️ Manage the master theme list", key=f"editor_{deck_id}_theme_catalog_open"):
+            cv.open_dialog("editor_theme_catalog_dialog")
+        if cv.dialog_is_open("editor_theme_catalog_dialog"):
+            _manage_theme_catalog_dialog(theme_catalog, deck_id)
 
 # ------------------------------------------------------------------
 # Card Tags — bulk-edit a whole deck's mainboard tags for one tag_type
@@ -576,7 +596,7 @@ with tab_cardtags:
                         cardtags_edits[row["scryfall_id"]] = labels
                     changed = writes.bulk_set_card_tags(conn, deck_id, tag_type, cardtags_edits)
                     loaders.invalidate_deck_caches()
-                    st.success(f"Updated {tag_type} tags on {changed} card(s).")
+                    st.toast(f"Updated {tag_type} tags on {changed} card(s).", icon="✅")
                     st.rerun()
 
 # ------------------------------------------------------------------
@@ -659,7 +679,7 @@ with tab_main:
                         main_updates[row["scryfall_id"]] = int(row["Qty"]) if pd.notna(row["Qty"]) else 0
                 changed = writes.bulk_update_deck_cards(conn, deck_id, main_updates)
                 loaders.invalidate_deck_caches()
-                st.success(f"Updated {changed} card(s).")
+                st.toast(f"Updated {changed} card(s).", icon="✅")
                 st.rerun()
 
 # ------------------------------------------------------------------

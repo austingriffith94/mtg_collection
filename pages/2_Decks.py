@@ -550,9 +550,9 @@ def _render_mana_curve(conn, deck_id):
         if nonland_df.empty:
             st.caption("No non-land cards to chart yet.")
         else:
-            breakdown_by = st.radio(
-                "Stack by", ["Color", "Type"], horizontal=True, key=f"curve_stackby_{deck_id}"
-            )
+            breakdown_by = st.segmented_control(
+                "Stack by", ["Color", "Type"], key=f"curve_stackby_{deck_id}"
+            ) or "Color"
             chart_colors = None
             if breakdown_by == "Color":
                 # Prompt Pass 4: fixed W/U/B/R/G/Multi-color/Colorless
@@ -808,7 +808,9 @@ def _render_cards(conn, deck_id):
     main_df_full = loaders.load_deck_cards_df(conn, deck_id)
 
 
-    board_choice = st.radio("Board", ["Mainboard", "Shortlist", "Both"], horizontal=True, key=f"deck_{deck_id}_board_choice")
+    board_choice = st.segmented_control(
+        "Board", ["Mainboard", "Shortlist", "Both"], key=f"deck_{deck_id}_board_choice"
+    ) or "Mainboard"
 
     shortlist_df = loaders.load_shortlist_df(conn, deck_id)
 

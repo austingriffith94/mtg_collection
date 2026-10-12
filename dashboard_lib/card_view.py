@@ -4,8 +4,13 @@ Decks page:
 
   - add_derived_columns()   adds card_type / color_display / scryfall_url /
                              is_land (Phase 3, MDFC-aware)
-  - render_filter_panel()   sidebar filters (search, facets, colors, price, CMC)
-  - render_browser()        the View toggle (Table / Image Grid) + "group by"
+  - render_filter_panel()   sidebar filters (search, facets, colors, price, CMC).
+                             Color identity is a fixed WUBRG+C st.pills row;
+                             Yes/No/All bool_toggles are st.segmented_control
+                             (Phase 5) — both return None with nothing picked,
+                             treated as "no filter"/"All".
+  - render_browser()        the View toggle (Table / Image Grid, now
+                             st.segmented_control) + "group by"
                              breakout controls + sort, then dispatches to...
                              (an st.fragment since UI plan Phase 4)
   - render_table()          st.dataframe with a clickable Scryfall link column
@@ -163,6 +168,30 @@ def render_deck_picker(decks_df, key, container=None, empty_message="No decks fo
 
 
 # ------------------------------------------------------------------
+# Dialog open-state (Phase 5). An st.dialog only keeps re-rendering on
+# interactions INSIDE it (it inherits st.fragment's partial-rerun
+# behavior); any OTHER full-script rerun — an unrelated widget elsewhere
+# on the page, a page switch — happens because the call site that opened
+# it ("if st.button(...): my_dialog()") isn't on that rerun's path, so the
+# dialog simply isn't called and vanishes. A plain session_state flag
+# fixes that: the opening button sets it, the call site checks it on
+# every run (not just the click that set it), and the dialog clears it
+# before any st.rerun() that should close it (a successful save, a
+# cancel) — see each dialog's own call site in pages/.
+# ------------------------------------------------------------------
+def open_dialog(flag_key):
+    st.session_state[flag_key] = True
+
+
+def close_dialog(flag_key):
+    st.session_state[flag_key] = False
+
+
+def dialog_is_open(flag_key):
+    return st.session_state.get(flag_key, False)
+
+
+# ------------------------------------------------------------------
 # Derived columns shared by every card-bearing dataframe
 # ------------------------------------------------------------------
 def add_derived_columns(df):
@@ -220,14 +249,18 @@ def render_filter_panel(
     bool_toggles=None,
     show_price_slider=True,
     show_cmc_slider=True,
+    disabled=False,
 ):
     """
     single_facets: [(col, label), ...] -> plain "is in selection" multiselect
     multi_facets:  [(col, label, colorless_label_or_None), ...] -> comma-
                    separated values, "any selected value present" matching
                    (used for color_identity and strategy_tags)
-    bool_toggles:  [(col, label), ...] -> All / Yes / No selectbox on a
-                   0/1 column
+    bool_toggles:  [(col, label), ...] -> All / Yes / No segmented_control on
+                   a 0/1 column
+    disabled:      grays out every widget here without clearing its value
+                   (Phase 5 — the Collection page's Edit mode uses this so a
+                   filter change can't silently discard unsaved table edits).
     Returns the filtered dataframe. All widget keys are namespaced with
     key_prefix so the Collection and Decks pages don't collide.
     """
@@ -236,19 +269,28 @@ def render_filter_panel(
 
     search_key = f"{key_prefix}_search"
     register_filter_key(search_key)
-    search = c.text_input("Search card name", key=search_key, placeholder="e.g. Sol Ring")
+    search = c.text_input(
+        "Search card name", key=search_key, placeholder="e.g. Sol Ring", disabled=disabled
+    )
     if search:
         filtered = filtered[filtered["name"].str.contains(search, case=False, na=False, regex=False)]
 
     for col, label, colorless_label in multi_facets or []:
         if col not in df.columns:
             continue
-        options = _multi_value_options(df[col], colorless_label)
-        if not options:
-            continue
         multi_key = f"{key_prefix}_{col}_multi"
         register_filter_key(multi_key)
-        selected = c.multiselect(label, options, key=multi_key)
+        if col == "color_identity":
+            # Phase 5: a fixed WUBRG+C pill row, not a multiselect built from
+            # whatever colors happen to appear in df — the point is a stable,
+            # recognizable control, not a dynamic option list.
+            options = list(fmt.WUBRG_ORDER) + ([colorless_label] if colorless_label else [])
+            selected = c.pills(label, options, selection_mode="multi", key=multi_key, disabled=disabled) or []
+        else:
+            options = _multi_value_options(df[col], colorless_label)
+            if not options:
+                continue
+            selected = c.multiselect(label, options, key=multi_key, disabled=disabled)
         filtered = _multi_value_filter(filtered, col, selected, colorless_label)
 
     for col, label in single_facets or []:
@@ -259,7 +301,7 @@ def render_filter_panel(
             continue
         single_key = f"{key_prefix}_{col}_single"
         register_filter_key(single_key)
-        selected = c.multiselect(label, options, key=single_key)
+        selected = c.multiselect(label, options, key=single_key, disabled=disabled)
         if selected:
             filtered = filtered[filtered[col].isin(selected)]
 
@@ -268,7 +310,10 @@ def render_filter_panel(
             continue
         bool_key = f"{key_prefix}_{col}_bool"
         register_filter_key(bool_key)
-        choice = c.selectbox(label, ["All", "Yes", "No"], key=bool_key)
+        # st.segmented_control returns None with nothing selected (unlike the
+        # old selectbox, which always had something picked) — treat that the
+        # same as "All" (Phase 5).
+        choice = c.segmented_control(label, ["All", "Yes", "No"], key=bool_key, disabled=disabled) or "All"
         if choice == "Yes":
             filtered = filtered[filtered[col] == 1]
         elif choice == "No":
@@ -281,7 +326,7 @@ def render_filter_panel(
             register_filter_key(price_key)
             lo, hi = c.slider(
                 "Price (USD)", 0.0, round(max_price + 0.5, 2), (0.0, round(max_price + 0.5, 2)),
-                key=price_key,
+                key=price_key, disabled=disabled,
             )
             filtered = filtered[
                 filtered["current_price_usd"].isna()
@@ -293,7 +338,7 @@ def render_filter_panel(
         if max_cmc > 0:
             cmc_key = f"{key_prefix}_cmc"
             register_filter_key(cmc_key)
-            lo, hi = c.slider("Mana Value", 0, max_cmc, (0, max_cmc), key=cmc_key)
+            lo, hi = c.slider("Mana Value", 0, max_cmc, (0, max_cmc), key=cmc_key, disabled=disabled)
             filtered = filtered[filtered["cmc"].isna() | filtered["cmc"].between(lo, hi)]
 
     return filtered
@@ -324,7 +369,9 @@ def render_browser(df, key_prefix, group_options, column_config, extra_table_col
         return
 
     ctrl1, ctrl2, ctrl3, ctrl4 = st.columns([1.3, 2, 1.3, 1])
-    view = ctrl1.radio("View", ["Table", "Image Grid"], horizontal=True, key=f"{key_prefix}_view")
+    view = ctrl1.segmented_control(
+        "View", ["Table", "Image Grid"], key=f"{key_prefix}_view"
+    ) or "Table"
 
     label_by_col = dict(group_options)
     col_by_label = {label: col for col, label in group_options}

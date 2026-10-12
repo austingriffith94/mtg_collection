@@ -18,6 +18,10 @@ Collection page — browse the full physical collection.
   the filters currently show (quantity, foil, location, date, price,
   source, delete), so a filtered set can be changed in place without
   hopping to another page. Lot-adding/importing stays on Collection Editor.
+  While Edit mode is on, every sidebar filter is disabled (not cleared) so
+  a stray click can't discard unsaved edits by reshaping the filtered set
+  out from under the table; a "N unsaved change(s)" count next to the Save
+  button comes from the data_editor's own edited_rows state (Phase 5).
 - "Group / breakout by" lets you layer multiple groupings (e.g. Type, then
   Rarity within each type) — each top-level group is a collapsible
   section.
@@ -89,6 +93,7 @@ def render_edit_table(df):
     # Keyed by the visible lot ids so a different filter result gets a fresh
     # widget instead of replaying old edits against different rows by position.
     ids_hash = hash(tuple(r["collection_id"] for r in rows))
+    editor_key = f"collection_edit_table_{ids_hash}"
     edited = st.data_editor(
         pd.DataFrame(rows),
         column_config={
@@ -104,9 +109,17 @@ def render_edit_table(df):
         },
         column_order=["Card", "Set", "Qty", "Foil", "Location", "Date", "Price Paid", "Source", "Delete"],
         hide_index=True, width="stretch",
-        key=f"collection_edit_table_{ids_hash}",
+        key=editor_key,
     )
-    if st.button("💾 Save collection changes", key="collection_edit_save"):
+    # The editor's own session_state entry (keyed by editor_key) carries the
+    # pending edits as {"edited_rows": {...}, ...} — read from there instead
+    # of diffing `edited` against `rows` ourselves (Phase 5).
+    unsaved = len(st.session_state.get(editor_key, {}).get("edited_rows", {}))
+    save_col, count_col = st.columns([1, 3])
+    save_clicked = save_col.button("💾 Save collection changes", key="collection_edit_save", disabled=not unsaved)
+    if unsaved:
+        count_col.caption(f"**{unsaved}** unsaved change(s)")
+    if save_clicked:
         updates = {}
         for _, row in edited.iterrows():
             row_date = row["Date"]
@@ -121,7 +134,7 @@ def render_edit_table(df):
             }
         changed = writes.bulk_update_collection(conn, updates)
         loaders.invalidate_collection_caches()
-        st.success(f"Updated {changed} lot(s).")
+        st.toast(f"Updated {changed} lot(s).", icon="✅")
         st.rerun(scope="app")
 
 
@@ -135,10 +148,10 @@ def render_moxfield_export():
         "'Owned NOT in a deck' only includes printings with zero copies used in any "
         "deck's mainboard; Tradelist Count is 0 for anything run in a deck either way."
     )
-    export_scope = st.radio(
+    export_scope = st.segmented_control(
         "Which cards?", ["Full Collection", "Owned NOT in a deck"],
-        key="collection_moxfield_scope", horizontal=True,
-    )
+        key="collection_moxfield_scope",
+    ) or "Full Collection"
     export_not_in_deck = export_scope == "Owned NOT in a deck"
     export_rows = moxfield_export.collection_export_rows(conn, only_not_in_deck=export_not_in_deck)
     if not export_rows:
@@ -195,6 +208,10 @@ if export_box.open:
     with export_box:
         render_moxfield_export()
 
+# Read from session_state, not the (not-yet-drawn) toggle below — the Edit
+# mode toggle is drawn after these filters in script order (Phase 5).
+_edit_mode_active = st.session_state.get("collection_edit_mode", False)
+
 filtered = cv.render_filter_panel(
     full_df,
     key_prefix="collection",
@@ -214,6 +231,7 @@ filtered = cv.render_filter_panel(
         ("is_showcase", "Showcase"),
         ("is_borderless", "Borderless"),
     ],
+    disabled=_edit_mode_active,
 )
 
 # Deck-status toggle (Prompt Pass 4). "in_deck" comes straight from
@@ -227,7 +245,8 @@ filtered = cv.render_filter_panel(
 # spotting cards that genuinely have no home yet.
 deck_status_key = "collection_deck_status"
 cv.register_filter_key(deck_status_key)
-deck_status = st.sidebar.selectbox(
+# segmented_control returns None with nothing picked (Phase 5) — "All".
+deck_status = st.sidebar.segmented_control(
     "Deck status",
     ["All", "In a deck", "Not in a deck", "Not in a deck OR another location"],
     key=deck_status_key,
@@ -236,7 +255,8 @@ deck_status = st.sidebar.selectbox(
         "Not in a deck OR another location: not run in any deck AND has no "
         "Location recorded either — i.e. truly unassigned."
     ),
-)
+    disabled=_edit_mode_active,
+) or "All"
 if deck_status == "In a deck":
     filtered = filtered[filtered["in_deck"] == 1]
 elif deck_status == "Not in a deck":

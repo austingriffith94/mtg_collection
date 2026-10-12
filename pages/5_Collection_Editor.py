@@ -42,7 +42,9 @@ st.caption("Writes straight to the database — no CSV editing or re-migration n
 
 db.refresh_data_button()
 
-with st.expander("⚙️ Manage the master Location list"):
+@st.dialog("⚙️ Manage the master Location list")
+def _manage_location_catalog_dialog():
+    """Phase 5: was an inline st.expander."""
     st.caption(
         "Standard, non-deck storage locations (e.g. 'Box', 'Lands Box') offered "
         "alongside every tracked deck's own name in the Location dropdowns below. "
@@ -55,7 +57,7 @@ with st.expander("⚙️ Manage the master Location list"):
         if new_loc_catalog_entry.strip():
             writes.add_location_to_catalog(conn, new_loc_catalog_entry.strip())
             loaders.invalidate_reference_caches()
-            st.success(f"Added '{new_loc_catalog_entry.strip()}' to the master list.")
+            st.toast(f"Added '{new_loc_catalog_entry.strip()}' to the master list.", icon="✅")
             st.rerun()
         else:
             st.warning("Enter a location name.")
@@ -67,10 +69,20 @@ with st.expander("⚙️ Manage the master Location list"):
         if st.button("🗑️ Remove from master list", key="editor_loc_catalog_remove_btn"):
             writes.remove_location_from_catalog(conn, loc_catalog_remove)
             loaders.invalidate_reference_caches()
-            st.success(f"Removed '{loc_catalog_remove}' from the master list.")
+            st.toast(f"Removed '{loc_catalog_remove}' from the master list.", icon="✅")
             st.rerun()
     else:
         st.caption("Master location list is empty.")
+
+    if st.button("Close", key="editor_loc_catalog_close"):
+        cv.close_dialog("editor_loc_catalog_dialog")
+        st.rerun()
+
+
+if st.button("⚙️ Manage the master Location list", key="editor_loc_catalog_open"):
+    cv.open_dialog("editor_loc_catalog_dialog")
+if cv.dialog_is_open("editor_loc_catalog_dialog"):
+    _manage_location_catalog_dialog()
 
 st.markdown("**Import a purchase order (CSV)**")
 st.caption(

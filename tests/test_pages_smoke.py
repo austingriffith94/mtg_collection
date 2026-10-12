@@ -159,6 +159,8 @@ def test_create_deck_selects_new_deck(smoke_db_path, tmp_path, monkeypatch):
     try:
         at = AppTest.from_file(os.path.join(PAGES_DIR, "4_Deck_Editor.py"), default_timeout=15)
         at.run()
+        # "Create a new deck" is an st.dialog (Phase 5) — open it first.
+        at.sidebar.button(key="editor_newdeck_open").click().run()
         at.text_input(key="editor_newdeck_name").set_value("Brand New Deck")
         at.button(key="editor_newdeck_create").click().run()
         assert not at.exception
@@ -167,6 +169,40 @@ def test_create_deck_selects_new_deck(smoke_db_path, tmp_path, monkeypatch):
         ).fetchone()[0]
         assert at.session_state["current_deck_id"] == new_id
         assert at.selectbox(key="editor_deck_select").value == new_id
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+# Phase 5: the delete-game dialog adds a confirm checkbox the old inline
+# expander didn't have — cancel must leave the game, confirming removes it.
+def test_delete_game_dialog_cancel_leaves_game_confirm_removes_it(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "7_Commander_Game_Tracking.py"), default_timeout=15)
+        at.run()
+        at.button(key="gt_delete_open").click().run()
+        # The delete button stays disabled until the confirm checkbox is ticked.
+        assert at.button(key="gt_delete_btn").disabled
+        at.button(key="gt_delete_cancel").click().run()
+        assert not at.exception
+        assert sqlite3.connect(path).execute(
+            "SELECT COUNT(*) FROM games WHERE game_id = 1"
+        ).fetchone()[0] == 1
+
+        at.button(key="gt_delete_open").click().run()
+        at.checkbox(key="gt_delete_confirm").set_value(True).run()
+        at.button(key="gt_delete_btn").click().run()
+        assert not at.exception
+        assert sqlite3.connect(path).execute(
+            "SELECT COUNT(*) FROM games WHERE game_id = 1"
+        ).fetchone()[0] == 0
     finally:
         st.cache_resource.clear()
         st.cache_data.clear()

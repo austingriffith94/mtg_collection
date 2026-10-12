@@ -152,7 +152,7 @@ def image_db(smoke_db_path, tmp_path, monkeypatch, static_dir):  # noqa: F811
 def test_collection_grid_links_images_instead_of_embedding(image_db):
     at = AppTest.from_file(os.path.join(PAGES_DIR, "1_Collection.py"), default_timeout=15)
     at.run()
-    at.radio(key="collection_view").set_value("Image Grid").run()
+    at.segmented_control(key="collection_view").set_value("Image Grid").run()
     assert not at.exception
     html = " ".join(m.value for m in at.markdown)
     assert "app/static/image_cache/sol-ring-cmd-1.jpg" in html
@@ -162,11 +162,11 @@ def test_collection_grid_links_images_instead_of_embedding(image_db):
 def test_collection_export_is_built_only_when_open(image_db):
     at = AppTest.from_file(os.path.join(PAGES_DIR, "1_Collection.py"), default_timeout=15)
     at.run()
-    assert "collection_moxfield_scope" not in [r.key for r in at.radio]
+    assert "collection_moxfield_scope" not in [r.key for r in at.segmented_control]
     at.session_state["collection_export_open"] = True
     at.run()
     assert not at.exception
-    assert "collection_moxfield_scope" in [r.key for r in at.radio]
+    assert "collection_moxfield_scope" in [r.key for r in at.segmented_control]
 
 
 def test_deck_export_is_lazy_and_sheet_still_embeds_art(image_db, monkeypatch):

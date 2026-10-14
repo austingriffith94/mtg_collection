@@ -605,9 +605,15 @@ def _dirty_key(key):
 
 
 def run_board_action(conn, deck_id, key, action, *, is_undo=False):
-    """Apply one action for the page: toast the outcome (or the refusal),
-    remember the inverse for the Undo button, drop stale caches and flag the
-    page to rerun. Returns True if something was applied.
+    """Apply one action for the page: remember the inverse for the Undo
+    button, stash the outcome and drop stale caches (card_view.stash_edit —
+    EDIT_FLOW_PLAN.md rule 1), and flag the page to rerun. Returns True if
+    something was applied.
+
+    This runs in a widget callback, where st.rerun() is a no-op, hence
+    stash_edit() rather than finish_edit(): rerun_if_edited() does the
+    full-app rerun, and setup_page() shows the message on it. A refusal or
+    a no-op writes nothing and reruns nothing, so it toasts directly.
 
     An undo itself leaves nothing to undo (one level); a failed or no-op
     edit leaves the previous Undo in place."""
@@ -619,10 +625,10 @@ def run_board_action(conn, deck_id, key, action, *, is_undo=False):
     except ValueError as exc:
         st.toast(str(exc), icon="⚠️")
         return False
-    st.toast(result["message"], icon="↩️" if is_undo else "✅")
     if is_undo:
         st.session_state.pop(_undo_key(key), None)
     elif not result.get("changed", True):
+        st.toast(result["message"], icon="✅")
         return True  # no-op: nothing changed, so no cache clear or rerun
     elif result["undo"]:
         st.session_state[_undo_key(key)] = {"label": result["message"], "action": result["undo"]}
@@ -630,9 +636,10 @@ def run_board_action(conn, deck_id, key, action, *, is_undo=False):
         # A change with no inverse (apply): an older Undo would now act on
         # a deck that has moved on, so it goes.
         st.session_state.pop(_undo_key(key), None)
-    loaders.invalidate_deck_caches(deck_id)
-    if isinstance(action, dict) and action.get("op") in COLLECTION_OPS:
-        loaders.invalidate_collection_caches()
+    card_view.stash_edit({
+        "message": f"Undid: {result['message']}" if is_undo else result["message"],
+        "collection": isinstance(action, dict) and action.get("op") in COLLECTION_OPS,
+    })
     st.session_state[_dirty_key(key)] = True
     return True
 

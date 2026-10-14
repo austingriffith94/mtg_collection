@@ -212,6 +212,7 @@ def test_delete_game_dialog_cancel_leaves_game_confirm_removes_it(smoke_db_path,
         assert sqlite3.connect(path).execute(
             "SELECT COUNT(*) FROM games WHERE game_id = 1"
         ).fetchone()[0] == 0
+        assert [t.body for t in at.toast] == ["Game deleted."]  # via finish_edit (Phase 0)
     finally:
         st.cache_resource.clear()
         st.cache_data.clear()
@@ -418,6 +419,8 @@ def test_board_edit_glue_undo_button(smoke_db_path, tmp_path, monkeypatch):
         assert not at.exception
         assert qty() == (2,)
         assert at.session_state["k__edited"] is True
+        # Stashed for setup_page() to show on the full rerun (card_view.stash_edit).
+        assert at.session_state["_pending_feedback"]["lines"] == ["Sol Ring → ×2"]
         assert at.button(key="k__undo_btn").label.startswith("↶ Undo: ")
 
         at.session_state["edit"] = {"op": "inc", "id": "no-such-card"}  # refused
@@ -529,6 +532,116 @@ def test_board_glue_plan_then_apply(smoke_db_path, tmp_path, monkeypatch):
         assert sqlite3.connect(path).execute(
             "SELECT scryfall_id FROM deck_cards WHERE deck_id=1"
         ).fetchall() == [("arcane-sign-1",)]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+# Phase 0 of EDIT_FLOW_PLAN.md: card_view.finish_edit()/show_pending_feedback()
+# replaced the Deck Editor's hand-rolled invalidate/toast/rerun triples —
+# these two prove a rename and a Shortlist "add idea" still write, still
+# show their message (now a toast surfaced on the NEXT run), and the page
+# still has no exception across that rerun.
+def test_deck_editor_rename_shows_toast_after_finish_edit(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "4_Deck_Editor.py"), default_timeout=15)
+        at.session_state["current_deck_id"] = 1
+        _forget_deck_board()
+        at.run()
+        at.text_input(key="editor_1_name").set_value("Renamed Deck")
+        _forget_deck_board()
+        at.button(key="editor_1_savename").click().run()
+        assert not at.exception
+        assert sqlite3.connect(path).execute(
+            "SELECT name FROM decks WHERE deck_id=1"
+        ).fetchone() == ("Renamed Deck",)
+        assert any("Renamed to 'Renamed Deck'" in t.body for t in at.toast)
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_deck_editor_shortlist_add_idea_shows_toast_after_finish_edit(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "4_Deck_Editor.py"), default_timeout=15)
+        at.session_state["current_deck_id"] = 1
+        _forget_deck_board()
+        at.run()
+        at.text_input(key="editor_1_sl_add_name").set_value("Sol Ring")  # already a known card, no network
+        _forget_deck_board()
+        submit = next(b for b in at.button if b.label == "➕ Add to shortlist")
+        submit.click().run()
+        assert not at.exception
+        assert sqlite3.connect(path).execute(
+            "SELECT COUNT(*) FROM deck_changes WHERE deck_id=1 AND status='idea'"
+        ).fetchone() == (1,)
+        assert any("Added Sol Ring to the shortlist" in t.body for t in at.toast)
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_workbench_contention_drop_writes_and_shows_message(smoke_db_path, tmp_path, monkeypatch):
+    # The smoke DB runs Sol Ring in both decks on one owned copy, so it's in
+    # contention. Dropping it from a deck goes through the Workbench's
+    # _refresh() -> card_view.finish_edit() (EDIT_FLOW_PLAN.md Phase 0).
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "8_Workbench.py"), default_timeout=15)
+        at.run()
+        assert not at.exception
+        at.selectbox(key="workbench_contention_drop_pick_oracle-sol-ring_0").set_value("Second Deck")
+        at.button(key="workbench_contention_drop_btn_oracle-sol-ring_0").click().run()
+        assert not at.exception
+        assert sqlite3.connect(path).execute(
+            "SELECT COUNT(*) FROM deck_cards WHERE deck_id=2"
+        ).fetchone() == (0,)
+        assert [t.body for t in at.toast] == ["Dropped Sol Ring from Second Deck."]
+        assert at.session_state["workbench_ver"] == 1  # editors re-keyed after the write
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_collection_editor_location_catalog_add_shows_message(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "5_Collection_Editor.py"), default_timeout=15)
+        at.run()
+        at.button(key="editor_loc_catalog_open").click().run()
+        at.text_input(key="editor_loc_catalog_add").set_value("Binder 2")
+        at.button(key="editor_loc_catalog_add_btn").click().run()
+        assert not at.exception
+        assert sqlite3.connect(path).execute(
+            "SELECT COUNT(*) FROM location_catalog WHERE location='Binder 2'"
+        ).fetchone() == (1,)
+        assert [t.body for t in at.toast] == ["Added 'Binder 2' to the master list."]
     finally:
         st.cache_resource.clear()
         st.cache_data.clear()

@@ -725,13 +725,25 @@ def deck_combo_sync(conn, deck_id):
     """When this deck's combos were last fetched, and what was found.
     Returns None if the deck has NEVER been synced — which is what lets the
     UI say "not fetched yet" instead of wrongly claiming a deck has no
-    combos (zero rows in deck_combos means both things on its own)."""
+    combos (zero rows in deck_combos means both things on its own).
+
+    `stale` (Phase 0) is True once the deck's latest applied change
+    (including a logged quantity bump) is dated after this fetch — the
+    decklist Spellbook last saw may no longer be the current one."""
     row = conn.execute(
         """SELECT deck_id, fetched_at, identity, included_count, almost_count
            FROM deck_combo_sync WHERE deck_id = ?""",
         (deck_id,),
     ).fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    result = dict(row)
+    last_edit = conn.execute(
+        "SELECT MAX(resolved_at) FROM deck_changes WHERE deck_id = ? AND status = 'applied'",
+        (deck_id,),
+    ).fetchone()[0]
+    result["stale"] = bool(last_edit and last_edit > result["fetched_at"])
+    return result
 
 
 def deck_combo_sync_all(conn):
@@ -2629,8 +2641,12 @@ def games_list(conn):
         return games
 
     parts = pd.read_sql_query(
-        """SELECT game_id, seat, deck_name, is_winner, player_name
-           FROM game_participants ORDER BY game_id, seat""",
+        """SELECT gp.game_id, gp.seat,
+                  COALESCE(d.name, gp.deck_name) AS deck_name,
+                  gp.is_winner, gp.player_name
+           FROM game_participants gp
+           LEFT JOIN decks d ON d.deck_id = gp.deck_id
+           ORDER BY gp.game_id, gp.seat""",
         conn,
     )
     by_game = {gid: grp for gid, grp in parts.groupby("game_id")}

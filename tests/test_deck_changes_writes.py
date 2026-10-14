@@ -383,7 +383,32 @@ def test_a_quantity_bump_is_not_logged_as_an_add(conn, deck, add_card):
     sid = add_card("Swamp")
     writes.add_deck_card(conn, deck, sid, quantity=4)
     writes.add_deck_card(conn, deck, sid, quantity=5)
-    assert len(_rows(conn)) == 1  # only the first appearance on the list
+    rows = _rows(conn)
+    assert len(rows) == 2  # the join, plus the bump — not a second "appearance"
+    bump = rows[-1]
+    assert bump["add_scryfall_id"] == sid and bump["remove_scryfall_id"] is None
+    assert bump["quantity"] == 1  # the difference, not the new total
+    assert bump["notes"] == "quantity 4 → 5"
+
+
+def test_a_quantity_decrease_is_logged_as_a_partial_removal(conn, deck, add_card):
+    sid = add_card("Swamp")
+    writes.add_deck_card(conn, deck, sid, quantity=5)
+    writes.add_deck_card(conn, deck, sid, quantity=2)
+    rows = _rows(conn)
+    assert len(rows) == 2
+    bump = rows[-1]
+    assert bump["remove_scryfall_id"] == sid and bump["add_scryfall_id"] is None
+    assert bump["quantity"] == 3
+    assert bump["notes"] == "quantity 5 → 2"
+
+
+def test_a_quantity_bump_does_not_auto_drop_a_shortlist_idea(conn, deck, add_card):
+    sid = add_card("Swamp")
+    writes.add_deck_card(conn, deck, sid, quantity=4)
+    change_id = writes.add_change(conn, deck, add_scryfall_id=sid, add_name="Swamp", status="idea")
+    writes.add_deck_card(conn, deck, sid, quantity=5)
+    assert _status(conn, change_id) == "idea"  # the bump isn't a join; the idea is untouched
 
 
 def test_removing_a_card_that_was_never_there_logs_nothing(conn, deck, add_card):
@@ -506,12 +531,140 @@ def test_deleting_a_deck_removes_its_changes_and_the_frozen_legacy_rows(conn, de
     )
     conn.commit()
 
-    name, err = writes.delete_deck(conn, deck)
+    name, err, redirected = writes.delete_deck(conn, deck)
 
-    assert err is None and name == "Gisa"
+    assert err is None and name == "Gisa" and redirected == 0
     assert conn.execute("SELECT COUNT(*) FROM deck_changes").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM maybeboard").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM deck_swap_queue").fetchone()[0] == 0
+
+
+# ------------------------------------------------------------------
+# Phase 0 (EDIT_FLOW_PLAN.md): deck names cascade on rename/delete
+# ------------------------------------------------------------------
+
+@pytest.fixture
+def other_deck(conn):
+    cur = conn.execute("INSERT INTO decks (name) VALUES ('Prosper')")
+    conn.commit()
+    return cur.lastrowid
+
+
+def test_rename_updates_collection_and_open_dest_location_but_not_applied(conn, deck, other_deck, add_card):
+    sid = add_card("Sol Ring")
+    conn.execute(
+        "INSERT INTO collection (scryfall_id, quantity, location) VALUES (?, 1, 'Gisa')", (sid,)
+    )
+    open_row = writes.add_change(
+        conn, other_deck, add_name="Sol Ring", remove_scryfall_id=sid,
+        remove_name="Sol Ring", status="planned",
+    )
+    conn.execute("UPDATE deck_changes SET dest_location='Gisa' WHERE change_id=?", (open_row,))
+    applied_row = writes.add_change(
+        conn, other_deck, add_name="Arcane Signet", remove_scryfall_id=sid,
+        remove_name="Sol Ring", status="planned",
+    )
+    conn.execute(
+        "UPDATE deck_changes SET dest_location='Gisa', status='applied', resolved_at=CURRENT_TIMESTAMP "
+        "WHERE change_id=?",
+        (applied_row,),
+    )
+    conn.commit()
+
+    ok, err = writes.rename_deck(conn, deck, "Gisa Prime")
+
+    assert ok and err is None
+    loc = conn.execute("SELECT location FROM collection WHERE scryfall_id=?", (sid,)).fetchone()[0]
+    assert loc == "Gisa Prime"
+    assert writes.get_change(conn, open_row)["dest_location"] == "Gisa Prime"
+    # Applied rows are history — they keep the name they were applied under.
+    assert writes.get_change(conn, applied_row)["dest_location"] == "Gisa"
+
+
+def test_rename_without_collection_cascade_still_updates_dest_location(conn, deck, other_deck, add_card):
+    sid = add_card("Sol Ring")
+    open_row = writes.add_change(
+        conn, other_deck, add_name="Sol Ring", remove_scryfall_id=sid,
+        remove_name="Sol Ring", status="planned",
+    )
+    conn.execute("UPDATE deck_changes SET dest_location='Gisa' WHERE change_id=?", (open_row,))
+    conn.commit()
+
+    writes.rename_deck(conn, deck, "Gisa Prime", update_collection_locations=False)
+
+    assert writes.get_change(conn, open_row)["dest_location"] == "Gisa Prime"
+
+
+def test_delete_redirects_other_decks_open_dest_location_rows_to_box(conn, deck, other_deck, add_card):
+    sid = add_card("Sol Ring")
+    open_row = writes.add_change(
+        conn, other_deck, add_name="Sol Ring", remove_scryfall_id=sid,
+        remove_name="Sol Ring", status="planned",
+    )
+    conn.execute("UPDATE deck_changes SET dest_location='Gisa' WHERE change_id=?", (open_row,))
+    conn.commit()
+
+    name, err, redirected = writes.delete_deck(conn, deck)
+
+    assert err is None and name == "Gisa" and redirected == 1
+    assert writes.get_change(conn, open_row)["dest_location"] == writes.DEFAULT_LOCATION
+
+
+# ------------------------------------------------------------------
+# Phase 0: the games list follows a rename, keeps a deleted deck's name
+# ------------------------------------------------------------------
+
+def _log_game(conn, deck_id, deck_name="deck"):
+    gid = conn.execute("INSERT INTO games (date) VALUES ('2026-01-01')").lastrowid
+    conn.execute(
+        "INSERT INTO game_participants (game_id, deck_name, deck_id, is_winner, seat)"
+        " VALUES (?,?,?,0,1)",
+        (gid, deck_name, deck_id),
+    )
+    conn.commit()
+    return gid
+
+
+def test_games_list_shows_the_renamed_decks_current_name(conn, deck):
+    _log_game(conn, deck, deck_name="Gisa")
+    writes.rename_deck(conn, deck, "Gisa Prime")
+
+    games = queries.games_list(conn)
+
+    assert games.iloc[0]["participants"] == ["Gisa Prime"]
+
+
+def test_games_list_keeps_the_recorded_name_after_the_deck_is_deleted(conn, deck):
+    _log_game(conn, deck, deck_name="Gisa")
+    writes.delete_deck(conn, deck)
+
+    games = queries.games_list(conn)
+
+    assert games.iloc[0]["participants"] == ["Gisa"]
+
+
+# ------------------------------------------------------------------
+# Phase 0: the combo-staleness warning
+# ------------------------------------------------------------------
+
+def test_combo_sync_is_stale_after_an_edit_and_clears_after_a_recheck(conn, deck, add_card):
+    sid = add_card("Sol Ring")
+    conn.execute(
+        "INSERT INTO deck_combo_sync (deck_id, fetched_at, identity, included_count, almost_count)"
+        " VALUES (?, '2026-01-01 00:00:00', 'U', 0, 0)",
+        (deck,),
+    )
+    conn.commit()
+    assert queries.deck_combo_sync(conn, deck)["stale"] is False
+
+    writes.add_deck_card(conn, deck, sid, quantity=1)  # an edit after the check
+    assert queries.deck_combo_sync(conn, deck)["stale"] is True
+
+    conn.execute(
+        "UPDATE deck_combo_sync SET fetched_at=CURRENT_TIMESTAMP WHERE deck_id=?", (deck,)
+    )
+    conn.commit()
+    assert queries.deck_combo_sync(conn, deck)["stale"] is False
 
 
 # ------------------------------------------------------------------

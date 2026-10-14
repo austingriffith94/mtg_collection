@@ -295,6 +295,8 @@ def invalidate_reference_caches():
     load_deck_game_changers.clear()
     load_location_catalog.clear()   # Prompt Pass 13
     load_location_options.clear()
+    load_cards_by_name.clear()  # Phase 0: never cleared before — Land Probability's
+    # commander cards stayed stale after a Card Data refresh
 
 
 def invalidate_game_tracking_caches():
@@ -368,6 +370,7 @@ def invalidate_deck_caches(deck_id=None):
     load_deck_combos.clear()
     load_deck_combo_sync.clear()
     load_deck_combo_sync_all.clear()
+    load_cards_by_name.clear()  # Phase 0: a deck's commander can change on a swap
 
 
 def invalidate_collection_caches():

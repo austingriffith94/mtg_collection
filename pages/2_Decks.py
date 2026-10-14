@@ -502,15 +502,13 @@ def _render_overview(conn, deck_id, meta, deck_name, color_identity_raw):
                          "cards are, so this doesn't claim the deck is 100% sleeved.",
                 ):
                     writes.set_build_state(conn, deck_id, None)
-                    loaders.invalidate_deck_caches(deck_id)
-                    st.rerun()
+                    cv.finish_edit({"message": "Marked as built."})
             elif _state_col.button(
                 "🔨 Mark as brewing", key=f"deck_{deck_id}_mark_brewing",
                 help="For a deck whose list exists but whose cards are still elsewhere.",
             ):
                 writes.set_build_state(conn, deck_id, "brewing")
-                loaders.invalidate_deck_caches(deck_id)
-                st.rerun()
+                cv.finish_edit({"message": "Marked as brewing."})
 
 
 def _render_mana_curve(conn, deck_id):
@@ -602,11 +600,6 @@ def _render_combos(conn, deck_id, meta):
     full-app rerun because it changes the cached combos other parts read."""
     st.subheader("🔗 Combos")
 
-    combo_flash_key = f"deck_{deck_id}_combo_flash"
-    combo_flash = st.session_state.pop(combo_flash_key, None)
-    if combo_flash:
-        st.success(combo_flash)
-
     combo_sync = loaders.load_deck_combo_sync(conn, deck_id)
 
     sync_col, button_col = st.columns([3, 1])
@@ -617,6 +610,8 @@ def _render_combos(conn, deck_id, meta):
                 f"color identity {combo_sync['identity'] or '—'}. "
                 "Re-check after changing the decklist."
             )
+            if combo_sync.get("stale"):
+                st.warning("This deck has been edited since the last check — re-check to see the current combos.")
         else:
             st.caption("Not looked up yet — “Check Spellbook” sends this decklist to commanderspellbook.com.")
 
@@ -647,9 +642,7 @@ def _render_combos(conn, deck_id, meta):
             st.error(combo_error)
         elif combo_result is not None:
             writes.save_deck_combos(conn, deck_id, combo_result)
-            loaders.invalidate_combo_caches()
-            st.session_state[combo_flash_key] = spellbook.combo_check_summary(combo_result)
-            st.rerun(scope="app")
+            cv.finish_edit({"message": spellbook.combo_check_summary(combo_result), "combos": True})
 
     if combo_sync:
         included_df = loaders.load_deck_combos(conn, deck_id, "included")

@@ -95,12 +95,10 @@ def _create_deck_dialog():
             if err:
                 st.error(err)
             else:
-                loaders.invalidate_deck_caches()
-                st.toast(f"Created '{cn_name.strip()}'.", icon="✅")
                 # Select the new deck by id (Phase 2's shared current deck).
                 st.session_state[cv.CURRENT_DECK_KEY] = new_id
                 cv.close_dialog("editor_newdeck_dialog")
-                st.rerun()
+                cv.finish_edit({"message": f"Created '{cn_name.strip()}'."})
 
 
 if st.sidebar.button("➕ Create a new deck", key="editor_newdeck_open"):
@@ -118,14 +116,16 @@ if deck_id is not None:
 # Pass 6).
 # ------------------------------------------------------------------
 def _add_card_to_deck(deck_id, name, set_code, number, qty):
-    """Returns (message, error) — exactly one is set."""
+    """Returns (message, error, collection_touched) — exactly one of
+    message/error is set; collection_touched tells the caller whether to
+    also clear collection caches (a starter lot was created)."""
     if not name and not (set_code and number):
-        return None, "Enter a card name, or a set code + collector number."
+        return None, "Enter a card name, or a set code + collector number.", False
     sid, was_new, err = card_resolver.resolve_or_fetch_card(
         conn, name=name or None, set_code=set_code or None, collector_number=number or None,
     )
     if err:
-        return None, err
+        return None, err, False
     writes.add_deck_card(conn, deck_id, sid, quantity=qty)
     # If this exact printing has no collection lot at all yet, give it a
     # starter one (quantity matching what was just added, Location defaulted
@@ -134,14 +134,12 @@ def _add_card_to_deck(deck_id, name, set_code, number, qty):
     # done for shortlist adds (see writes.auto_add_to_collection).
     deck_name = loaders.load_deck_meta(conn, deck_id).get("name")
     auto_added_id = writes.auto_add_to_collection(conn, sid, quantity=qty, location=deck_name)
-    loaders.invalidate_deck_caches()
-    if auto_added_id:
-        loaders.invalidate_collection_caches()
     return (
         f"Added {qty}x {name or sid}"
         + (" (fetched fresh from Scryfall)" if was_new else "")
         + (". Also added a starter collection lot for it (wasn't tracked yet)." if auto_added_id else "."),
         None,
+        bool(auto_added_id),
     )
 
 
@@ -159,14 +157,15 @@ def _render_add_card_form(deck_id, key_prefix, on_added=None):
     number = ac3.text_input("Number", key=f"{key_prefix}_add_num")
     qty = ac4.number_input("Qty", min_value=1, value=1, step=1, key=f"{key_prefix}_add_qty")
     if st.button("➕ Add to mainboard", key=f"{key_prefix}_add_btn"):
-        message, err = _add_card_to_deck(deck_id, name.strip(), set_code.strip(), number.strip(), int(qty))
+        message, err, collection_touched = _add_card_to_deck(
+            deck_id, name.strip(), set_code.strip(), number.strip(), int(qty)
+        )
         if err:
             st.error(err)
         else:
             if on_added:
                 on_added()
-            st.toast(message, icon="✅")
-            st.rerun(scope="app")
+            cv.finish_edit({"message": message, "collection": collection_touched})
 
 
 # ------------------------------------------------------------------
@@ -250,9 +249,7 @@ with tab_info:
                 if err:
                     st.error(err)
                 else:
-                    loaders.invalidate_deck_caches()
-                    st.toast(f"Renamed to '{new_name.strip()}'.", icon="✅")
-                    st.rerun()
+                    cv.finish_edit({"message": f"Renamed to '{new_name.strip()}'."})
             else:
                 st.info("No change to save.")
         st.divider()
@@ -296,9 +293,7 @@ with tab_info:
                 description=description.strip() or None,
                 tutors=tutors.strip() or None,
             )
-            loaders.invalidate_deck_caches()
-            st.toast("Saved deck details.", icon="✅")
-            st.rerun()
+            cv.finish_edit({"message": "Saved deck details."})
 
         st.divider()
         st.markdown(
@@ -323,14 +318,10 @@ with tab_info:
                     f.write(cover_upload.getbuffer())
                 rel_path = fmt.static_relative_path(dest_path)
                 writes.set_deck_cover_image(conn, deck_id, rel_path)
-                loaders.invalidate_deck_caches()
-                st.toast("Cover image saved.", icon="✅")
-                st.rerun()
+                cv.finish_edit({"message": "Cover image saved."})
             if rm_col.button("🗑️ Remove cover image", key=f"editor_{deck_id}_cover_remove", disabled=not meta.get("cover_image_path")):
                 writes.set_deck_cover_image(conn, deck_id, None)
-                loaders.invalidate_deck_caches()
-                st.toast("Cover image removed.", icon="✅")
-                st.rerun()
+                cv.finish_edit({"message": "Cover image removed."})
 
         st.divider()
         st.markdown(
@@ -364,9 +355,7 @@ with tab_info:
         if st.button("💾 Save Win Conditions / Strengths / Weaknesses", key=f"editor_{deck_id}_ranks_save"):
             for kind, _ in rank_kinds:
                 writes.set_deck_rank_list(conn, deck_id, kind, rank_inputs[kind])
-            loaders.invalidate_deck_caches()
-            st.toast("Saved.", icon="✅")
-            st.rerun()
+            cv.finish_edit({"message": "Saved."})
 
         st.divider()
         # ------------------------------------------------------------------
@@ -506,23 +495,22 @@ with tab_info:
                 staged = writes.stage_dismantle(
                     conn, deck_id, target_deck_id=_dis_target_id, dest_location=_dis_dest,
                 )
-                if _dis_move_strays and _dis["strays"]:
-                    moved = writes.move_dismantle_strays(conn, deck_id, dest_location=_dis_dest)
-                    st.info(f"Moved {moved} stray lot(s) to {_dis_dest}.")
-                if _dis_mark:
-                    writes.set_build_state(conn, deck_id, "dismantled")
-                loaders.invalidate_deck_caches()
-                loaders.invalidate_collection_caches()
+                lines, warnings = [], []
                 if staged["removed"] or staged["added"]:
-                    st.success(
+                    lines.append(
                         f"Staged {len(staged['removed'])} removal(s) and "
                         f"{len(staged['added'])} addition(s) as planned changes. "
                         "Review and apply them on the **Workbench**."
                     )
                 else:
-                    st.warning("Nothing was staged.")
-                for card, reason in staged["skipped"]:
-                    st.caption(f"Skipped **{card}** — {reason}.")
+                    warnings.append("Nothing was staged.")
+                if _dis_move_strays and _dis["strays"]:
+                    moved = writes.move_dismantle_strays(conn, deck_id, dest_location=_dis_dest)
+                    lines.append(f"Moved {moved} stray lot(s) to {_dis_dest}.")
+                if _dis_mark:
+                    writes.set_build_state(conn, deck_id, "dismantled")
+                warnings += [f"Skipped {card} — {reason}." for card, reason in staged["skipped"]]
+                cv.finish_edit({"message": lines, "warnings": warnings, "collection": True})
 
         if meta.get("build_state") == "dismantled":
             st.info(
@@ -531,8 +519,7 @@ with tab_info:
             )
             if st.button("↩️ No longer dismantled", key=f"editor_{deck_id}_undismantle"):
                 writes.set_build_state(conn, deck_id, None)
-                loaders.invalidate_deck_caches(deck_id)
-                st.rerun()
+                cv.finish_edit({"message": "No longer marked dismantled."})
 
         st.divider()
         st.markdown("#### ⚠️ Delete this deck")
@@ -564,13 +551,16 @@ with tab_info:
             if del_confirm.strip() != meta.get("name"):
                 st.error("Name didn't match — nothing was deleted.")
             else:
-                deleted_name, err = writes.delete_deck(conn, deck_id, clear_collection_locations=del_clear_loc)
+                deleted_name, err, redirected = writes.delete_deck(
+                    conn, deck_id, clear_collection_locations=del_clear_loc
+                )
                 if err:
                     st.error(err)
                 else:
-                    loaders.invalidate_deck_caches()
-                    st.success(f"Deleted '{deleted_name}'.")
-                    st.rerun()
+                    msg = f"Deleted '{deleted_name}'."
+                    if redirected:
+                        msg += f" Redirected {redirected} other open change(s) that were headed there to Box."
+                    cv.finish_edit({"message": msg, "collection": del_clear_loc})
 
 # ------------------------------------------------------------------
 # Themes
@@ -594,9 +584,7 @@ with tab_themes:
             if st.button("🗑️ Remove theme", key=f"editor_{deck_id}_theme_remove_btn"):
                 t = theme_options[theme_choice]
                 writes.remove_deck_theme(conn, deck_id, t["theme"], t["role"])
-                loaders.invalidate_deck_caches()
-                st.toast(f"Removed '{theme_choice}'.", icon="✅")
-                st.rerun()
+                cv.finish_edit({"message": f"Removed '{theme_choice}'."})
         else:
             st.caption("Nothing to remove yet.")
 
@@ -617,10 +605,7 @@ with tab_themes:
             else:
                 writes.add_theme_to_catalog(conn, theme_name.strip())
                 writes.add_deck_theme(conn, deck_id, theme_name.strip(), theme_role)
-                loaders.invalidate_deck_caches()
-                loaders.invalidate_reference_caches()
-                st.toast(f"Added '{theme_name.strip()}' ({theme_role}).", icon="✅")
-                st.rerun()
+                cv.finish_edit({"message": f"Added '{theme_name.strip()}' ({theme_role}).", "reference": True})
 
         @st.dialog("⚙️ Manage the master theme list")
         def _manage_theme_catalog_dialog(theme_catalog, deck_id):
@@ -633,9 +618,8 @@ with tab_themes:
             if st.button("➕ Add to master list", key=f"editor_{deck_id}_theme_catalog_add_btn"):
                 if new_catalog_theme.strip():
                     writes.add_theme_to_catalog(conn, new_catalog_theme.strip())
-                    loaders.invalidate_reference_caches()
-                    st.toast(f"Added '{new_catalog_theme.strip()}' to the master list.", icon="✅")
-                    st.rerun()
+                    cv.finish_edit({"message": f"Added '{new_catalog_theme.strip()}' to the master list.",
+                                    "reference": True})
                 else:
                     st.warning("Enter a theme name.")
 
@@ -645,9 +629,8 @@ with tab_themes:
                 )
                 if st.button("🗑️ Remove from master list", key=f"editor_{deck_id}_theme_catalog_remove_btn"):
                     writes.remove_theme_from_catalog(conn, catalog_remove_choice)
-                    loaders.invalidate_reference_caches()
-                    st.toast(f"Removed '{catalog_remove_choice}' from the master list.", icon="✅")
-                    st.rerun()
+                    cv.finish_edit({"message": f"Removed '{catalog_remove_choice}' from the master list.",
+                                    "reference": True})
             else:
                 st.caption("Master theme list is empty.")
 
@@ -724,9 +707,7 @@ with tab_cardtags:
                         labels = [] if pd.isna(raw) else [x.strip() for x in str(raw).split(",")]
                         cardtags_edits[row["scryfall_id"]] = labels
                     changed = writes.bulk_set_card_tags(conn, deck_id, tag_type, cardtags_edits)
-                    loaders.invalidate_deck_caches()
-                    st.toast(f"Updated {tag_type} tags on {changed} card(s).", icon="✅")
-                    st.rerun()
+                    cv.finish_edit({"message": f"Updated {tag_type} tags on {changed} card(s)."})
 
 # ------------------------------------------------------------------
 # Mainboard
@@ -767,9 +748,7 @@ with tab_main:
                     else:
                         main_updates[row["scryfall_id"]] = int(row["Qty"]) if pd.notna(row["Qty"]) else 0
                 changed = writes.bulk_update_deck_cards(conn, deck_id, main_updates)
-                loaders.invalidate_deck_caches()
-                st.toast(f"Updated {changed} card(s).", icon="✅")
-                st.rerun()
+                cv.finish_edit({"message": f"Updated {changed} card(s)."})
 
 # ------------------------------------------------------------------
 # Shortlist (Workbench rework, Phase 1) — replaces the separate Maybeboard
@@ -885,19 +864,14 @@ with tab_shortlist:
         # slot. A fresh key per write starts it clean.
         ver_key = f"editor_{deck_id}_shortlist_ver"
         ver = st.session_state.get(ver_key, 0)
-        result_key = f"editor_{deck_id}_shortlist_result"
 
-        def _refresh(collection=False):
+        def _refresh(flash=None, collection=False):
+            """Bump the data_editor version (so stale pending edits don't
+            replay onto a different row, see ver_key above) and finish the
+            write (Phase 0 of EDIT_FLOW_PLAN.md). `flash`: a list of lines,
+            each prefixed "✅ " or "❌ "."""
             st.session_state[ver_key] = ver + 1
-            loaders.invalidate_deck_caches()
-            if collection:
-                loaders.invalidate_collection_caches()
-            st.rerun()
-
-        if st.session_state.get(result_key):
-            for line in st.session_state[result_key]:
-                (st.success if line.startswith("✅") else st.error)(line)
-            del st.session_state[result_key]
+            cv.finish_edit(cv.result_from_lines(flash or [], collection=collection))
 
         st.caption(
             "A card moves **idea → planned → applied**, or gets **dropped**.",
@@ -947,8 +921,7 @@ with tab_shortlist:
                         st.warning(str(exc))
                     else:
                         fetched = " (fetched fresh from Scryfall)" if was_new else ""
-                        st.session_state[result_key] = [f"✅ Added {resolved_name} to the shortlist{fetched}."]
-                        _refresh()
+                        _refresh([f"✅ Added {resolved_name} to the shortlist{fetched}."])
 
         # ---------------- Ideas ----------------
         st.divider()
@@ -1028,8 +1001,7 @@ with tab_shortlist:
                     except ValueError as exc:
                         flash.append(f"❌ {row['Card']}: {exc}")
                 flash.insert(0, f"✅ Saved {edited_n} edit(s), planned {planned_n}, dropped {dropped_n}.")
-                st.session_state[result_key] = flash
-                _refresh()
+                _refresh(flash)
 
         # ---------------- Planned ----------------
         st.divider()
@@ -1096,8 +1068,7 @@ with tab_shortlist:
                     conn, ids,
                     resolve_add=lambda name: card_resolver.resolve_or_fetch_card(conn, name=name),
                 )
-                st.session_state[result_key] = _apply_flash(results)
-                _refresh(collection=True)
+                _refresh(_apply_flash(results), collection=True)
 
             pb1, pb2, pb3 = st.columns(3)
             if pb1.button("💾 Save Qty / run checked actions", key=f"editor_{deck_id}_sl_planned_save_{ver}"):
@@ -1115,8 +1086,7 @@ with tab_shortlist:
                     except ValueError as exc:
                         flash.append(f"❌ {row['Add']}: {exc}")
                 flash.insert(0, f"✅ Saved {qty_n} quantity edit(s), moved {demoted_n} back to ideas, dropped {dropped_n}.")
-                st.session_state[result_key] = flash
-                _refresh()
+                _refresh(flash)
             if pb2.button("✅ Apply checked", key=f"editor_{deck_id}_sl_planned_apply_checked_{ver}"):
                 _save_quantities()
                 checked = [int(row["change_id"]) for _, row in planned_edited.iterrows() if row["Apply"]]
@@ -1166,5 +1136,4 @@ with tab_shortlist:
                         except ValueError as exc:
                             st.warning(str(exc))
                         else:
-                            st.session_state[result_key] = [f"✅ Restored {restore_pick.rsplit(' (#', 1)[0]} as an idea."]
-                            _refresh()
+                            _refresh([f"✅ Restored {restore_pick.rsplit(' (#', 1)[0]} as an idea."])

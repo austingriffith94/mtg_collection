@@ -131,11 +131,13 @@ def _act(conn, deck, **action):
     return deck_board.apply_board_action(conn, deck, action)
 
 
-def test_inc_bumps_without_history_and_undo_decrements(conn, deck, ring):
+def test_inc_bumps_log_a_quantity_change_not_an_add_and_undo_decrements(conn, deck, ring):
     result = _act(conn, deck, op="inc", id=ring)
     assert _qty(conn, deck, ring) == 3
     assert result["message"] == "Sol Ring → ×3"
-    assert _history(conn, deck) == []  # a quantity bump isn't an add or a removal
+    # Phase 0: the bump is in history (quantity 2 -> 3), but as a diff of 1,
+    # not a fresh "add" of the whole new count.
+    assert _history(conn, deck) == [("applied", ring, None, 1)]
     deck_board.apply_board_action(conn, deck, result["undo"])
     assert _qty(conn, deck, ring) == 2
 

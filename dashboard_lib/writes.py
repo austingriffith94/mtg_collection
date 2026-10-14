@@ -511,15 +511,35 @@ def set_deck_rank_list(conn, deck_id, kind, items):
     conn.commit()
 
 
+def _cascade_deck_name(conn, old_name, new_name, update_collection_locations=True):
+    """Keep every place a deck's name is stored as free text in sync on a
+    rename (rule 3 of EDIT_FLOW_PLAN.md): `collection.location` (what
+    "sleeved in this deck" tracking matches on) and `deck_changes.dest_location`
+    on **open** (idea/planned) rows — a dismantle transfer or any other
+    planned removal that names this deck as where the copy is headed.
+    Applied rows are left alone: they're history, recording what the
+    target was called at the time, not what it's called now. A new
+    free-text deck-name column added anywhere gets a line here too."""
+    if update_collection_locations:
+        conn.execute("UPDATE collection SET location=? WHERE location=?", (new_name, old_name))
+    conn.execute(
+        """UPDATE deck_changes SET dest_location=?
+           WHERE dest_location=? AND status IN ('idea','planned')""",
+        (new_name, old_name),
+    )
+
+
 def rename_deck(conn, deck_id, new_name, update_collection_locations=True):
     """Returns (success, error). decks.name is UNIQUE and is matched as
     free text elsewhere (collection.location for "sleeved in this deck"
-    tracking, and scripts/migrate.py's tag backup/restore keys off the
+    tracking, deck_changes.dest_location for an open removal headed to
+    this deck, and scripts/migrate.py's tag backup/restore keys off the
     name too) — so a rename here, by default, also updates any
-    collection.location rows that exactly matched the old name. It does
-    NOT touch decks.csv/deck_mapping.csv: if you later re-run the CSV
-    migration, the deck will reappear under its old CSV name unless you
-    update the CSV to match."""
+    collection.location rows that exactly matched the old name (open
+    dest_location rows are always kept in sync, since they aren't
+    collection data). It does NOT touch decks.csv/deck_mapping.csv: if you
+    later re-run the CSV migration, the deck will reappear under its old
+    CSV name unless you update the CSV to match."""
     new_name = (new_name or "").strip()
     if not new_name:
         return False, "Name can't be empty."
@@ -534,8 +554,7 @@ def rename_deck(conn, deck_id, new_name, update_collection_locations=True):
     except sqlite3.IntegrityError:
         logger.warning("rename_deck: name collision for %r", new_name)
         return False, f"A deck named '{new_name}' already exists."
-    if update_collection_locations:
-        conn.execute("UPDATE collection SET location=? WHERE location=?", (new_name, old_name))
+    _cascade_deck_name(conn, old_name, new_name, update_collection_locations)
     conn.commit()
     logger.info("Renamed deck %d: %r -> %r", deck_id, old_name, new_name)
     return True, None
@@ -564,7 +583,11 @@ _DECK_SCOPED_TABLES = (
 def delete_deck(conn, deck_id, clear_collection_locations=True):
     """Permanently removes a deck and everything scoped to it (mainboard,
     shortlist/history, card tags, themes, win conditions/strengths/weaknesses).
-    Returns (deck_name, error) — error is None on success.
+    Returns (deck_name, error, redirected) — error is None on success;
+    redirected is the number of OTHER decks' open deck_changes rows whose
+    dest_location named this deck (e.g. a dismantle transfer feeding it)
+    that got reassigned to DEFAULT_LOCATION, since that target no longer
+    exists to receive them. Applied rows are left alone — they're history.
 
     game_participants rows referencing this deck are deliberately NOT
     deleted outright, to avoid corrupting data that isn't really "this
@@ -598,11 +621,26 @@ def delete_deck(conn, deck_id, clear_collection_locations=True):
     """
     row = conn.execute("SELECT name FROM decks WHERE deck_id=?", (deck_id,)).fetchone()
     if not row:
-        return None, "Deck not found."
+        return None, "Deck not found.", 0
     deck_name = row[0]
 
     conn.execute(
         "UPDATE game_participants SET deck_id=NULL, is_own_deck=0 WHERE deck_id=?", (deck_id,)
+    )
+
+    # Other decks' open rows pointed at this deck as a removal's
+    # destination (e.g. a dismantle transfer feeding it) can't be applied
+    # to a target that no longer exists — fall back to the same
+    # DEFAULT_LOCATION a dest_location of NULL already means.
+    redirected = conn.execute(
+        """SELECT COUNT(*) FROM deck_changes
+           WHERE dest_location=? AND status IN ('idea','planned') AND deck_id != ?""",
+        (deck_name, deck_id),
+    ).fetchone()[0]
+    conn.execute(
+        """UPDATE deck_changes SET dest_location=?
+           WHERE dest_location=? AND status IN ('idea','planned') AND deck_id != ?""",
+        (DEFAULT_LOCATION, deck_name, deck_id),
     )
 
     for table in _DECK_SCOPED_TABLES:
@@ -615,8 +653,9 @@ def delete_deck(conn, deck_id, clear_collection_locations=True):
 
     conn.execute("DELETE FROM decks WHERE deck_id=?", (deck_id,))
     conn.commit()
-    logger.info("Deleted deck %r (deck_id=%d)", deck_name, deck_id)
-    return deck_name, None
+    logger.info("Deleted deck %r (deck_id=%d); redirected %d open row(s) pointed at it",
+                deck_name, deck_id, redirected)
+    return deck_name, None, redirected
 
 
 # ------------------------------------------------------------------
@@ -723,6 +762,18 @@ def add_deck_card(conn, deck_id, scryfall_id, quantity=1):
         # and execute_swap() goes through _put_deck_card, so applying a
         # planned swap never auto-drops its own row.
         _auto_drop_stale_ideas(conn, deck_id, scryfall_id)
+    elif quantity != existing:
+        # Phase 0: a bump (Swamp x4 -> x5) is logged too, as the
+        # difference rather than a second "add" of the whole new count —
+        # it isn't a join (no auto-drop) and History tells it apart from a
+        # real add/remove by its notes rather than by a separate status.
+        notes = f"quantity {existing} → {quantity}"
+        if quantity > existing:
+            _log_applied_change(conn, deck_id, add_scryfall_id=scryfall_id,
+                                 quantity=quantity - existing, notes=notes)
+        else:
+            _log_applied_change(conn, deck_id, remove_scryfall_id=scryfall_id,
+                                 quantity=existing - quantity, notes=notes)
 
 
 def remove_deck_card(conn, deck_id, scryfall_id):
@@ -890,17 +941,18 @@ def add_change(conn, deck_id, *, add_scryfall_id=None, add_name=None,
     return cur.lastrowid
 
 
-def _log_applied_change(conn, deck_id, add_scryfall_id=None, remove_scryfall_id=None, quantity=1):
-    """Record an already-completed hand edit (a mainboard add or remove)
-    as an 'applied' row, so history covers more than swaps. Not for the
+def _log_applied_change(conn, deck_id, add_scryfall_id=None, remove_scryfall_id=None, quantity=1, notes=None):
+    """Record an already-completed hand edit (a mainboard add or remove,
+    or — Phase 0 — a quantity bump on a card already on the list) as an
+    'applied' row, so history covers more than swaps. Not for the
     shortlist flow: apply_change() flips its own row to applied instead."""
     conn.execute(
         """INSERT INTO deck_changes
                (deck_id, status, add_scryfall_id, add_name, remove_scryfall_id,
-                remove_name, quantity, resolved_at)
-           VALUES (?, 'applied', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+                remove_name, quantity, notes, resolved_at)
+           VALUES (?, 'applied', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
         (deck_id, add_scryfall_id, _card_name(conn, add_scryfall_id),
-         remove_scryfall_id, _card_name(conn, remove_scryfall_id), quantity),
+         remove_scryfall_id, _card_name(conn, remove_scryfall_id), quantity, notes),
     )
     conn.commit()
 

@@ -63,9 +63,8 @@ def _manage_location_catalog_dialog():
     if st.button("➕ Add to master list", key="editor_loc_catalog_add_btn"):
         if new_loc_catalog_entry.strip():
             writes.add_location_to_catalog(conn, new_loc_catalog_entry.strip())
-            loaders.invalidate_reference_caches()
-            st.toast(f"Added '{new_loc_catalog_entry.strip()}' to the master list.", icon="✅")
-            st.rerun()
+            cv.finish_edit({"message": f"Added '{new_loc_catalog_entry.strip()}' to the master list.",
+                            "reference": True})
         else:
             st.warning("Enter a location name.")
 
@@ -75,9 +74,8 @@ def _manage_location_catalog_dialog():
         )
         if st.button("🗑️ Remove from master list", key="editor_loc_catalog_remove_btn"):
             writes.remove_location_from_catalog(conn, loc_catalog_remove)
-            loaders.invalidate_reference_caches()
-            st.toast(f"Removed '{loc_catalog_remove}' from the master list.", icon="✅")
-            st.rerun()
+            cv.finish_edit({"message": f"Removed '{loc_catalog_remove}' from the master list.",
+                            "reference": True})
     else:
         st.caption("Master location list is empty.")
 
@@ -238,25 +236,26 @@ if order_file is not None:
             )
             if order_loc_pick == LOC_OTHER_IMPORT and order_location.strip():
                 writes.add_location_to_catalog(conn, order_location.strip())
-            loaders.invalidate_collection_caches()
-            loaders.invalidate_reference_caches()
 
             added = [r for r in results if r["status"] in ("added", "added_new_card")]
             fetched = [r for r in results if r["status"] == "added_new_card"]
-            errors = [r for r in results if r["status"] == "error"]
+            failed = [r for r in results if r["status"] == "error"]
             skipped = [r for r in results if r["status"] == "skipped"]
 
             note = f" ({len(fetched)} fetched fresh from Scryfall)" if fetched else ""
-            st.success(f"Imported {len(added)} card(s){note}.")
+            lines = [f"Imported {len(added)} card(s){note}."]
             if skipped:
-                st.info(f"Skipped {len(skipped)} non-single row(s).")
-            if errors:
-                st.error(f"{len(errors)} row(s) failed:")
-                for r in errors:
-                    row = r["row"]
-                    st.write(f"- {row['resolved_name']} ({row['set_code']}/{row['collector_number']}): {r['message']}")
+                lines.append(f"Skipped {len(skipped)} non-single row(s).")
             del st.session_state[cache_key]
-            st.rerun()
+            cv.finish_edit({
+                "message": lines,
+                "errors": [
+                    f"{r['row']['resolved_name']} ({r['row']['set_code']}/{r['row']['collector_number']}): "
+                    f"{r['message']}"
+                    for r in failed
+                ],
+                "collection": True, "reference": True,
+            })
 
 st.divider()
 st.markdown(
@@ -279,9 +278,6 @@ if st.session_state.pop("editor_coll_add_reset", False):
         st.session_state.pop(_k, None)
     for _k in [k for k in st.session_state if k.startswith("editor_coll_add_printing_pick_")]:
         del st.session_state[_k]
-_flash = st.session_state.pop("editor_coll_add_flash", None)  # shown once, gone on the next interaction
-if _flash:
-    st.success(_flash)
 
 coll_add_name = st.text_input("Card name", key="editor_coll_add_name")
 
@@ -325,8 +321,8 @@ if selected_card_name:
             if err:
                 st.error(err)
             elif added:
-                st.success(f"Found {added} new printing(s) for '{selected_card_name}'.")
-                st.rerun()
+                cv.finish_edit({"message": f"Found {added} new printing(s) for '{selected_card_name}'.",
+                                "reference": True})
             else:
                 st.info("No additional printings found beyond what's already in your database.")
 
@@ -394,12 +390,6 @@ if st.button("➕ Add to collection", key="editor_coll_add_btn"):
         )
         if loc_pick == LOC_OTHER and coll_add_location.strip():
             writes.add_location_to_catalog(conn, coll_add_location.strip())
-        loaders.invalidate_collection_caches()
-        loaders.invalidate_reference_caches()
-        # st.rerun() would wipe any message shown here, so stash it for the
-        # next run, and flag the per-card fields to be cleared (widget keys
-        # can only be reset before their widgets are instantiated, i.e. at
-        # the top of the form on the next run).
         what = selected_card_name or f"{coll_add_set.strip().upper()} #{coll_add_num.strip()}"
         if selected_printing:
             what += f" ({selected_printing['set_code'].upper()} #{selected_printing['collector_number']})"
@@ -407,10 +397,13 @@ if st.button("➕ Add to collection", key="editor_coll_add_btn"):
         foil_txt = " foil" if coll_add_foil else ""
         loc_txt = f" → {coll_add_location.strip()}" if coll_add_location.strip() else ""
         fetched_txt = " (fetched fresh from Scryfall)" if was_new else ""
-        st.session_state["editor_coll_add_flash"] = f"Added {qty_txt}{what}{foil_txt}{loc_txt}{fetched_txt}."
+        # Flag the per-card fields to be cleared on the next run (widget keys
+        # can only be reset before their widgets are instantiated).
         st.session_state["editor_coll_add_reset"] = True
-        st.toast(st.session_state["editor_coll_add_flash"], icon="✅")
-        st.rerun()
+        cv.finish_edit({
+            "message": f"Added {qty_txt}{what}{foil_txt}{loc_txt}{fetched_txt}.",
+            "collection": True, "reference": True,
+        })
 
 st.divider()
 st.markdown("**Edit / remove collection lots**")

@@ -97,11 +97,11 @@ def _render_reference_list(cfg):
             else:
                 name, error = card_resolver.canonical_card_name(conn, add_name)
                 cfg["set_tags"](conn, name, cfg["get_map"](conn).get(name, []) + labels)
-                loaders.invalidate_reference_caches()
-                st.toast(f"Added '{name}'.", icon="✅")
-                if error:
-                    st.toast("Couldn't look it up on Scryfall, so it was kept as typed.", icon="⚠️")
-                st.rerun()
+                cv.finish_edit({
+                    "message": f"Added '{name}'.",
+                    "warnings": ["Couldn't look it up on Scryfall, so it was kept as typed."] if error else [],
+                    "reference": True,
+                })
 
     if unlinked:
         if not card_resolver.scryfall_available():
@@ -112,11 +112,12 @@ def _render_reference_list(cfg):
             bar = st.progress(0.0)
             fetched, failed = card_resolver.fetch_missing_names(
                 conn, unlinked, progress_callback=lambda i, n, _name: bar.progress(i / n))
-            loaders.invalidate_reference_caches()
-            st.toast(f"Fetched {len(fetched)} card(s)" + (f"; {len(failed)} not found." if failed else "."), icon="✅")
             if failed:
                 st.session_state[f"{pre}_fetch_failed"] = failed
-            st.rerun()
+            cv.finish_edit({
+                "message": f"Fetched {len(fetched)} card(s)" + (f"; {len(failed)} not found." if failed else "."),
+                "reference": True,
+            })
     if st.session_state.get(f"{pre}_fetch_failed"):
         st.warning("Not found on Scryfall: " + ", ".join(st.session_state[f"{pre}_fetch_failed"]))
 
@@ -191,9 +192,10 @@ def _render_reference_list(cfg):
                      for _, row in edited.iterrows() if not row["Delete"]}
             removed = cfg["delete_names"](conn, to_delete)
             changed = cfg["bulk_set"](conn, edits)
-            loaders.invalidate_reference_caches()
-            st.toast(f"Updated {changed} card(s)" + (f", removed {removed} from the list." if removed else "."), icon="✅")
-            st.rerun()
+            cv.finish_edit({
+                "message": f"Updated {changed} card(s)" + (f", removed {removed} from the list." if removed else "."),
+                "reference": True,
+            })
 
     st.divider()
     if st.button("💾 Export lists to CSV", key=f"{pre}_export",
@@ -240,9 +242,8 @@ with tab_gc:
         if st.button("➕ Add to master list", key="editor_gc_catalog_add_btn"):
             if new_gc_category.strip():
                 writes.add_game_changer_category(conn, new_gc_category.strip())
-                loaders.invalidate_reference_caches()
-                st.toast(f"Added '{new_gc_category.strip()}' to the master list.", icon="✅")
-                st.rerun()
+                cv.finish_edit({"message": f"Added '{new_gc_category.strip()}' to the master list.",
+                                "reference": True})
             else:
                 st.warning("Enter a category name.")
 
@@ -252,9 +253,8 @@ with tab_gc:
             )
             if st.button("🗑️ Remove from master list", key="editor_gc_catalog_remove_btn"):
                 writes.remove_game_changer_category(conn, gc_catalog_remove)
-                loaders.invalidate_reference_caches()
-                st.toast(f"Removed '{gc_catalog_remove}' from the master list.", icon="✅")
-                st.rerun()
+                cv.finish_edit({"message": f"Removed '{gc_catalog_remove}' from the master list.",
+                                "reference": True})
         else:
             st.caption("Master category list is empty.")
 
@@ -304,9 +304,8 @@ with tab_manatags:
         if st.button("➕ Add to master list", key="editor_mt_catalog_add_btn"):
             if new_mt_tag.strip():
                 writes.add_mana_tag_to_catalog(conn, new_mt_tag.strip())
-                loaders.invalidate_reference_caches()
-                st.toast(f"Added '{new_mt_tag.strip()}' to the master list.", icon="✅")
-                st.rerun()
+                cv.finish_edit({"message": f"Added '{new_mt_tag.strip()}' to the master list.",
+                                "reference": True})
             else:
                 st.warning("Enter a tag name.")
 
@@ -316,9 +315,8 @@ with tab_manatags:
             )
             if st.button("🗑️ Remove from master list", key="editor_mt_catalog_remove_btn"):
                 writes.remove_mana_tag_from_catalog(conn, mt_catalog_remove)
-                loaders.invalidate_reference_caches()
-                st.toast(f"Removed '{mt_catalog_remove}' from the master list.", icon="✅")
-                st.rerun()
+                cv.finish_edit({"message": f"Removed '{mt_catalog_remove}' from the master list.",
+                                "reference": True})
         else:
             st.caption("Master tag list is empty.")
 
@@ -361,9 +359,7 @@ with tab_manatags:
         if st.button("💾 Save tags for this card", key="editor_mt_save_one"):
             labels = [x.strip() for x in mt_tags_input.split(",") if x.strip()]
             writes.set_mana_tags(conn, mt_pick, labels)
-            loaders.invalidate_reference_caches()
-            st.toast(f"Updated mana tags on '{mt_pick}'.", icon="✅")
-            st.rerun()
+            cv.finish_edit({"message": f"Updated mana tags on '{mt_pick}'.", "reference": True})
 
     st.divider()
 
@@ -399,30 +395,27 @@ with tab_carddata:
             status.caption(f"{done}/{total} — {name}")
 
         summary = refresh.refresh_all_cards(conn, progress_callback=_progress)
-        loaders.invalidate_deck_caches()
-        loaders.invalidate_collection_caches()
-        loaders.invalidate_reference_caches()
-
-        st.success(f"Checked {summary['checked']} card(s), updated {summary['updated']}.")
+        lines = [f"Checked {summary['checked']} card(s), updated {summary['updated']}."]
         if summary["newly_reserved"]:
-            st.info("Newly flagged Reserved List: " + ", ".join(summary["newly_reserved"]))
+            lines.append("Newly flagged Reserved List: " + ", ".join(summary["newly_reserved"]))
         if summary["newly_game_changer"]:
-            st.info("Newly flagged Game Changer: " + ", ".join(summary["newly_game_changer"]))
-        if summary["unresolved"]:
-            st.warning(f"Couldn't refresh {len(summary['unresolved'])} card(s): " + ", ".join(summary["unresolved"]))
+            lines.append("Newly flagged Game Changer: " + ", ".join(summary["newly_game_changer"]))
         if summary["pruned_count"]:
-            st.info(
+            lines.append(
                 f"Pruned {summary['pruned_count']} collection lot(s) with no location, no "
                 f"quantity, and not in any deck's mainboard/shortlist: "
                 + ", ".join(summary["pruned_cards"])
             )
-        else:
-            st.caption("Nothing to prune from the collection this time.")
         _orphans = q.orphan_report(conn)
-        st.caption(
+        lines.append(
             "Stale data left (see **Clean up** below): "
             + ", ".join(f"{len(_orphans[k])} {label}" for k, label in ORPHAN_LABELS.items())
         )
+        warnings = []
+        if summary["unresolved"]:
+            warnings.append(f"Couldn't refresh {len(summary['unresolved'])} card(s): "
+                            + ", ".join(summary["unresolved"]))
+        cv.finish_edit({"message": lines, "warnings": warnings, "collection": True, "reference": True})
 
     st.divider()
 
@@ -457,11 +450,7 @@ with tab_carddata:
             ok = st.checkbox(f"Yes, delete these {len(frame)}", key=f"carddb_clean_{key}_ok")
             if st.button("🗑️ Delete", key=f"carddb_clean_{key}_btn", disabled=not ok):
                 n = action(frame)
-                loaders.invalidate_reference_caches()
-                loaders.invalidate_deck_caches()
-                loaders.invalidate_collection_caches()
-                st.toast(f"Deleted {n}.", icon="✅")
-                st.rerun()
+                cv.finish_edit({"message": f"Deleted {n}.", "reference": True, "collection": True})
 
     _cleanup_bucket(
         "unreferenced_cards", "Unreferenced cards",
@@ -551,17 +540,15 @@ with tab_carddata:
             if n_inc:
                 combo_findings.append((deck_name, spellbook.combo_list_text(result["included"], limit=6)))
 
-        loaders.invalidate_combo_caches()
-        st.success(
+        lines = [
             f"Checked {len(deck_inputs)} deck(s): {combo_totals['included']} assembled combo(s) "
             f"found, {combo_totals['almost']} one card away."
-        )
-        if combo_findings:
-            st.markdown("**Combos found:**")
-            for deck_name, line in combo_findings:
-                st.markdown(f"- **{deck_name}** — {line}")
-        if combo_failures:
-            st.warning("Couldn't check: " + "; ".join(combo_failures))
+        ] + [f"**{deck_name}** — {line}" for deck_name, line in combo_findings]
+        cv.finish_edit({
+            "message": lines,
+            "warnings": ["Couldn't check: " + "; ".join(combo_failures)] if combo_failures else [],
+            "combos": True,
+        })
 
     combo_overview = combo_sync_df.rename(columns={
         "deck_name": "Deck", "fetched_at": "Last checked",

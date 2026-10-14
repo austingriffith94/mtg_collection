@@ -47,6 +47,10 @@ plus pytest (`pip install -r requirements-dev.txt`):
   the shared current deck (UI plan Phase 2): every deck page opens on it,
   it carries across pages, a `?deck_id=` param seeds it once, and creating a
   deck in the Deck Editor selects the new one.
+- `test_finish_edit.py` — EDIT_FLOW_PLAN.md Phase 0: `card_view.result_from_lines()`, and through
+  `AppTest` that a write's message shows exactly once after `finish_edit()`'s rerun (toasts for one or
+  two lines, one success list for more, warnings and errors alongside). Page adoption is covered by
+  `test_pages_smoke.py` (rename, Shortlist add, game delete, Workbench contention drop, Location catalog).
 - `test_current_deck.py` — pure tests of `card_view.seed_current_deck()` and
   `resolve_current_deck()` with a dict standing in for session state.
 - `test_nav.py` — the page registry in `dashboard_lib/nav.py` matches the

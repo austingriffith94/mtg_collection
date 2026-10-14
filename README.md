@@ -691,6 +691,11 @@ retyping a card name, lets pending work across every deck be seen in one
 place, and gives each deck a real change history to line up against its
 win/loss record.
 
+Hand edits are in that history too: adding or removing a card on the Board
+or the Mainboard tab logs an `applied` row, and so does a quantity change
+(Swamp ×4 → ×5), logged as the difference with a note like
+`quantity 4 → 5` so it doesn't read as a new card joining the deck.
+
 The superseded `maybeboard` and `deck_swap_queue` tables are deliberately
 left in place and untouched as a frozen pre-rework backup, per the
 additive/non-destructive schema policy above — nothing reads or writes them
@@ -1055,8 +1060,8 @@ Notes and limits worth knowing:
   combos someone has submitted, so an unusual deck can legitimately come
   back empty.
 - **Cached, never fetched on page load**, so the dashboard stays usable
-  offline. The panel shows when it last checked and asks you to re-check
-  after a decklist change; stale rows are kept and labelled rather than
+  offline. The panel shows when it last checked, and warns once the deck
+  has been edited since then; stale rows are kept and labelled rather than
   silently deleted, since the last known-good answer beats a blank panel.
   `deck_combo_sync` exists so "never checked" and "checked, found nothing"
   can't be confused — on their own both are zero rows.

@@ -164,10 +164,8 @@ def _edit_game_dialog(games_df, game_ids):
             if err:
                 st.error(err)
             else:
-                loaders.invalidate_game_tracking_caches()
-                st.toast("Game updated.", icon="✅")
                 cv.close_dialog("gt_edit_dialog")
-                st.rerun()
+                cv.finish_edit({"message": "Game updated.", "games": True})
     if st.button("Cancel", key="gt_edit_cancel"):
         cv.close_dialog("gt_edit_dialog")
         st.rerun()
@@ -194,10 +192,8 @@ def _delete_game_dialog(games_df, game_ids):
         if err:
             st.error(err)
         else:
-            loaders.invalidate_game_tracking_caches()
-            st.toast("Game deleted.", icon="✅")
             cv.close_dialog("gt_delete_dialog")
-            st.rerun()
+            cv.finish_edit({"message": "Game deleted.", "games": True})
     if del_col2.button("Cancel", key="gt_delete_cancel"):
         cv.close_dialog("gt_delete_dialog")
         st.rerun()
@@ -237,9 +233,7 @@ with tab_log:
             if err:
                 st.error(err)
             else:
-                loaders.invalidate_game_tracking_caches()
-                st.toast("Game logged.", icon="✅")
-                st.rerun()
+                cv.finish_edit({"message": "Game logged.", "games": True})
 
     st.divider()
 

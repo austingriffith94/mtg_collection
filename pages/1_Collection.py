@@ -130,9 +130,7 @@ def render_edit_table(df):
                 "source": row["Source"] or None,
             }
         changed = writes.bulk_update_collection(conn, updates)
-        loaders.invalidate_collection_caches()
-        st.toast(f"Updated {changed} lot(s).", icon="✅")
-        st.rerun(scope="app")
+        cv.finish_edit({"message": f"Updated {changed} lot(s).", "collection": True})
 
 
 def render_moxfield_export():

@@ -2,7 +2,8 @@
 
 Finished working specs, kept because code comments and `PROJECT_STATE.md`
 still point at their "as built" notes. Nothing here is active work. The
-current plan lives at the repo root in [VISUAL_DECK_PLAN.md](../../VISUAL_DECK_PLAN.md).
+current plan lives at the repo root in [EDIT_FLOW_PLAN.md](../../EDIT_FLOW_PLAN.md);
+[VISUAL_DECK_PLAN.md](../../VISUAL_DECK_PLAN.md) beside it is finished (Phases A-C).
 
 | File | What it covered | Finished |
 |---|---|---|

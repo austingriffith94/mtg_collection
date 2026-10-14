@@ -50,9 +50,113 @@ def setup_page(page_title, page_icon, layout="wide"):
     label comes from dashboard_lib/nav.py instead (uppercase titles there
     replaced the old nav-caps CSS in Phase 1 of UI_ACTION_PLAN.md). Each
     page still needs its own sys.path.insert(...) BEFORE this can even be
-    imported, so that part stays per-file."""
+    imported, so that part stays per-file.
+
+    Also shows any feedback a write stashed before its rerun (Phase 0 of
+    EDIT_FLOW_PLAN.md) — see finish_edit()/show_pending_feedback() below."""
     setup_logging()
     st.set_page_config(page_title=page_title, page_icon=page_icon, layout=layout)
+    show_pending_feedback()
+
+
+# ------------------------------------------------------------------
+# One ending for every write (EDIT_FLOW_PLAN.md Phase 0, rule 1): clears
+# the right caches, stashes the outcome, and reruns — so no page hand-rolls
+# its own invalidate_*() / st.toast() / st.rerun() triple after a write.
+# Read-only notices (st.info hints, empty states) are unaffected; this is
+# only for a page's own successful writes.
+# ------------------------------------------------------------------
+_PENDING_FEEDBACK_KEY = "_pending_feedback"
+
+
+def finish_edit(result):
+    """Call this instead of invalidate_*() / st.toast() / st.rerun() after a
+    write. `result` (every key optional):
+
+        message     str, or a list of str (one line per outcome)
+        warnings    [str]  non-fatal notes, shown as ⚠️ toasts
+        errors      [str]  per-item failures, shown as st.error
+        moves       [...]  Phase 1: physical copies moved (empty until then)
+        collection  bool   also clear collection caches (implied by moves)
+        reference   bool   also clear reference caches (catalogs, card data)
+        games       bool   also clear game-log caches
+        combos      bool   also clear the Spellbook combo caches
+
+    Deck caches are always cleared. Ends in `st.rerun(scope="app")` — a
+    full rerun even from inside a fragment, since a write can change what
+    sections outside it show."""
+    stash_edit(result)
+    st.rerun(scope="app")
+
+
+def stash_edit(result):
+    """finish_edit() without the rerun, for a write made inside a widget
+    callback (on_click / on_change), where st.rerun() is a no-op: the
+    caller arranges the full-app rerun itself (deck_board's dirty flag +
+    rerun_if_edited()), and setup_page() shows the feedback on that run."""
+    # Local import: loaders imports card_view (for add_derived_columns),
+    # so importing it at module scope here would be circular.
+    from . import loaders
+
+    moves = list(result.get("moves") or [])
+    loaders.invalidate_deck_caches()
+    if result.get("collection") or moves:
+        loaders.invalidate_collection_caches()
+    if result.get("reference"):
+        loaders.invalidate_reference_caches()
+    if result.get("games"):
+        loaders.invalidate_game_tracking_caches()
+    if result.get("combos"):
+        loaders.invalidate_combo_caches()
+    message = result.get("message")
+    lines = [message] if isinstance(message, str) else list(message or [])
+    st.session_state[_PENDING_FEEDBACK_KEY] = {
+        "lines": [ln for ln in lines if ln],
+        "warnings": list(result.get("warnings") or []),
+        "errors": list(result.get("errors") or []),
+        "moves": moves,
+    }
+
+
+def result_from_lines(lines, **flags):
+    """A finish_edit() result from a list of "✅ ..." / "❌ ..." lines — the
+    shape the Shortlist tab and the Workbench build for a batch (one line
+    per change applied, promoted, dropped...). `flags` pass through
+    (collection=True etc.)."""
+    ok = [ln[1:].strip() for ln in lines if not ln.startswith("❌")]
+    bad = [ln[1:].strip() for ln in lines if ln.startswith("❌")]
+    return {"message": ok, "errors": bad, **flags}
+
+
+def show_moves(moves):
+    """Phase 1 fills this in (a toast naming one or two moves, a dialog
+    listing more); finish_edit() never carries a non-empty `moves` before
+    then, so this is unreachable until it does."""
+
+
+def show_pending_feedback():
+    """Called once from setup_page(), on every page, every run: shows
+    whatever the last write (if any) stashed via finish_edit() before its
+    rerun, then clears it so it shows exactly once.
+
+    One or two message lines are toasts; more (a batch apply) are one
+    st.success list at the top of the page, so a batch is never cut off in
+    a toast's few lines."""
+    pending = st.session_state.pop(_PENDING_FEEDBACK_KEY, None)
+    if not pending:
+        return
+    if pending.get("moves"):
+        show_moves(pending["moves"])
+    lines = pending.get("lines") or []
+    if len(lines) <= 2:
+        for line in lines:
+            st.toast(line, icon="✅")
+    else:
+        st.success("\n".join(f"- {line}" for line in lines))
+    for warning in pending.get("warnings") or []:
+        st.toast(warning, icon="⚠️")
+    for err in pending.get("errors") or []:
+        st.error(err)
 
 
 # ------------------------------------------------------------------

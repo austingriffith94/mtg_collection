@@ -55,25 +55,16 @@ db.refresh_data_button()
 # edits onto whichever row slid into its slot (same reasoning as the
 # Shortlist tab's `ver`).
 VER_KEY = "workbench_ver"
-RESULT_KEY = "workbench_result"
 ver = st.session_state.get(VER_KEY, 0)
 
 
-def _refresh(collection=False):
+def _refresh(lines, collection=False):
+    """Bump the editor version, then finish the write (EDIT_FLOW_PLAN.md
+    Phase 0): `lines` are "✅ ..." / "❌ ..." outcomes. finish_edit() reruns
+    the whole app even from a fragment (_planned_block), since a write
+    changes sections outside it."""
     st.session_state[VER_KEY] = ver + 1
-    loaders.invalidate_deck_caches()
-    if collection:
-        loaders.invalidate_collection_caches()
-    # scope="app" even when called from a fragment (_planned_block): a
-    # write changes sections outside it.
-    st.rerun(scope="app")
-
-
-def _flash():
-    """Show and consume the ✅/❌ lines left by the write that caused this
-    rerun. Consumed on display so they don't persist into the next one."""
-    for line in st.session_state.pop(RESULT_KEY, []):
-        (st.success if line.startswith("✅") else st.error)(line)
+    cv.finish_edit(cv.result_from_lines(lines, collection=collection))
 
 
 def _apply(change_ids, label="Applied"):
@@ -95,8 +86,7 @@ def _apply(change_ids, label="Applied"):
             lines.append(f"✅ {label} {r['add_name']}{fetch}, replaced {r['remove_name']}{lot}.")
         else:
             lines.append(f"❌ {r['add_name']}: {r['error']}")
-    st.session_state[RESULT_KEY] = lines
-    _refresh(collection=True)
+    _refresh(lines, collection=True)
 
 
 # ------------------------------------------------------------------
@@ -126,7 +116,6 @@ st.caption(
     f"**{len(contention)}** card(s) in contention · "
     f"**{unlocated['lots']}** lot(s) with no location (${unlocated['value']:,.0f})"
 )
-_flash()
 
 # Contention can be non-empty with an EMPTY shortlist queue — a card run
 # in 4 mainboards with 3 copies owned needs no idea/planned row to be real
@@ -226,8 +215,7 @@ else:
                         lines = [f"❌ change #{cid}: {msg}" for cid, msg in outcome["errors"]]
                         lines.insert(0, f"✅ Dropped {len(outcome['dropped'])} competing "
                                         f"row(s) for {group['card']}.")
-                        st.session_state[RESULT_KEY] = lines
-                        _refresh()
+                        _refresh(lines)
 
 @st.fragment
 def _planned_block(deck_id, deck_rows):
@@ -291,8 +279,7 @@ def _planned_block(deck_id, deck_rows):
                 except ValueError as exc:
                     lines.append(f"❌ {r['Add']}: {exc}")
             lines.insert(0, f"✅ Moved {demoted} back to ideas, dropped {dropped}.")
-            st.session_state[RESULT_KEY] = lines
-            _refresh()
+            _refresh(lines)
 
 
 # ------------------------------------------------------------------
@@ -369,8 +356,7 @@ else:
             except ValueError as exc:
                 lines.append(f"❌ {r['Card']}: {exc}")
         lines.insert(0, f"✅ Cleared {cleared} flag(s), dropped {dropped}.")
-        st.session_state[RESULT_KEY] = lines
-        _refresh()
+        _refresh(lines)
 
 # ------------------------------------------------------------------
 # Contention (Phase 3) — demand vs. supply per card, counting mainboard
@@ -414,10 +400,7 @@ else:
                     sid = q.deck_card_scryfall_id_for_oracle(conn, deck_id, row["oracle_id"])
                     if sid:
                         writes.remove_deck_card(conn, deck_id, sid)
-                        st.session_state[RESULT_KEY] = [
-                            f"✅ Dropped {row['card']} from {drop_choice}."
-                        ]
-                        _refresh()
+                        _refresh([f"✅ Dropped {row['card']} from {drop_choice}."])
 
 # ------------------------------------------------------------------
 # Buy list (Phase 3) — unowned ideas, deduplicated across decks, plus one
@@ -505,8 +488,7 @@ else:
             st.warning("Tick **Select** on at least one row and choose a location first.")
         else:
             writes.bulk_update_collection(conn, {cid: {"location": bulk_loc} for cid in picked})
-            st.session_state[RESULT_KEY] = [f"✅ Assigned {len(picked)} lot(s) to {bulk_loc}."]
-            _refresh(collection=True)
+            _refresh([f"✅ Assigned {len(picked)} lot(s) to {bulk_loc}."], collection=True)
     if u3.button("💾 Save row locations", key=f"workbench_unloc_save_{ver}"):
         edits = {int(r["collection_id"]): {"location": r["Location"]}
                  for _, r in unloc_edited.iterrows() if isinstance(r["Location"], str) and r["Location"]}
@@ -514,8 +496,7 @@ else:
             st.warning("Choose a **Location** on at least one row first.")
         else:
             writes.bulk_update_collection(conn, edits)
-            st.session_state[RESULT_KEY] = [f"✅ Located {len(edits)} lot(s)."]
-            _refresh(collection=True)
+            _refresh([f"✅ Located {len(edits)} lot(s)."], collection=True)
 
 # --- 2 + 3. Per-deck list vs. physical, with build status ----------
 recon = q.deck_reconciliation(conn)
@@ -557,8 +538,7 @@ for deck in recon:
                 lot = opts[choice]
                 writes.move_lot(conn, lot["collection_id"], deck["deck_name"],
                                 quantity=min(row["short"], lot["quantity"]))
-                st.session_state[RESULT_KEY] = [f"✅ {row['card']} located to {deck['deck_name']}."]
-                _refresh(collection=True)
+                _refresh([f"✅ {row['card']} located to {deck['deck_name']}."], collection=True)
             c4.caption("It's elsewhere → set its Location on the Collection page.")
         if deck["to_put_away"]:
             st.markdown("**To put away**")
@@ -578,5 +558,4 @@ for deck in recon:
                     take = min(remaining, lot["quantity"])
                     writes.move_lot(conn, lot["collection_id"], dest, quantity=take)
                     remaining -= take
-                st.session_state[RESULT_KEY] = [f"✅ {row['card']} put away in {dest}."]
-                _refresh(collection=True)
+                _refresh([f"✅ {row['card']} put away in {dest}."], collection=True)

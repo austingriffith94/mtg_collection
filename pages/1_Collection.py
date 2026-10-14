@@ -22,6 +22,10 @@ Collection page — browse the full physical collection.
   a stray click can't discard unsaved edits by reshaping the filtered set
   out from under the table; a "N unsaved change(s)" count next to the Save
   button comes from the data_editor's own edited_rows state (Phase 5).
+  A save that moves a lot into or out of a deck's Location, or deletes a
+  lot sleeved in a deck, asks whether that deck's list should follow
+  (EDIT_FLOW_PLAN.md Phase 6) — every lot change is also in the move log
+  that Card Lookup shows.
 - "Group / breakout by" lets you layer multiple groupings (e.g. Type, then
   Rarity within each type) — each top-level group is a collapsible
   section.
@@ -41,6 +45,7 @@ import streamlit as st
 
 from dashboard_lib import db, loaders, writes, formatting as fmt, moxfield_export
 from dashboard_lib import card_view as cv
+from dashboard_lib import queries as q
 
 
 
@@ -129,8 +134,15 @@ def render_edit_table(df):
                 "price_paid": float(row["Price Paid"]) if pd.notna(row["Price Paid"]) else None,
                 "source": row["Source"] or None,
             }
+        # Phase 6: a lot moved into or out of a deck's Location (or deleted
+        # from one) has already happened and is in the move log; ask whether
+        # that deck's list should follow rather than leaving it for Reconcile.
+        mark = q.last_move_id(conn)
         changed = writes.bulk_update_collection(conn, updates)
-        cv.finish_edit({"message": f"Updated {changed} lot(s).", "collection": True})
+        cv.finish_edit({
+            "message": f"Updated {changed} lot(s).", "collection": True,
+            "deck_sync": q.deck_sync_offers(conn, mark),
+        })
 
 
 def render_moxfield_export():

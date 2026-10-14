@@ -14,6 +14,12 @@ it with no cut, or drop it (apply is the same as the Shortlist tab's;
 availability is checked across every deck, as on the Workbench). The
 Mainboard tab keeps its table for changing many quantities at once.
 
+Every list edit here — Board, add bar, Mainboard table, applying a
+Shortlist swap — also moves the physical copies the same way
+(EDIT_FLOW_PLAN.md Phase 1: writes.sleeve_into_deck / unsleeve_from_deck),
+and a pop-up names each copy moved. A brewing deck's edits change its
+list only.
+
 Card Tags (bulk-editing any tag_type across a deck's mainboard) lives
 here too, moved from the earlier standalone Tag Editor page. Deck-level
 tags were removed entirely — use description/tutors instead.
@@ -111,35 +117,31 @@ if deck_id is not None:
 
 # ------------------------------------------------------------------
 # Add a card — shared by the Board and Mainboard tabs (one flow, not two
-# copies): resolve locally or via Scryfall, add to the mainboard, then give
-# a brand-new card a starter collection lot (Deck Building Auto-Add, Prompt
-# Pass 6).
+# copies): resolve locally or via Scryfall, then add it to the mainboard
+# through writes.add_deck_card(), which also sleeves the copies by the
+# Auto rule (EDIT_FLOW_PLAN.md Phase 1: a free copy from storage first,
+# a starter lot only for what isn't owned) and returns the moves for the
+# pop-up.
 # ------------------------------------------------------------------
 def _add_card_to_deck(deck_id, name, set_code, number, qty):
-    """Returns (message, error, collection_touched) — exactly one of
-    message/error is set; collection_touched tells the caller whether to
-    also clear collection caches (a starter lot was created)."""
+    """Returns (message, error, moves) — exactly one of message/error is
+    set. Adding a card already on the list adds to its quantity (an "add"
+    of 1 Swamp to 30 makes 31) rather than resetting it."""
     if not name and not (set_code and number):
-        return None, "Enter a card name, or a set code + collector number.", False
+        return None, "Enter a card name, or a set code + collector number.", []
     sid, was_new, err = card_resolver.resolve_or_fetch_card(
         conn, name=name or None, set_code=set_code or None, collector_number=number or None,
     )
     if err:
-        return None, err, False
-    writes.add_deck_card(conn, deck_id, sid, quantity=qty)
-    # If this exact printing has no collection lot at all yet, give it a
-    # starter one (quantity matching what was just added, Location defaulted
-    # to this deck's name) rather than letting the deck and the collection
-    # quietly drift apart. A no-op if a lot already exists. Deliberately NOT
-    # done for shortlist adds (see writes.auto_add_to_collection).
-    deck_name = loaders.load_deck_meta(conn, deck_id).get("name")
-    auto_added_id = writes.auto_add_to_collection(conn, sid, quantity=qty, location=deck_name)
+        return None, err, []
+    existing = (q.deck_card_entry(conn, deck_id, sid) or {}).get("quantity") or 0
+    moves = writes.add_deck_card(conn, deck_id, sid, quantity=existing + qty)
     return (
         f"Added {qty}x {name or sid}"
         + (" (fetched fresh from Scryfall)" if was_new else "")
-        + (". Also added a starter collection lot for it (wasn't tracked yet)." if auto_added_id else "."),
+        + (f" — now ×{existing + qty}." if existing else "."),
         None,
-        bool(auto_added_id),
+        moves,
     )
 
 
@@ -157,7 +159,7 @@ def _render_add_card_form(deck_id, key_prefix, on_added=None):
     number = ac3.text_input("Number", key=f"{key_prefix}_add_num")
     qty = ac4.number_input("Qty", min_value=1, value=1, step=1, key=f"{key_prefix}_add_qty")
     if st.button("➕ Add to mainboard", key=f"{key_prefix}_add_btn"):
-        message, err, collection_touched = _add_card_to_deck(
+        message, err, moves = _add_card_to_deck(
             deck_id, name.strip(), set_code.strip(), number.strip(), int(qty)
         )
         if err:
@@ -165,7 +167,7 @@ def _render_add_card_form(deck_id, key_prefix, on_added=None):
         else:
             if on_added:
                 on_added()
-            cv.finish_edit({"message": message, "collection": collection_touched})
+            cv.finish_edit({"message": message, "moves": moves})
 
 
 # ------------------------------------------------------------------
@@ -495,7 +497,7 @@ with tab_info:
                 staged = writes.stage_dismantle(
                     conn, deck_id, target_deck_id=_dis_target_id, dest_location=_dis_dest,
                 )
-                lines, warnings = [], []
+                lines, warnings, moves = [], [], []
                 if staged["removed"] or staged["added"]:
                     lines.append(
                         f"Staged {len(staged['removed'])} removal(s) and "
@@ -505,12 +507,12 @@ with tab_info:
                 else:
                     warnings.append("Nothing was staged.")
                 if _dis_move_strays and _dis["strays"]:
-                    moved = writes.move_dismantle_strays(conn, deck_id, dest_location=_dis_dest)
-                    lines.append(f"Moved {moved} stray lot(s) to {_dis_dest}.")
+                    moves = writes.move_dismantle_strays(conn, deck_id, dest_location=_dis_dest)
+                    lines.append(f"Moved {len(moves)} stray lot(s) to {_dis_dest}.")
                 if _dis_mark:
                     writes.set_build_state(conn, deck_id, "dismantled")
                 warnings += [f"Skipped {card} — {reason}." for card, reason in staged["skipped"]]
-                cv.finish_edit({"message": lines, "warnings": warnings, "collection": True})
+                cv.finish_edit({"message": lines, "warnings": warnings, "moves": moves})
 
         if meta.get("build_state") == "dismantled":
             st.info(
@@ -747,8 +749,8 @@ with tab_main:
                         main_updates[row["scryfall_id"]] = 0
                     else:
                         main_updates[row["scryfall_id"]] = int(row["Qty"]) if pd.notna(row["Qty"]) else 0
-                changed = writes.bulk_update_deck_cards(conn, deck_id, main_updates)
-                cv.finish_edit({"message": f"Updated {changed} card(s)."})
+                changed, moves = writes.bulk_update_deck_cards(conn, deck_id, main_updates)
+                cv.finish_edit({"message": f"Updated {changed} card(s).", "moves": moves})
 
 # ------------------------------------------------------------------
 # Shortlist (Workbench rework, Phase 1) — replaces the separate Maybeboard
@@ -865,13 +867,13 @@ with tab_shortlist:
         ver_key = f"editor_{deck_id}_shortlist_ver"
         ver = st.session_state.get(ver_key, 0)
 
-        def _refresh(flash=None, collection=False):
+        def _refresh(flash=None, moves=None):
             """Bump the data_editor version (so stale pending edits don't
             replay onto a different row, see ver_key above) and finish the
             write (Phase 0 of EDIT_FLOW_PLAN.md). `flash`: a list of lines,
-            each prefixed "✅ " or "❌ "."""
+            each prefixed "✅ " or "❌ "; `moves`: copies an apply moved."""
             st.session_state[ver_key] = ver + 1
-            cv.finish_edit(cv.result_from_lines(flash or [], collection=collection))
+            cv.finish_edit(cv.result_from_lines(flash or [], moves=moves or []))
 
         st.caption(
             "A card moves **idea → planned → applied**, or gets **dropped**.",
@@ -1068,7 +1070,7 @@ with tab_shortlist:
                     conn, ids,
                     resolve_add=lambda name: card_resolver.resolve_or_fetch_card(conn, name=name),
                 )
-                _refresh(_apply_flash(results), collection=True)
+                _refresh(_apply_flash(results), moves=[m for r in results for m in r["moves"]])
 
             pb1, pb2, pb3 = st.columns(3)
             if pb1.button("💾 Save Qty / run checked actions", key=f"editor_{deck_id}_sl_planned_save_{ver}"):

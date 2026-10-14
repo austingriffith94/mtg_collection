@@ -17,6 +17,11 @@ Migration is one-way (CSV -> DB): re-running scripts/migrate.py wipes and
 rebuilds the whole database from the CSVs, discarding anything edited
 here since the last migration. Use the CSVs + migrate.py for your initial
 import, then manage everything here from then on — see the README.
+
+EDIT_FLOW_PLAN.md Phase 6: an import or add whose Location is a deck's name
+sleeves the copies there already, so it asks whether that deck's list
+should gain the card (card_view.show_deck_sync). Imports are logged as
+"import" in the move log, a hand add as "collection_edit".
 """
 import sys
 import os
@@ -227,6 +232,10 @@ if order_file is not None:
             f"📥 Import {len(singles)} card(s) into collection", key="editor_order_import_btn",
             disabled=all_already_owned and not confirm_dupe,
         ):
+            # Phase 6: lots imported straight into a deck's Location are
+            # sleeved there already; ask whether that deck's list should
+            # gain the card (deck_sync below).
+            move_mark = q.last_move_id(conn)
             results = order_import.import_rows(
                 conn, order_rows,
                 location=order_location.strip() or None,
@@ -255,6 +264,7 @@ if order_file is not None:
                     for r in failed
                 ],
                 "collection": True, "reference": True,
+                "deck_sync": q.deck_sync_offers(conn, move_mark),
             })
 
 st.divider()
@@ -379,6 +389,7 @@ if st.button("➕ Add to collection", key="editor_coll_add_btn"):
     if err:
         st.error(err)
     elif sid:
+        move_mark = q.last_move_id(conn)
         writes.add_collection_lot(
             conn, sid,
             quantity=int(coll_add_qty) if coll_add_qty else None,
@@ -403,6 +414,7 @@ if st.button("➕ Add to collection", key="editor_coll_add_btn"):
         cv.finish_edit({
             "message": f"Added {qty_txt}{what}{foil_txt}{loc_txt}{fetched_txt}.",
             "collection": True, "reference": True,
+            "deck_sync": q.deck_sync_offers(conn, move_mark),
         })
 
 st.divider()

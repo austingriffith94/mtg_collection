@@ -403,7 +403,8 @@ with tab_carddata:
         if summary["pruned_count"]:
             lines.append(
                 f"Pruned {summary['pruned_count']} collection lot(s) with no location, no "
-                f"quantity, and not in any deck's mainboard/shortlist: "
+                f"quantity, and not in any deck's mainboard/shortlist (each is in the move log, "
+                f"shown on Card Lookup): "
                 + ", ".join(summary["pruned_cards"])
             )
         _orphans = q.orphan_report(conn)

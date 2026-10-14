@@ -60,6 +60,36 @@ CREATE TABLE collection (
 CREATE INDEX idx_collection_card ON collection(scryfall_id);
 CREATE INDEX idx_collection_location ON collection(location);
 
+-- ------------------------------------------------------------
+-- Move log (EDIT_FLOW_PLAN.md Phase 6): one row per physical step a copy
+-- took, whichever page made it — written by the lot writers in
+-- dashboard_lib/writes.py, never by hand. Answers "where did my Blood
+-- Crypt go?" (Card Lookup's History).
+--
+-- No foreign keys on purpose: a deleted lot's history has to survive it,
+-- so collection_id, scryfall_id and card_name are copies taken at write
+-- time. from_location / to_location are text, and are HISTORY — a deck
+-- rename leaves them as they were, like an applied deck_changes row.
+--   NULL  = no copy on that side: from NULL is "new copy record" (a lot
+--           added or imported), to NULL is "deleted" (a lot removed,
+--           pruned, or shrunk)
+--   ''    = the copy exists but had no Location recorded
+-- reason: deck_edit, apply, reconcile, dismantle, collection_edit,
+--         import, prune, deck_delete.
+-- ------------------------------------------------------------
+CREATE TABLE collection_moves (
+    move_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    collection_id   INTEGER,
+    scryfall_id     TEXT,
+    card_name       TEXT,
+    quantity        INTEGER,           -- NULL = an untracked lot moved whole
+    from_location   TEXT,
+    to_location     TEXT,
+    reason          TEXT NOT NULL,
+    change_id       INTEGER,           -- the deck_changes row behind it, when there is one
+    moved_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Master list of "standard" (non-deck) storage locations offered in the
 -- Editor's Location dropdown (Prompt Pass 13), alongside every currently
 -- tracked deck name (queries.location_options() unions the two — a

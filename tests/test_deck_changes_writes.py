@@ -272,7 +272,8 @@ def test_apply_creates_a_starter_lot_for_a_card_that_is_not_owned(conn, deck, ad
     outcome = writes.apply_change(conn, cid)
     assert outcome["created_lot"]
     assert _lot(conn, wanted)["location"] == "Gisa"
-    assert _lot(conn, wanted)["source"] == "Auto-added (swap manager)"
+    # EDIT_FLOW_PLAN.md Phase 1: one Auto rule, one starter-lot source.
+    assert _lot(conn, wanted)["source"] == writes.STARTER_LOT_SOURCE
 
 
 def test_apply_refuses_when_the_cut_card_has_left_the_mainboard(conn, swap_setup):

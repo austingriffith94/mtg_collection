@@ -269,6 +269,24 @@ _SCHEMA_TABLE_UPGRADES = [
            )""",
         None,
     ),
+    # Move log (EDIT_FLOW_PLAN.md Phase 6) — see schema.sql for the column
+    # meanings. Starts empty: moves made before this existed aren't known.
+    (
+        "collection_moves",
+        """CREATE TABLE collection_moves (
+               move_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+               collection_id   INTEGER,
+               scryfall_id     TEXT,
+               card_name       TEXT,
+               quantity        INTEGER,
+               from_location   TEXT,
+               to_location     TEXT,
+               reason          TEXT NOT NULL,
+               change_id       INTEGER,
+               moved_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )""",
+        None,
+    ),
 ]
 
 # Same additive philosophy as _SCHEMA_TABLE_UPGRADES, but for VIEWS (kept
@@ -2121,6 +2139,151 @@ def deck_card_entry(conn, deck_id, scryfall_id):
     return {"name": row[0], "quantity": row[1]} if row else None
 
 
+# ------------------------------------------------------------------
+# Reads behind writes.sleeve_into_deck() / unsleeve_from_deck()
+# (EDIT_FLOW_PLAN.md Phase 1). Both match across printings — oracle_id,
+# falling back to the exact name — like every other ownership question
+# here, so a different printing sleeved in the deck still counts.
+# ------------------------------------------------------------------
+def card_lots(conn, scryfall_id):
+    """Every collection lot of a card, across printings:
+    [(collection_id, quantity, location, scryfall_id), ...] in
+    collection_id order. `quantity` is COALESCEd to 1 (a NULL lot is at
+    least one copy — see _lots_for_card); `location` is as stored, not
+    stripped, so a move can be undone back to exactly where it was."""
+    name_row = conn.execute("SELECT name FROM cards WHERE scryfall_id=?", (scryfall_id,)).fetchone()
+    ids = [r[0] for r in _lots_for_card(conn, name=name_row[0] if name_row else None,
+                                        scryfall_id=scryfall_id)]
+    if not ids:
+        return []
+    marks = ",".join("?" for _ in ids)
+    return [tuple(r) for r in conn.execute(
+        f"""SELECT collection_id, COALESCE(quantity, 1), location, scryfall_id
+            FROM collection WHERE collection_id IN ({marks}) ORDER BY collection_id""",
+        ids,
+    ).fetchall()]
+
+
+def deck_list_quantity(conn, deck_id, scryfall_id):
+    """How many copies of a card a deck's list runs, summed over every
+    printing of it on the list — what "needed" means to the move helpers,
+    so swapping one printing for another needs no copy moved."""
+    oracle_ids = oracle_ids_for_card(conn, scryfall_id=scryfall_id)
+    if oracle_ids:
+        where, params = f"c.oracle_id IN ({','.join('?' for _ in oracle_ids)})", tuple(oracle_ids)
+    else:
+        where, params = "c.name = (SELECT name FROM cards WHERE scryfall_id = ?) COLLATE NOCASE", (scryfall_id,)
+    row = conn.execute(
+        f"""SELECT COALESCE(SUM(COALESCE(dc.quantity, 1)), 0)
+            FROM deck_cards dc JOIN cards c ON c.scryfall_id = dc.scryfall_id
+            WHERE dc.deck_id = ? AND {where}""",
+        (deck_id, *params),
+    ).fetchone()
+    return int(row[0] or 0)
+
+
+# ------------------------------------------------------------------
+# The move log (EDIT_FLOW_PLAN.md Phase 6; table and column meanings in
+# schema.sql). Written only by writes.py's lot writers.
+# ------------------------------------------------------------------
+def last_move_id(conn):
+    """The newest move_id in the log (0 when empty) — taken before a
+    collection-side save, so deck_sync_offers() can ask what THAT save
+    moved and nothing older."""
+    return conn.execute("SELECT COALESCE(MAX(move_id), 0) FROM collection_moves").fetchone()[0]
+
+
+def collection_moves_for_card(conn, name, limit=25):
+    """The move log for one card by name (newest first), across printings
+    and including lots since deleted — card_name is copied at write time.
+    Each row: {move_id, collection_id, quantity, from_location,
+    to_location, reason, change_id, moved_at}."""
+    rows = conn.execute(
+        """SELECT move_id, collection_id, quantity, from_location, to_location,
+                  reason, change_id, moved_at
+           FROM collection_moves WHERE card_name = ? COLLATE NOCASE
+           ORDER BY move_id DESC LIMIT ?""",
+        ((name or "").strip(), int(limit)),
+    ).fetchall()
+    keys = ("move_id", "collection_id", "quantity", "from_location", "to_location",
+            "reason", "change_id", "moved_at")
+    return [dict(zip(keys, r)) for r in rows]
+
+
+def deck_list_printing(conn, deck_id, scryfall_id):
+    """(scryfall_id, quantity) of the printing of this card the deck's list
+    already runs — the biggest, if it runs two — or None when the card isn't
+    on the list at all. Matched across printings like deck_list_quantity()."""
+    oracle_ids = oracle_ids_for_card(conn, scryfall_id=scryfall_id)
+    if oracle_ids:
+        where, params = f"c.oracle_id IN ({','.join('?' for _ in oracle_ids)})", tuple(oracle_ids)
+    else:
+        where, params = "c.name = (SELECT name FROM cards WHERE scryfall_id = ?) COLLATE NOCASE", (scryfall_id,)
+    row = conn.execute(
+        f"""SELECT dc.scryfall_id, COALESCE(dc.quantity, 1)
+            FROM deck_cards dc JOIN cards c ON c.scryfall_id = dc.scryfall_id
+            WHERE dc.deck_id = ? AND {where}
+            ORDER BY COALESCE(dc.quantity, 1) DESC, dc.scryfall_id LIMIT 1""",
+        (deck_id, *params),
+    ).fetchone()
+    return (row[0], row[1]) if row else None
+
+
+def deck_sync_offers(conn, since_move_id):
+    """What a collection-side save did to decks' sleeves, as list changes
+    to offer (EDIT_FLOW_PLAN.md Phase 6). Reads the moves logged after
+    `since_move_id` and, per deck and card, nets the copies that came in
+    against those that left. An offer is made only where the deck's list
+    does NOT already agree with its sleeves, and never for more copies than
+    the save itself moved:
+
+      add     copies now sleeved in the deck that its list doesn't run
+      remove  the list runs more than is now sleeved, after copies left
+
+    Untracked bulk basics are skipped (nobody lists a Swamp per lot).
+    Returns [{deck_id, deck_name, scryfall_id, card, action, quantity,
+    list_quantity, new_quantity}] — plain data, so it can wait in session
+    state for the dialog. writes.sync_deck_lists() applies them."""
+    decks = {name: deck_id for deck_id, name in conn.execute("SELECT deck_id, name FROM decks").fetchall()}
+    net = {}  # (deck_name, card_name) -> [scryfall_id, copies in minus copies out]
+    for sid, card, qty, frm, to in conn.execute(
+        """SELECT scryfall_id, card_name, quantity, from_location, to_location
+           FROM collection_moves WHERE move_id > ? ORDER BY move_id""",
+        (since_move_id,),
+    ).fetchall():
+        copies = qty if qty is not None else 1
+        for deck_name, sign in ((to, 1), (frm, -1)):
+            if deck_name in decks and (frm or "") != (to or ""):
+                entry = net.setdefault((deck_name, card or sid), [sid, 0])
+                entry[1] += sign * copies
+
+    offers = []
+    for (deck_name, card), (sid, delta) in net.items():
+        if delta == 0 or not sid or is_bulk_basic(conn, scryfall_id=sid):
+            continue
+        deck_id = decks[deck_name]
+        sleeved = sum(qty for _cid, qty, loc, _s in card_lots(conn, sid) if (loc or "").strip() == deck_name)
+        listed = deck_list_quantity(conn, deck_id, sid)
+        on_list = deck_list_printing(conn, deck_id, sid)
+        if delta > 0:
+            n, action = min(delta, sleeved - listed), "add"
+            target = on_list[0] if on_list else sid
+            new_quantity = (on_list[1] if on_list else 0) + n
+        else:
+            n, action = min(-delta, listed - sleeved), "remove"
+            if not on_list:
+                continue
+            target = on_list[0]
+            n = min(n, on_list[1])
+            new_quantity = on_list[1] - n
+        if n > 0:
+            offers.append({
+                "deck_id": deck_id, "deck_name": deck_name, "scryfall_id": target, "card": card,
+                "action": action, "quantity": n, "list_quantity": listed, "new_quantity": new_quantity,
+            })
+    return sorted(offers, key=lambda o: (o["deck_name"].casefold(), o["card"].casefold()))
+
+
 def buy_list(conn, contention=None):
     """The cross-deck shopping list: every open **idea** (not yet staged —
     a planned swap that's not owned buys a starter lot automatically on
@@ -2291,6 +2454,8 @@ def card_lookup(conn, name):
         "mainboard_in": mainboard_in, "shortlisted_in": shortlisted_in,
         "demand": demand, "shortfall": max(0, demand - owned_qty),
         "history": history,
+        # Phase 6: where each copy went (newest first), beside the list history above.
+        "moves": collection_moves_for_card(conn, card["name"]),
     }
 
 

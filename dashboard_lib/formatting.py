@@ -468,6 +468,30 @@ def format_money(value):
         return "—"
 
 
+# What the move log's `reason` (writes.MOVE_REASONS) reads as.
+MOVE_REASON_LABELS = {
+    "deck_edit": "deck edit", "apply": "planned change applied", "reconcile": "reconcile",
+    "dismantle": "dismantle", "collection_edit": "collection edit", "import": "order import",
+    "prune": "pruned", "deck_delete": "deck deleted",
+}
+
+
+def format_collection_move(move):
+    """One collection_moves row (queries.collection_moves_for_card's dict) as
+    a line: "2026-10-13  ×2 Box → Prosper (deck edit)". A None side means no
+    copy there ("new copy record" / "deleted"); '' means no Location was
+    recorded."""
+    def place(value, none_text):
+        return none_text if value is None else (value or "no location")
+
+    qty = move.get("quantity")
+    count = f"×{qty} " if qty else ""
+    when = (move.get("moved_at") or "").split(" ")[0]
+    route = f"{place(move.get('from_location'), 'new copy record')} → {place(move.get('to_location'), 'deleted')}"
+    reason = MOVE_REASON_LABELS.get(move.get("reason"), move.get("reason") or "")
+    return f"{when}  {count}{route} ({reason})"
+
+
 def split_multi_value(cell):
     """'Ramp,Card Adv' -> ['Ramp', 'Card Adv']; handles None/NaN/empty."""
     if cell is None:

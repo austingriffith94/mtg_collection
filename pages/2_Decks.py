@@ -496,13 +496,25 @@ def _render_overview(conn, deck_id, meta, deck_name, color_identity_raw):
                      "boxes collects everything. Open it in a browser and print.",
             )
             if _brewing:
+                # EDIT_FLOW_PLAN.md Phase 1: a brewing deck's edits moved no
+                # copies, so clearing the flag must say what's still unpulled
+                # rather than quietly leave it. Until Phase 5's "Build it",
+                # Reconcile's "to pull" is where those cards get sleeved.
+                _unpulled = _sourcing["needed"] - _sourcing["located"]
+                _unpulled_note = (
+                    f"{_unpulled} card(s) are still to pull. They'll stay on Reconcile until "
+                    "you sleeve them." if _unpulled else ""
+                )
+                if _unpulled_note:
+                    _state_col.caption(_unpulled_note)
                 if _state_col.button(
                     "✅ Mark deck as built", key=f"deck_{deck_id}_mark_built",
                     help="Clears the brewing flag. Completion stays derived from where the "
                          "cards are, so this doesn't claim the deck is 100% sleeved.",
                 ):
                     writes.set_build_state(conn, deck_id, None)
-                    cv.finish_edit({"message": "Marked as built."})
+                    cv.finish_edit({"message": "Marked as built.",
+                                    "warnings": [_unpulled_note] if _unpulled_note else []})
             elif _state_col.button(
                 "🔨 Mark as brewing", key=f"deck_{deck_id}_mark_brewing",
                 help="For a deck whose list exists but whose cards are still elsewhere.",

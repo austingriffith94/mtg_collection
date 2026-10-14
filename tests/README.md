@@ -51,6 +51,21 @@ plus pytest (`pip install -r requirements-dev.txt`):
   `AppTest` that a write's message shows exactly once after `finish_edit()`'s rerun (toasts for one or
   two lines, one success list for more, warnings and errors alongside). Page adoption is covered by
   `test_pages_smoke.py` (rename, Shortlist add, game delete, Workbench contention drop, Location catalog).
+- `test_edit_flow.py` — EDIT_FLOW_PLAN.md Phase 1: one scenario run through every entry point that can
+  express it (add bar write, each Board op, the Mainboard table save, `apply_change()`'s three shapes),
+  each on a fresh database, asserting they leave the same list and collection. Then the rules one at a
+  time: a Box copy before a starter lot, never another deck's copy, splitting a lot, −1 on an
+  under-sleeved deck, printing swaps, bulk basics, Undo putting each copy back (and deleting a starter
+  lot), brewing / dismantled decks, and lot-only `move_copies()`. The page side (add bar toast, Mainboard
+  save dialog, "Mark deck as built" count, Reconcile "Sleeved here", Board Undo) is in `test_pages_smoke.py`.
+- `test_collection_moves.py` — EDIT_FLOW_PLAN.md Phase 6: each lot writer logs exactly the moves it made
+  (new copy record, move, split, quantity up/down, delete, bulk, prune, a deck's deletion), a rename logs
+  none, Phase 1's deck edits log with their `change_id`, and `queries.deck_sync_offers()` /
+  `writes.sync_deck_lists()` offer and apply list changes without moving a lot twice. The page side (a
+  Collection save asks about the list, the dialog's two answers, Card Lookup's "Where copies went") is in
+  `test_pages_smoke.py`. A click inside a real `st.dialog` reruns only the dialog, which `AppTest` can't
+  do, so the answer buttons are driven through a script that opens the dialog on every run; the
+  fragment-scoped rerun for a multi-deck dialog was checked in headless Edge against a scratch database.
 - `test_current_deck.py` — pure tests of `card_view.seed_current_deck()` and
   `resolve_current_deck()` with a dict standing in for session state.
 - `test_nav.py` — the page registry in `dashboard_lib/nav.py` matches the

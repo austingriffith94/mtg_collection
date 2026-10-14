@@ -302,14 +302,14 @@ jump to the same deck's other views.
     number — resolves against your existing `cards` table first, falling
     back to a live Scryfall lookup only for a card the dashboard hasn't
     seen before), then bulk-edit quantities or remove cards in one table,
-    same pattern as Card Tags. Adding a card that isn't tracked in your
-    collection under that exact printing yet automatically creates a
-    starter collection lot for it (quantity matching what you just added,
-    Location set to the deck's name) — Deck Building Auto-Add, so the
-    collection can't silently drift out of sync with what your decks
-    actually run. Shortlist adds don't trigger this (a shortlisted card is
-    still just under consideration). Every card added to or removed from
-    the list here is also recorded in the deck's change history.
+    same pattern as Card Tags. Adding a card to a deck that already runs
+    it adds to its quantity. Every list edit — here, on the Board, or by
+    applying a planned swap — also moves the physical copies the same way
+    (see "Deck edits move the copies" below), and a pop-up names each copy
+    that moved. Shortlist ideas move nothing until they're added or
+    applied (a shortlisted card is still just under consideration). Every
+    card added, removed, or changed in quantity here is also recorded in
+    the deck's change history.
   - **Shortlist** (Workbench rework, Phase 1 — replaces the separate
     Maybeboard and Swap Manager tabs) — one place for everything you're
     considering for the deck, whether or not you own it. Add an idea,
@@ -646,12 +646,11 @@ lifecycle" below), and has four parts:
    picked one you're told, and the idea stays an idea.
 3. **Planned** — the staged swaps, each with live inventory availability
    for the card being added and an editable quantity. Apply the ticked
-   ones, or all of them. Applying updates this deck's mainboard AND
-   reconciles `collection.location`: the replaced card's lot(s) sleeved in
-   this deck move back to "Box", and the added card is sleeved here —
-   reusing an available owned copy if one exists, otherwise creating a
-   brand-new starter lot (tagged "Auto-added (swap manager)") rather than
-   ever pulling a physical copy out of another deck's box. A planned swap
+   ones, or all of them. Applying updates this deck's mainboard AND moves
+   the copies exactly as a hand edit would (see "Deck edits move the
+   copies" below): the replaced card's copies sleeved in this deck go back
+   to "Box", and the added card is sleeved here from storage, or as a
+   starter lot if you own no free copy. A planned swap
    whose cut card has already left the mainboard is refused rather than
    applied, since it would add a card without removing one. A warning
    appears if applying everything would change the deck's card count: a
@@ -701,6 +700,66 @@ left in place and untouched as a frozen pre-rework backup, per the
 additive/non-destructive schema policy above — nothing reads or writes them
 any more. See `docs/archive/IMPLEMENTATION_PLAN.md` for the phase-by-phase plan and
 `schema.sql` for the full table comment.
+
+## Deck edits move the copies
+
+Since [EDIT_FLOW_PLAN.md](EDIT_FLOW_PLAN.md) Phase 1, changing a deck's
+list moves the physical copies right away, the same way wherever you make
+the edit: the Board (+1, −1, Remove, Move to Shortlist, Add to deck,
+Apply), the add bar, the Mainboard table, applying planned swaps on the
+Shortlist tab or the Workbench, and the Workbench's contention "Drop".
+
+- **A card joins (or goes up in quantity):** copies already sleeved in the
+  deck count first; then free copies in storage, biggest lot first (a lot
+  of 3 is split if only one is needed); then, for whatever is left, a
+  starter lot tagged `Auto-added (deck edit)`. A copy sleeved in another
+  deck is never taken.
+- **A card leaves (or goes down):** the copies the list no longer needs go
+  back to "Box". A deck that was never fully sleeved keeps what it still
+  needs, and swapping one printing for another of the same card moves
+  nothing.
+- **Basic lands** held as untracked bulk never move, and a basic never gets
+  a starter lot.
+- **Brewing decks** change their list only — nothing is pulled out of the
+  decks you're playing while you plan a new one. **Dismantled decks** never
+  pull a copy back in, but a copy still physically in the deck does come
+  out when its card is removed (that's what applying a dismantle does).
+
+A pop-up names every copy moved: a toast for one or two
+(*"Sol Ring: Box → Prosper"*), a dialog grouped by from → to for more.
+The Board's **Undo** puts each copy back exactly where it came from, and
+deletes a starter lot the edit made (if it hasn't been touched since).
+Because hand edits now keep the collection in step, the Workbench's
+Reconcile only shows real drift.
+
+## Every copy has a history, and collection edits flow back to decks
+
+Since [EDIT_FLOW_PLAN.md](EDIT_FLOW_PLAN.md) Phase 6 the collection side is
+tracked too, so the answer to *"where did my Blood Crypt go?"* is on one page.
+
+- **The move log.** Every change to a lot — adding or importing one, moving
+  it, editing its quantity or Location, deleting it, the Card Data refresh's
+  pruning, a deck's deletion sending its cards to Box, and all of Phase 1's
+  deck-edit moves — writes a row to the `collection_moves` table: the card,
+  how many, where from and to, when, and why (deck edit, applied change,
+  reconcile, dismantle, collection edit, import, prune, deck deleted),
+  plus the deck change behind it when there is one. A blank side means no
+  copy there: "new copy record" going in, "deleted" going out. Renaming a
+  deck logs nothing (a relabel moves no copy), and old entries keep the name
+  the deck had then. The log starts empty; moves before it existed aren't
+  known. **Card Lookup → History** shows it ("Where copies went") beside the
+  card's deck-list changes.
+- **Collection edits that touch a deck ask first.** Save an edit on the
+  Collection page, an order import or a hand add on the Collection Editor, or
+  an "Assign selected to" on the Workbench that moves copies into a deck's
+  Location (or out of one, or deletes or shrinks a lot sleeved in one), and a
+  dialog asks, deck by deck: **Also update Gisa's list** (the card is added
+  or taken off, with a history row noting it followed a collection edit) or
+  **Just the collection** (the save stands as a records correction, and the
+  Workbench's Reconcile shows the gap as before). Nothing moves a second
+  time — the lot was already moved by your save. Closing the dialog without
+  answering is the same as "just the collection". A save that touches no
+  deck shows no dialog, and untracked bulk basics never ask.
 
 ## Deck lifecycle: brewing and dismantling
 
@@ -771,6 +830,11 @@ walk through storage collects everything. It's a sibling of the deck sheet
 it: different document, different ordering, different job. Unlike the deck
 sheet it flows across as many pages as it needs — clipping an 85-card list
 would defeat the entire purpose.
+
+**✅ Mark deck as built** clears the brewing flag. Since a brewing deck's
+edits move no copies (see "Deck edits move the copies"), it first says how
+many cards are still to pull — they stay on the Workbench's Reconcile
+until you sleeve them.
 
 ### Dismantle (Deck Editor → Deck Info, beside Delete)
 

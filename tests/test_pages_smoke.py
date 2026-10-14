@@ -422,6 +422,13 @@ def test_board_edit_glue_undo_button(smoke_db_path, tmp_path, monkeypatch):
         # Stashed for setup_page() to show on the full rerun (card_view.stash_edit).
         assert at.session_state["_pending_feedback"]["lines"] == ["Sol Ring → ×2"]
         assert at.button(key="k__undo_btn").label.startswith("↶ Undo: ")
+        # EDIT_FLOW_PLAN.md Phase 1: the deck's only copy is already sleeved
+        # and deck 2 has none to give, so +1 makes a starter lot here — and
+        # the Undo has to delete it again, not just lower the quantity.
+        lots = lambda: sqlite3.connect(path).execute(  # noqa: E731
+            "SELECT location, COUNT(*) FROM collection GROUP BY location").fetchall()
+        assert lots() == [("Smoke Test Deck", 2)]
+        assert [m["kind"] for m in at.session_state["_pending_feedback"]["moves"]] == ["new"]
 
         at.session_state["edit"] = {"op": "inc", "id": "no-such-card"}  # refused
         at.run()
@@ -430,6 +437,7 @@ def test_board_edit_glue_undo_button(smoke_db_path, tmp_path, monkeypatch):
         at.button(key="k__undo_btn").click().run()
         assert not at.exception
         assert qty() == (1,)
+        assert lots() == [("Smoke Test Deck", 1)]
         assert "k__undo_btn" not in [b.key for b in at.button]
     finally:
         st.cache_resource.clear()
@@ -642,6 +650,308 @@ def test_collection_editor_location_catalog_add_shows_message(smoke_db_path, tmp
             "SELECT COUNT(*) FROM location_catalog WHERE location='Binder 2'"
         ).fetchone() == (1,)
         assert [t.body for t in at.toast] == ["Added 'Binder 2' to the master list."]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+# ------------------------------------------------------------------
+# EDIT_FLOW_PLAN.md Phase 1: direct edits move copies, and the pop-up says
+# what moved — a toast for one or two moves, a dialog listing more.
+# ------------------------------------------------------------------
+def _signet_db(smoke_db_path, tmp_path, extra_sql=()):
+    """A smoke DB copy with Arcane Signet owned in Box and an empty deck 3."""
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO cards (scryfall_id, name, set_code, collector_number, oracle_id, type_line, cmc)"
+        " VALUES ('arcane-sign-1', 'Arcane Signet', 'cmd', '2', 'oracle-arcane', 'Artifact', 2)"
+    )
+    conn.execute("INSERT INTO collection (scryfall_id, quantity, location) VALUES ('arcane-sign-1', 1, 'Box')")
+    conn.execute("INSERT INTO decks (deck_id, name, commander, color_identity) VALUES (3, 'Empty Deck', NULL, '')")
+    for sql in extra_sql:
+        conn.execute(sql)
+    conn.commit()
+    conn.close()
+    return path
+
+
+def _location_of(path, scryfall_id):
+    return [r[0] for r in sqlite3.connect(path).execute(
+        "SELECT location FROM collection WHERE scryfall_id=? ORDER BY collection_id", (scryfall_id,))]
+
+
+def test_deck_editor_add_bar_moves_the_box_copy_and_says_so(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = _signet_db(smoke_db_path, tmp_path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "4_Deck_Editor.py"), default_timeout=15)
+        at.session_state["current_deck_id"] = 3
+        _forget_deck_board()
+        at.run()
+        at.text_input(key="editor_3_board_add_name").set_value("Arcane Signet")
+        _forget_deck_board()
+        at.button(key="editor_3_board_add_btn").click().run()
+        assert not at.exception
+        # The Box copy was moved, not a starter lot made beside it.
+        assert _location_of(path, "arcane-sign-1") == ["Empty Deck"]
+        bodies = [t.body for t in at.toast]
+        assert "Added 1x Arcane Signet." in bodies
+        assert "Arcane Signet: Box → Empty Deck" in bodies
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_deck_editor_mainboard_save_lists_every_move_in_a_dialog(smoke_db_path, tmp_path, monkeypatch):
+    # Three sleeved cards deleted in one save: three moves, so a dialog
+    # grouped by from → to rather than a pile of toasts.
+    from dashboard_lib import db
+
+    extra = []
+    for i, name in enumerate(("Mind Stone", "Fellwar Stone", "Thought Vessel"), start=10):
+        extra += [
+            f"INSERT INTO cards (scryfall_id, name, set_code, collector_number, oracle_id, type_line, cmc)"
+            f" VALUES ('rock-{i}', '{name}', 'cmd', '{i}', 'oracle-{i}', 'Artifact', 2)",
+            f"INSERT INTO deck_cards (deck_id, scryfall_id, quantity) VALUES (3, 'rock-{i}', 1)",
+            f"INSERT INTO collection (scryfall_id, quantity, location) VALUES ('rock-{i}', 1, 'Empty Deck')",
+        ]
+    path = _signet_db(smoke_db_path, tmp_path, extra)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "4_Deck_Editor.py"), default_timeout=15)
+        at.session_state["current_deck_id"] = 3
+        _forget_deck_board()
+        at.run()
+        at.session_state["editor_3_main_editor"] = {
+            "edited_rows": {i: {"Delete": True} for i in range(3)}, "added_rows": [], "deleted_rows": [],
+        }
+        _forget_deck_board()
+        at.button(key="editor_3_main_save").click().run()
+        assert not at.exception
+        for i in (10, 11, 12):
+            assert _location_of(path, f"rock-{i}") == ["Box"]
+        text = "\n".join(m.value for m in at.markdown)
+        assert "**Empty Deck → Box**" in text
+        for name in ("Mind Stone", "Fellwar Stone", "Thought Vessel"):
+            assert f"- {name}" in text
+        assert [t.body for t in at.toast] == ["Updated 3 card(s)."]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_mark_deck_built_says_what_is_still_to_pull(smoke_db_path, tmp_path, monkeypatch):
+    # Deck 2 is brewing and its only copy of Sol Ring is in deck 1's sleeves,
+    # so one card is still to pull; clearing the flag says so.
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE decks SET build_state = 'brewing' WHERE deck_id = 2")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    note = "1 card(s) are still to pull. They'll stay on Reconcile until you sleeve them."
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "2_Decks.py"), default_timeout=15)
+        at.session_state["current_deck_id"] = 2
+        at.run()
+        assert not at.exception
+        assert note in [c.value for c in at.caption]
+        at.button(key="deck_2_mark_built").click().run()
+        assert not at.exception
+        assert sqlite3.connect(path).execute(
+            "SELECT build_state FROM decks WHERE deck_id=2").fetchone() == (None,)
+        assert [t.body for t in at.toast] == ["Marked as built.", note]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_workbench_sleeved_here_reports_the_move(smoke_db_path, tmp_path, monkeypatch):
+    # Reconcile's "Sleeved here" is a lot-only move (no list change), and it
+    # reports through finish_edit() like a deck edit: deck 2 is short Sol Ring,
+    # whose one copy sits in deck 1.
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "8_Workbench.py"), default_timeout=15)
+        at.run()
+        at.button(key="wb_pull_2_oracle-sol-ring_0").click().run()
+        assert not at.exception
+        assert _location_of(path, "sol-ring-cmd-1") == ["Second Deck"]
+        assert [t.body for t in at.toast] == [
+            "Sol Ring located to Second Deck.", "Sol Ring: Smoke Test Deck → Second Deck"]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+# ------------------------------------------------------------------
+# EDIT_FLOW_PLAN.md Phase 6: a Collection-side save that moves a lot into a
+# deck asks whether the deck's list should follow, and every lot change is in
+# the move log that Card Lookup shows.
+# ------------------------------------------------------------------
+def _collection_edit_into_empty_deck(path):
+    """Collection page, edit mode, Arcane Signet's Location -> 'Empty Deck'
+    (the two lots sort Signet first, then Sol Ring), save clicked. Returns the
+    AppTest after the save run."""
+    at = AppTest.from_file(os.path.join(PAGES_DIR, "1_Collection.py"), default_timeout=15)
+    at.run()
+    at.toggle(key="collection_edit_mode").set_value(True).run()
+    editor_key = f"collection_edit_table_{hash((2, 1))}"
+    at.session_state[editor_key] = {
+        "edited_rows": {0: {"Location": "Empty Deck"}}, "added_rows": [], "deleted_rows": [],
+    }
+    # The Save button renders disabled until a run has seen the edit, and
+    # AppTest refuses to click a disabled widget — but a second run would also
+    # drop the editor state set above (AppTest only carries it into one run).
+    # So enable the button's proto by hand, the way a browser would have after
+    # the edit.
+    save = at.button(key="collection_edit_save")
+    save.proto.disabled = False
+    save.click().run()
+    return at
+
+
+def _list_of(path, deck_id):
+    return sqlite3.connect(path).execute(
+        "SELECT scryfall_id, quantity FROM deck_cards WHERE deck_id=?", (deck_id,)).fetchall()
+
+
+def test_collection_save_into_a_deck_saves_then_asks_about_the_list(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = _signet_db(smoke_db_path, tmp_path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = _collection_edit_into_empty_deck(path)
+        assert not at.exception
+        # The save itself already happened and is in the move log...
+        assert _location_of(path, "arcane-sign-1") == ["Empty Deck"]
+        assert sqlite3.connect(path).execute(
+            "SELECT from_location, to_location, reason FROM collection_moves").fetchall() == [
+            ("Box", "Empty Deck", "collection_edit")]
+        # ...and the dialog asks about the deck's list, which hasn't changed.
+        assert _list_of(path, 3) == []
+        text = "\n".join(m.value for m in at.markdown)
+        assert "- Add Arcane Signet ×1 (list ×0 → ×1)" in text
+        assert [b.key for b in at.button if (b.key or "").startswith("_deck_sync_")] == [
+            "_deck_sync_yes_Empty Deck", "_deck_sync_no_Empty Deck"]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def _deck_sync_dialog_script():
+    # A page that shows the dialog on every run. In the app it opens once from
+    # the stashed feedback, and a click inside it reruns only the dialog;
+    # AppTest reruns the whole script, so this stands in for that.
+    import streamlit as st
+    from dashboard_lib import card_view, db, queries
+
+    conn = db.get_connection()
+    st.session_state.pop("_pending_feedback", None)
+    card_view.show_deck_sync(queries.deck_sync_offers(conn, 0))
+
+
+def _deck_sync_world(smoke_db_path, tmp_path):
+    """Arcane Signet moved Box -> Empty Deck by a logged collection edit, whose
+    list doesn't run it yet (the state the dialog is asked in)."""
+    path = _signet_db(smoke_db_path, tmp_path)
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE collection SET location='Empty Deck' WHERE scryfall_id='arcane-sign-1'")
+    conn.execute(
+        "INSERT INTO collection_moves (collection_id, scryfall_id, card_name, quantity, from_location,"
+        " to_location, reason) VALUES (2, 'arcane-sign-1', 'Arcane Signet', 1, 'Box', 'Empty Deck',"
+        " 'collection_edit')")
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_deck_sync_dialog_yes_updates_the_list_without_moving_the_lot_again(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = _deck_sync_world(smoke_db_path, tmp_path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_function(_deck_sync_dialog_script, default_timeout=15)
+        at.run()
+        assert not at.exception
+        at.button(key="_deck_sync_yes_Empty Deck").click().run()
+        assert not at.exception
+        assert _list_of(path, 3) == [("arcane-sign-1", 1)]
+        assert _location_of(path, "arcane-sign-1") == ["Empty Deck"]
+        assert sqlite3.connect(path).execute("SELECT COUNT(*) FROM collection_moves").fetchone() == (1,)
+        assert sqlite3.connect(path).execute(
+            "SELECT status, notes FROM deck_changes WHERE deck_id=3").fetchall() == [
+            ("applied", "following a collection edit")]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_deck_sync_dialog_just_the_collection_leaves_the_list(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = _deck_sync_world(smoke_db_path, tmp_path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_function(_deck_sync_dialog_script, default_timeout=15)
+        at.run()
+        at.button(key="_deck_sync_no_Empty Deck").click().run()
+        assert not at.exception
+        assert _list_of(path, 3) == []
+        assert _location_of(path, "arcane-sign-1") == ["Empty Deck"]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_card_lookup_shows_where_copies_went(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = _signet_db(smoke_db_path, tmp_path)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO collection_moves (card_name, quantity, from_location, to_location, reason, moved_at)"
+        " VALUES ('Arcane Signet', 1, 'Box', 'Empty Deck', 'deck_edit', '2026-10-13 09:00:00')")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "9_Card_Lookup.py"), default_timeout=15)
+        at.run()
+        at.text_input(key="card_lookup_search").set_value("Arcane Signet").run()
+        assert not at.exception
+        captions = [c.value for c in at.caption]
+        assert "Where copies went" in captions
+        assert "2026-10-13  ×1 Box → Empty Deck (deck edit)" in captions
     finally:
         st.cache_resource.clear()
         st.cache_data.clear()

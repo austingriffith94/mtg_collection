@@ -262,7 +262,8 @@ def main():
         "SELECT location, source FROM collection WHERE scryfall_id='good'"
     ).fetchone()
     check("the new starter lot is sleeved in the deck", good_lot[0] == "My Deck")
-    check("the new starter lot is tagged as Swap Manager auto-added", good_lot[1] == "Auto-added (swap manager)")
+    # EDIT_FLOW_PLAN.md Phase 1: every deck edit's starter lot shares one tag.
+    check("the new starter lot is tagged as auto-added by a deck edit", good_lot[1] == w.STARTER_LOT_SOURCE)
     bad_loc = conn.execute("SELECT location FROM collection WHERE scryfall_id='bad'").fetchone()[0]
     check("execute_swap() moves the replaced card's lot back to storage (Box)", bad_loc == "Box")
     check("execute_swap() reports moved_out=True when a matching lot existed", outcome["moved_out"] is True)

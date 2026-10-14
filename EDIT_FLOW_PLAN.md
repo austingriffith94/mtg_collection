@@ -18,12 +18,12 @@ same tracking. It depends only on Phase 1, so do it right after Phase 1
 Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 
 - [x] **Phase 0** — Fix what's already out of sync: deck renames and deletes, one finish-an-edit helper, quantity changes in history, the combo staleness warning. *Done 2026-10-13: every database write on every page ends in `card_view.finish_edit()` (or `stash_edit()` from a widget callback); see "As built" at the end of the phase.*
-- [ ] **Phase 1** — One write path for every deck edit; physical copies move right away; a pop-up says what moved.
+- [x] **Phase 1** — One write path for every deck edit; physical copies move right away; a pop-up says what moved. *Done 2026-10-13: every deck edit moves copies through `writes.sleeve_into_deck()` / `unsleeve_from_deck()` and returns its moves, `card_view.show_moves()` names them, and Board Undo reverts them; see "As built" at the end of the phase.*
 - [ ] **Phase 2** — Choose where a card comes from (storage location) and where a removed card goes.
 - [ ] **Phase 3** — Take a card from another deck, as a linked pair that shows on both decks.
 - [ ] **Phase 4** — Planned buys: a card can be on a deck's list while you wait to buy it.
 - [ ] **Phase 5** — Building new decks from those choices, and one place per job.
-- [ ] **Phase 6** — Collection-side edits tracked and flowing back: a move log for every copy, and Collection page / order import edits that touch a deck offer to update its list.
+- [x] **Phase 6** — Collection-side edits tracked and flowing back: a move log for every copy, and Collection page / order import edits that touch a deck offer to update its list. *Done 2026-10-13, ahead of Phases 2–5 (it only needed Phase 1): every lot writer logs to `collection_moves`, Card Lookup shows it, and `card_view.show_deck_sync()` asks whether a deck's list should follow; see "As built" at the end of the phase.*
 
 **Decided (2026-10-13):** a direct edit (Board, add bar, Mainboard table)
 moves the physical copy **right away**, the same way applying a planned
@@ -384,6 +384,80 @@ now avoids a silent behavior change when Phase 2 lands.
 Adding, bumping, removing or swapping a card from any page leaves the
 collection in the same state, a pop-up names every copy that moved, and
 Undo on the Board puts the copies back.
+
+### As built (2026-10-13)
+
+Where the build differs from, or adds to, the spec above:
+
+- **Moves carry a `kind`.** A move is `{card, quantity, collection_id,
+  from, to, kind}`, with `kind` one of `move`, `new` (starter lot),
+  `delete` (a starter lot removed by Undo), `bulk`, `brewing`,
+  `dismantled`; the two list-only kinds also carry `direction` (`in` /
+  `out`). `from` / `to` are always real Locations (or None for "no
+  location"), never sentinel strings, because "Bulk" or "Brewing" could be
+  someone's real storage box. `revert_moves()` and the pop-up key off
+  `kind`.
+- **The helpers work from what the list needs, not a raw count.** Both
+  run after the list change. `sleeve_into_deck()` fills up to (list
+  quantity − copies already sleeved here), capped at `quantity`;
+  `unsleeve_from_deck()` moves out (copies sleeved here − list quantity),
+  capped the same way. Both count across printings by oracle_id. That one
+  rule gives "copies already sleeved here count first", and also means
+  −1 on a deck that was never fully sleeved moves nothing (it still needs
+  every copy it has), and cutting one printing for another of the same
+  card moves nothing either way.
+- **A dismantled deck is only held back on the way in.** The Deck Editor
+  marks a deck dismantled when the dismantle is *staged*, before its
+  removals are applied, so gating `unsleeve_from_deck()` too would make
+  applying a dismantle move nothing. Its removals still take out the
+  copies that are physically there; nothing is ever pulled back in.
+  Brewing decks are held back both ways, as planned.
+- **A list-only placeholder appears only when something would have
+  moved.** A brew's add whose copy is already sleeved there (a dismantle
+  transfer moved it in) returns no move, rather than a misleading "will be
+  pulled when you build the deck".
+- **Basics:** an untracked bulk basic never moves (as planned), and a
+  basic with no free copy gets a `bulk` move rather than a starter lot.
+- **One starter-lot source.** Applying a swap used to tag its starter lot
+  `Auto-added (swap manager)`; every deck edit now uses
+  `writes.STARTER_LOT_SOURCE`, `Auto-added (deck edit)`. One test and
+  `scripts/_test_prompt_pass13_offline.py` were updated.
+- **Return values.** `add_deck_card()` / `remove_deck_card()` return the
+  move list; `bulk_update_deck_cards()` returns `(changed, moves)`;
+  `move_dismantle_strays()` returns its moves instead of a count;
+  `apply_change()`'s outcome and each `apply_changes()` result carry
+  `moves`. All three take `with_moves=False`, which Undo uses.
+- **Undo moves travel outside the action.** `apply_board_action(...,
+  undo_moves=...)` is a separate argument, and the pending Undo in session
+  state stores `moves` beside its action. Actions also arrive from the
+  browser, which must never be able to name lots to move. An Undo always
+  reverts by the recorded list, even an empty one, so it never re-runs
+  Auto. A copy that has moved since is left where it is, with a ⚠️ note.
+- **The add bar adds to the quantity.** It used to *set* the quantity, so
+  adding 1 of a card already at ×2 set it to ×1. With copies moving, that
+  would have quietly put one away.
+- **`deck_board.COLLECTION_OPS` is gone.** Any non-empty `moves` already
+  clears the collection caches, which is the only thing it did.
+- **`source` is in the signature but refuses anything but None** until
+  Phase 2, so a caller can't think it chose a source that was ignored.
+- **Pop-up details:** message lines show first, then moves. The dialog is
+  declared when it's shown rather than at import, because the
+  `scripts/_test_*_offline.py` harnesses import `card_view` under a
+  Streamlit stub with no `st.dialog`.
+- **Tests:** `tests/test_edit_flow.py` (47 tests) runs each intent (add in
+  five world states, remove, swap) through every path and compares the
+  results; smoke tests cover the add bar toast, the Mainboard save dialog
+  (three deletes), "Mark deck as built" and its count, Reconcile "Sleeved
+  here", and Board Undo deleting a starter lot. AppTest *can* drive a
+  `data_editor` edit by setting `session_state[key] = {"edited_rows":
+  ...}` before the click, despite `PROJECT_STATE.md` saying otherwise;
+  that's how the Mainboard save is tested. The Board JS was not changed,
+  so it wasn't rechecked in headless Edge.
+- **Real DB copy (Gisa, five edits: add a Box card, Board remove, +1/−1,
+  apply a planned swap, Mainboard-table delete):** Reconcile was 0 to pull
+  / 1 to put away for Gisa and 90 / 9 across all decks before. The
+  pre-Phase-1 code left it at 1 / 3 for Gisa (91 / 11 overall); Phase 1
+  left it at 0 / 1 (90 / 9), unchanged.
 
 ---
 
@@ -755,6 +829,100 @@ logs its deletions; Card Lookup shows both histories.
 Every physical move of a copy, whichever page made it, is in the move
 log. An edit on the collection side that affects a deck asks whether the
 deck's list should follow.
+
+### As built (2026-10-13)
+
+Where the build differs from, or adds to, the spec above:
+
+- **Where the logging lives.** In the lot writers themselves, as planned:
+  `add_collection_lot`, `update_collection_lot`, `move_lot` (a whole-lot
+  move logs through `update_collection_lot`, so it's one row, not two; a
+  split logs the moved copies against the new lot's id),
+  `remove_collection_lot`, `prune_collection`, and `delete_deck`'s
+  reassignment. `bulk_update_collection` has no logging of its own — it
+  calls the single-lot writers, so it takes only a `reason`. The row is
+  written before the writer's own commit, so a change and its record land
+  together. The six lot writers take `reason` and `change_id` as
+  keyword-only arguments (default `collection_edit`, no change), ahead of
+  `**fields`.
+- **Blank vs. none.** `from_location` / `to_location` use NULL for "no
+  copy on that side" (new copy record going in, deleted going out) and `''`
+  for "the copy exists with no Location recorded". The plan's "NULL = new /
+  deleted" alone couldn't tell an unlocated lot being moved from a new lot
+  arriving, so `''` carries the first. A prune therefore reads "no location
+  → deleted", and `formatting.format_collection_move()` spells all of it
+  out. Locations are stripped before logging.
+- **What an edit to a lot logs.** A new Location moves the copies the lot
+  held (the smaller of old and new quantity when both change); more copies
+  arrive as a "new copy record" at the new Location; fewer leave as
+  "deleted" from where the lot was. A lot with no tracked quantity logs
+  only its Location move, quantity NULL. Edits that touch neither (foil,
+  price, source, date) log nothing, and neither does a move to where the
+  lot already is.
+- **Phase 1's helpers pass the reason through.** `sleeve_into_deck()` /
+  `unsleeve_from_deck()` / `execute_swap()` take `reason` (`deck_edit`, or
+  `apply` from `apply_change()`) and `change_id`. `_log_applied_change()`
+  now returns the new row's id so `add_deck_card()` / `remove_deck_card()`
+  can hand it on. `move_copies()` takes `reason` (`reconcile`, or
+  `dismantle` from `move_dismantle_strays()`); `revert_moves()` logs as
+  `deck_edit`. A lot moved by Undo therefore has its own rows — the log
+  records what happened, and an undo is a thing that happened.
+- **Deck sync is computed from the log, not from the save's inputs.**
+  `queries.last_move_id()` is taken before the save; afterwards
+  `queries.deck_sync_offers(conn, mark)` nets the moves logged since, per
+  deck and card. That means one mechanism covers the Collection page,
+  order import, the Collection Editor's add, and the Workbench's "Assign
+  selected to" / "Save row locations" (which can also put copies into a
+  deck, so they ask too — the plan named only the first three). An offer is
+  made only where the list and the sleeves disagree *and* never for more
+  copies than the save itself moved, so a pre-existing stray isn't swept
+  into the list by an unrelated edit. When the card is already on the list
+  under another printing, that printing's quantity is changed rather than a
+  second row added. Untracked bulk basics are skipped.
+- **Applying an offer moves nothing.** `writes.sync_deck_lists()` calls
+  `add_deck_card()` / `remove_deck_card()` with `with_moves` left on: they
+  work from what the list needs, find the copies already sleeved (or
+  already gone), and move nothing, as Phase 1 designed them to. The history
+  row's note is `writes.SYNC_NOTE` ("following a collection edit"). No
+  move-log row is written for the sync itself: the lot's move is already in
+  the log, once, under the save's reason.
+- **The dialog.** `card_view.show_deck_sync()`, opened from
+  `show_pending_feedback()` via a new `deck_sync` key on `finish_edit()`'s
+  result. It lists each deck's offers with **Also update <deck>'s list** and
+  **Just the collection** buttons; the offers wait in session state and the
+  dialog reads them there, because a click inside a dialog reruns only the
+  dialog with its original arguments. Each "yes" clears caches and re-stashes
+  the accumulated message (the dialog can be dismissed before the last deck
+  is answered); the last answer reruns the app. Closing the dialog is "just
+  the collection" for whatever is left. If a moves list is also pending, it
+  shows as toasts, since Streamlit opens one dialog per run.
+- **Card Lookup** shows the log in a second column of its History section
+  ("Where copies went"), beside "Deck list changes" — not merged into one
+  timeline, since a deck edit's move rows would repeat its history row.
+  `queries.card_lookup()` returns the last 25 as `moves`; matching is by
+  card name (copied at write time), so it spans printings and survives a
+  deleted lot. The Card Data refresh summary now says pruned lots are in the
+  log.
+- **Not done:** order import's buy-match exclusion ("a lot that matches an
+  open buy is sleeved by that path and isn't asked about twice") — it
+  belongs to Phase 4, which doesn't exist yet. When it does, a lot it
+  sleeves must be left out of `deck_sync_offers()`. Open question 4's
+  per-save "don't ask" tick was not added; the dialog is a single click per
+  deck, and closing it already means "just the collection".
+- **Tests:** `tests/test_collection_moves.py` (46 tests: each writer's rows,
+  rename / delete / prune, Phase 1 reasons and change ids, the offers in
+  every direction, applying them) and three smoke tests (a Collection save
+  saves and then asks; the dialog's two answers; Card Lookup shows the log).
+  `AppTest` can't click inside a real dialog (it reruns the whole script),
+  so the answers are driven through a script that opens the dialog on every
+  run. The fragment-scoped rerun a multi-deck dialog depends on was checked
+  in headless Edge against a scratch database: answering Gisa updated its
+  list and left the dialog open for Tuvasa, answering Tuvasa closed it, no
+  lot moved a second time, and the confirmation toast showed.
+- **Pre-existing, not touched:** `scripts/_test_prompt_pass8_offline.py`,
+  `_test_prompt_pass12_offline.py` and `_test_spellbook_offline.py` already
+  fail at the last commit, before any of this work (a `streamlit` import clash,
+  and two checks that grep page source for text older refactors changed).
 
 ---
 

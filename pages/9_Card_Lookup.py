@@ -10,6 +10,10 @@ every lot, every deck, and its own change history. This page is that
 rollup, built on queries.card_lookup(), which matches by oracle_id the
 same way the plan allocator and contention table do, so two printings of
 one card (or a card referenced by either face of an MDFC) answer as one.
+
+EDIT_FLOW_PLAN.md Phase 6: the History section sets the card's deck-list
+changes beside its move log — where each copy went, when and why — so
+"where did my Blood Crypt go?" has one answer.
 """
 import sys
 import os
@@ -100,11 +104,22 @@ with info_col:
             f"{result['shortfall']}. See the Workbench's Contention section."
         )
 
-if result["history"]:
+if result["history"] or result["moves"]:
     st.divider()
     st.markdown("**History**")
-    for h in result["history"]:
-        change = f"+ {h['add_card']}" if h["add_card"] else ""
-        change += f"   − {h['remove_card']}" if h["remove_card"] else ""
-        when = (h["resolved_at"] or "").split(" ")[0]
-        st.caption(f"{when}  {h['deck_name']}  {change}")
+    list_col, move_col = st.columns(2)
+    with list_col:
+        st.caption("Deck list changes")
+        if not result["history"]:
+            st.caption("　None recorded.")
+        for h in result["history"]:
+            change = f"+ {h['add_card']}" if h["add_card"] else ""
+            change += f"   − {h['remove_card']}" if h["remove_card"] else ""
+            when = (h["resolved_at"] or "").split(" ")[0]
+            st.caption(f"{when}  {h['deck_name']}  {change}")
+    with move_col:
+        st.caption("Where copies went")
+        if not result["moves"]:
+            st.caption("　None recorded yet.")
+        for m in result["moves"]:
+            st.caption(fmt.format_collection_move(m))

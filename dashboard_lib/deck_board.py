@@ -14,6 +14,8 @@ Split so the logic stays testable:
     writes.* functions and returns a message plus the inverse action for
     one-level undo. No Streamlit and no SQL of its own; unit-tested.
     Phase C adds the Shortlist ops (plan / unpair / apply / drop / add) to it.
+    EDIT_FLOW_PLAN.md Phase 1: every op also returns the copies it moved,
+    and Undo puts them back (writes.revert_moves).
   - shortlist_payload() / planned_cuts(): PURE. Phase C's Shortlist column,
     with each row's availability verdict allocated across every deck.
   - render_deck_board(): the page-facing wrapper that mounts the component.
@@ -292,7 +294,7 @@ def planned_cuts(shortlist_items):
 # card back at its old quantity; un-shortlisting a card).
 #
 # History (deck_changes) follows from the write functions used, by design:
-#   inc / dec (staying >= 1)  quantity bump -> no history row
+#   inc / dec (staying >= 1)  one `applied` row for the difference (Phase 0)
 #   dec to 0 / remove         one `applied` removal row
 #   to_shortlist              one `applied` removal row + an open `idea`
 #   set_qty onto the board    one `applied` add row
@@ -300,6 +302,12 @@ def planned_cuts(shortlist_items):
 #   set_tags                  tags aren't history -> no row
 # Undo never deletes history: undoing a remove logs the re-add as its own
 # applied row, so history records the mistake and the fix (plan decision).
+#
+# Physical copies (EDIT_FLOW_PLAN.md Phase 1) follow the list through
+# writes.sleeve_into_deck / unsleeve_from_deck, and every op returns the
+# moves. Undo does NOT re-run that Auto rule: it changes the list only and
+# hands the forward edit's moves to writes.revert_moves(), so each copy
+# goes back to exactly where it came from.
 #
 # Phase C adds CHANGE_OPS, sent from the Shortlist column and keyed by
 # `change_id` (plus `cut_id`, the mainboard card picked, for `plan`). They
@@ -317,9 +325,6 @@ def planned_cuts(shortlist_items):
 BOARD_OPS = ("inc", "dec", "remove", "to_shortlist", "set_tags")
 UNDO_OPS = ("set_qty", "from_shortlist")
 CHANGE_OPS = ("plan", "unpair", "apply", "drop", "add", "reopen")
-# Ops whose writes touch the collection table, so the page must also drop
-# collection-derived caches (owned quantities, locations) after them.
-COLLECTION_OPS = ("apply",)
 STRATEGY_TAG_TYPE = "strategy"
 
 
@@ -365,15 +370,25 @@ def _validate_action(action):
     return op, scryfall_id.strip()
 
 
-def apply_board_action(conn, deck_id, action, resolve_add=None):
-    """Apply one board edit and return {"message", "undo"}.
+def apply_board_action(conn, deck_id, action, resolve_add=None, undo_moves=None):
+    """Apply one board edit and return {"message", "undo", "moves"}.
 
     `message` is a short past-tense line for a toast / the Undo button
     ("Removed Sol Ring"). `undo` is the action that reverses this one —
     itself a valid input here, so the page just feeds it back — or None
     when there is none (nothing changed, or an `apply`, which can't be
     undone). A no-op also carries "changed": False; anything else changed
-    the database.
+    the database. `moves` is every physical copy the edit moved
+    (writes.sleeve_into_deck / unsleeve_from_deck), for the pop-up and for
+    the undo.
+
+    `undo_moves` is set only when `action` is an Undo: the forward edit's
+    `moves`. The list then changes without the Auto rule moving anything,
+    and writes.revert_moves() puts those copies back where they came from;
+    the result's `moves` are the reverting ones, and `warnings` names any
+    copy that had moved on since and was left alone. It is a separate
+    argument rather than part of `action` because actions also arrive from
+    the browser, which must never be able to name lots to move.
 
     Quantities are read from the database, never from the action: the
     browser's payload can be a rerun stale, and a double-click on −1 must be
@@ -388,8 +403,20 @@ def apply_board_action(conn, deck_id, action, resolve_add=None):
     it such a row is refused with apply_change's own message. Tests leave it
     out to stay offline; the page passes card_resolver's."""
     op, sid = _validate_action(action)
+    with_moves = undo_moves is None
     if op in CHANGE_OPS:
-        return _apply_change_action(conn, deck_id, op, action, resolve_add)
+        result = _apply_change_action(conn, deck_id, op, action, resolve_add, with_moves)
+    else:
+        result = _apply_card_action(conn, deck_id, op, sid, action, with_moves)
+    result.setdefault("moves", [])
+    if undo_moves is not None and result.get("changed", True):
+        result["moves"], result["warnings"] = writes.revert_moves(conn, undo_moves)
+    return result
+
+
+def _apply_card_action(conn, deck_id, op, sid, action, with_moves):
+    """BOARD_OPS + UNDO_OPS for apply_board_action(). `with_moves=False`
+    (an Undo) changes the list and history only."""
     entry = q.deck_card_entry(conn, deck_id, sid)
     if entry is None:
         raise ValueError("That card isn't in the card database any more — nothing changed.")
@@ -397,32 +424,37 @@ def apply_board_action(conn, deck_id, action, resolve_add=None):
     if qty is None and op in BOARD_OPS:
         raise ValueError(f"{name} isn't in this deck any more — the board was out of date, nothing changed.")
 
+    def set_qty(new_qty):
+        return writes.bulk_update_deck_cards(conn, deck_id, {sid: new_qty}, with_moves=with_moves)[1]
+
     if op == "inc":
-        writes.bulk_update_deck_cards(conn, deck_id, {sid: qty + 1})
-        return {"message": f"{name} → ×{qty + 1}", "undo": {"op": "dec", "id": sid}}
+        moves = set_qty(qty + 1)
+        return {"message": f"{name} → ×{qty + 1}", "undo": {"op": "dec", "id": sid}, "moves": moves}
 
     if op == "dec":
         if qty <= 1:
             # bulk_update_deck_cards treats 0 as a removal (and logs it);
             # the inverse has to put the card back, which `inc` can't.
-            writes.bulk_update_deck_cards(conn, deck_id, {sid: 0})
-            return {"message": f"Removed {name}", "undo": {"op": "set_qty", "id": sid, "qty": qty}}
-        writes.bulk_update_deck_cards(conn, deck_id, {sid: qty - 1})
-        return {"message": f"{name} → ×{qty - 1}", "undo": {"op": "inc", "id": sid}}
+            moves = set_qty(0)
+            return {"message": f"Removed {name}", "undo": {"op": "set_qty", "id": sid, "qty": qty},
+                    "moves": moves}
+        moves = set_qty(qty - 1)
+        return {"message": f"{name} → ×{qty - 1}", "undo": {"op": "inc", "id": sid}, "moves": moves}
 
     if op == "remove":
-        writes.remove_deck_card(conn, deck_id, sid)
+        moves = writes.remove_deck_card(conn, deck_id, sid, with_moves=with_moves)
         return {"message": f"Removed {_qty_label(name, qty)}",
-                "undo": {"op": "set_qty", "id": sid, "qty": qty}}
+                "undo": {"op": "set_qty", "id": sid, "qty": qty}, "moves": moves}
 
     if op == "to_shortlist":
         # Shortlist first: add_change refuses a duplicate open row, and
         # failing there leaves the card on the board untouched. The idea
         # keeps the old quantity so it can come back as it was.
         change_id = writes.add_change(conn, deck_id, add_scryfall_id=sid, add_name=name, quantity=qty)
-        writes.remove_deck_card(conn, deck_id, sid)
+        moves = writes.remove_deck_card(conn, deck_id, sid, with_moves=with_moves)
         return {"message": f"Moved {_qty_label(name, qty)} to the Shortlist",
-                "undo": {"op": "from_shortlist", "id": sid, "qty": qty, "change_id": change_id}}
+                "undo": {"op": "from_shortlist", "id": sid, "qty": qty, "change_id": change_id},
+                "moves": moves}
 
     if op == "set_tags":
         old = writes.get_card_tags_by_type(conn, deck_id, STRATEGY_TAG_TYPE).get(sid, [])
@@ -441,10 +473,12 @@ def apply_board_action(conn, deck_id, action, resolve_add=None):
             return {"message": f"{_qty_label(name, qty)} is already in the deck", "undo": None, "changed": False}
         if qty is None:
             # A genuine re-add: add_deck_card logs the applied add row.
-            writes.add_deck_card(conn, deck_id, sid, target)
-            return {"message": f"Put back {_qty_label(name, target)}", "undo": {"op": "remove", "id": sid}}
-        writes.bulk_update_deck_cards(conn, deck_id, {sid: target})
-        return {"message": f"{name} → ×{target}", "undo": {"op": "set_qty", "id": sid, "qty": qty}}
+            moves = writes.add_deck_card(conn, deck_id, sid, target, with_moves=with_moves)
+            return {"message": f"Put back {_qty_label(name, target)}", "undo": {"op": "remove", "id": sid},
+                    "moves": moves}
+        moves = set_qty(target)
+        return {"message": f"{name} → ×{target}", "undo": {"op": "set_qty", "id": sid, "qty": qty},
+                "moves": moves}
 
     # from_shortlist: retire the idea to_shortlist created, then re-add.
     # Dropped (not deleted) — history keeps it. Done before the re-add so
@@ -455,10 +489,9 @@ def apply_board_action(conn, deck_id, action, resolve_add=None):
     if (change and change["deck_id"] == deck_id and change["add_scryfall_id"] == sid
             and change["status"] in writes.OPEN_CHANGE_STATUSES):
         writes.drop_change(conn, change_id)
-    if qty is None:
-        writes.add_deck_card(conn, deck_id, sid, target)
+    moves = writes.add_deck_card(conn, deck_id, sid, target, with_moves=with_moves) if qty is None else []
     return {"message": f"Moved {_qty_label(name, target)} back from the Shortlist",
-            "undo": {"op": "to_shortlist", "id": sid}}
+            "undo": {"op": "to_shortlist", "id": sid}, "moves": moves}
 
 
 def _card_label(conn, deck_id, scryfall_id, fallback):
@@ -466,11 +499,12 @@ def _card_label(conn, deck_id, scryfall_id, fallback):
     return (entry and entry["name"]) or fallback or "that card"
 
 
-def _apply_change_action(conn, deck_id, op, action, resolve_add=None):
+def _apply_change_action(conn, deck_id, op, action, resolve_add=None, with_moves=True):
     """CHANGE_OPS for apply_board_action(). The row is re-read here and its
     state checked before writing, so a click from a stale board (the row was
     applied or dropped in another tab) gets a plain-English refusal instead
-    of the write functions' terser one."""
+    of the write functions' terser one. Only `add` and `apply` move copies;
+    `with_moves` reaches `add` (`apply` is never an Undo)."""
     change_id = int(action["change_id"])
     change = writes.get_change(conn, change_id)
     if change is None or change["deck_id"] != deck_id:
@@ -510,14 +544,14 @@ def _apply_change_action(conn, deck_id, op, action, resolve_add=None):
             # add_deck_card would quietly bump the quantity instead.
             raise ValueError(f"{add_name} is already in the deck — drop the idea instead. Nothing changed.")
         qty = change["quantity"] or 1
-        writes.add_deck_card(conn, deck_id, sid, qty)
+        moves = writes.add_deck_card(conn, deck_id, sid, qty, with_moves=with_moves)
         # add_deck_card retires an idea it can match by printing/oracle; a
         # typed-name idea it can't, so finish the job here.
         again = writes.get_change(conn, change_id)
         if again and again["status"] in writes.OPEN_CHANGE_STATUSES:
             writes.drop_change(conn, change_id)
         return {"message": f"Added {_qty_label(add_name, qty)} to the deck",
-                "undo": {"op": "to_shortlist", "id": sid}}
+                "undo": {"op": "to_shortlist", "id": sid}, "moves": moves}
 
     if op == "plan":
         cut_id = action["cut_id"].strip()
@@ -551,7 +585,8 @@ def _apply_change_action(conn, deck_id, op, action, resolve_add=None):
         lot = " (owned copy moved into the deck)"
     else:
         lot = ""
-    return {"message": f"Applied: {add_name} in, {cut_name} out{lot}", "undo": None}
+    return {"message": f"Applied: {add_name} in, {cut_name} out{lot}", "undo": None,
+            "moves": result["moves"]}
 
 
 # ------------------------------------------------------------------
@@ -604,11 +639,12 @@ def _dirty_key(key):
     return f"{key}__edited"
 
 
-def run_board_action(conn, deck_id, key, action, *, is_undo=False):
-    """Apply one action for the page: remember the inverse for the Undo
-    button, stash the outcome and drop stale caches (card_view.stash_edit —
-    EDIT_FLOW_PLAN.md rule 1), and flag the page to rerun. Returns True if
-    something was applied.
+def run_board_action(conn, deck_id, key, action, *, is_undo=False, undo_moves=None):
+    """Apply one action for the page: remember the inverse (and the moves it
+    must put back) for the Undo button, stash the outcome and drop stale
+    caches (card_view.stash_edit — EDIT_FLOW_PLAN.md rule 1; any moves also
+    clear the collection caches and reach the pop-up), and flag the page to
+    rerun. Returns True if something was applied.
 
     This runs in a widget callback, where st.rerun() is a no-op, hence
     stash_edit() rather than finish_edit(): rerun_if_edited() does the
@@ -621,6 +657,9 @@ def run_board_action(conn, deck_id, key, action, *, is_undo=False):
         result = apply_board_action(
             conn, deck_id, action,
             resolve_add=lambda name: card_resolver.resolve_or_fetch_card(conn, name=name),
+            # An Undo always reverts by the recorded moves, even an empty
+            # list (the forward edit moved nothing, so nothing goes back).
+            undo_moves=(undo_moves or []) if is_undo else None,
         )
     except ValueError as exc:
         st.toast(str(exc), icon="⚠️")
@@ -631,14 +670,16 @@ def run_board_action(conn, deck_id, key, action, *, is_undo=False):
         st.toast(result["message"], icon="✅")
         return True  # no-op: nothing changed, so no cache clear or rerun
     elif result["undo"]:
-        st.session_state[_undo_key(key)] = {"label": result["message"], "action": result["undo"]}
+        st.session_state[_undo_key(key)] = {"label": result["message"], "action": result["undo"],
+                                            "moves": result["moves"]}
     else:
         # A change with no inverse (apply): an older Undo would now act on
         # a deck that has moved on, so it goes.
         st.session_state.pop(_undo_key(key), None)
     card_view.stash_edit({
         "message": f"Undid: {result['message']}" if is_undo else result["message"],
-        "collection": isinstance(action, dict) and action.get("op") in COLLECTION_OPS,
+        "moves": result["moves"],
+        "warnings": result.get("warnings") or [],
     })
     st.session_state[_dirty_key(key)] = True
     return True
@@ -664,9 +705,10 @@ def render_undo_button(conn, deck_id, key):
         return
     st.button(
         f"↶ Undo: {pending['label']}", key=f"{key}__undo_btn",
-        help="Reverses the last edit made on the board. History keeps both rows.",
+        help="Reverses the last edit made on the board, putting any copies it moved back where "
+             "they were. History keeps both rows.",
         on_click=run_board_action, args=(conn, deck_id, key, pending["action"]),
-        kwargs={"is_undo": True},
+        kwargs={"is_undo": True, "undo_moves": pending.get("moves")},
     )
 
 

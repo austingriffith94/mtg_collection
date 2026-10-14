@@ -76,7 +76,10 @@ def finish_edit(result):
         message     str, or a list of str (one line per outcome)
         warnings    [str]  non-fatal notes, shown as ⚠️ toasts
         errors      [str]  per-item failures, shown as st.error
-        moves       [...]  Phase 1: physical copies moved (empty until then)
+        moves       [...]  physical copies moved (writes' move dicts, Phase 1)
+        deck_sync   [...]  list changes a collection-side save could make to
+                           decks (queries.deck_sync_offers, Phase 6) — shown
+                           as a dialog asking whether each deck's list follows
         collection  bool   also clear collection caches (implied by moves)
         reference   bool   also clear reference caches (catalogs, card data)
         games       bool   also clear game-log caches
@@ -115,6 +118,7 @@ def stash_edit(result):
         "warnings": list(result.get("warnings") or []),
         "errors": list(result.get("errors") or []),
         "moves": moves,
+        "deck_sync": list(result.get("deck_sync") or []),
     }
 
 
@@ -128,10 +132,69 @@ def result_from_lines(lines, **flags):
     return {"message": ok, "errors": bad, **flags}
 
 
+# ------------------------------------------------------------------
+# The moves pop-up (EDIT_FLOW_PLAN.md Phase 1): every physical copy a write
+# moved, named — never summarised as a count. Moves are writes.py's dicts;
+# their `kind` decides how each reads.
+# ------------------------------------------------------------------
+def _where(location):
+    return (location or "").strip() or "no location"
+
+
+def _card_qty(move):
+    qty = move.get("quantity")
+    return f"{move['card']} ×{qty}" if qty and qty > 1 else move["card"]
+
+
+def move_route(move):
+    """The from → to half of a move, which is also its group in the dialog."""
+    kind = move.get("kind")
+    if kind == "new":
+        return f"new copy record → {move['to']}"
+    if kind == "delete":
+        return f"{move['from']} → copy record removed"
+    if kind == "bulk":
+        return "bulk — not tracked"
+    if kind == "brewing":
+        return ("Brewing — pulled when you build the deck" if move.get("direction") == "in"
+                else "Brewing — list only, the copy stays put")
+    if kind == "dismantled":
+        return "Dismantled — list only, nothing moved"
+    return f"{_where(move['from'])} → {_where(move['to'])}"
+
+
+def move_label(move):
+    """One move as a sentence for a toast: "Sol Ring: Box → Prosper"."""
+    kind = move.get("kind")
+    if kind == "brewing" and move.get("direction") == "in":
+        return f"Brewing — {_card_qty(move)} will be pulled when you build the deck."
+    if kind in ("brewing", "dismantled"):
+        return f"{kind.capitalize()} — {_card_qty(move)}: list only, nothing moved."
+    return f"{_card_qty(move)}: {move_route(move)}"
+
+
+def _moves_dialog_body(moves):
+    groups = {}
+    for move in moves:
+        groups.setdefault(move_route(move), []).append(move)
+    for route, group in groups.items():
+        st.markdown(f"**{route}**")
+        st.markdown("\n".join(f"- {_card_qty(m)}" for m in group))
+    if st.button("OK", key="_moves_dialog_ok", type="primary"):
+        st.rerun()
+
+
 def show_moves(moves):
-    """Phase 1 fills this in (a toast naming one or two moves, a dialog
-    listing more); finish_edit() never carries a non-empty `moves` before
-    then, so this is unreachable until it does."""
+    """One or two moves are toasts; more (a Mainboard table save, an apply
+    batch) open a dialog listing every move, grouped by from → to."""
+    if len(moves) <= 2:
+        for move in moves:
+            st.toast(move_label(move), icon="📦")
+    else:
+        # Decorated here rather than at import, the way pages declare their
+        # dialogs on every run: the scripts/_test_*_offline.py harnesses
+        # import this module under a Streamlit stub with no st.dialog.
+        st.dialog("Copies moved", width="large")(_moves_dialog_body)(moves)
 
 
 def show_pending_feedback():
@@ -141,22 +204,110 @@ def show_pending_feedback():
 
     One or two message lines are toasts; more (a batch apply) are one
     st.success list at the top of the page, so a batch is never cut off in
-    a toast's few lines."""
+    a toast's few lines. Then the moves (show_moves)."""
     pending = st.session_state.pop(_PENDING_FEEDBACK_KEY, None)
     if not pending:
         return
-    if pending.get("moves"):
-        show_moves(pending["moves"])
     lines = pending.get("lines") or []
     if len(lines) <= 2:
         for line in lines:
             st.toast(line, icon="✅")
     else:
         st.success("\n".join(f"- {line}" for line in lines))
+    offers = pending.get("deck_sync")
+    if pending.get("moves"):
+        # Streamlit opens one dialog per run, and the list question below
+        # needs an answer, so a big moves list is spelled out as toasts
+        # beside it rather than a second dialog.
+        if offers:
+            for move in pending["moves"]:
+                st.toast(move_label(move), icon="📦")
+        else:
+            show_moves(pending["moves"])
     for warning in pending.get("warnings") or []:
         st.toast(warning, icon="⚠️")
     for err in pending.get("errors") or []:
         st.error(err)
+    if offers:
+        show_deck_sync(offers)
+
+
+# ------------------------------------------------------------------
+# "Also update Gisa's list?" (EDIT_FLOW_PLAN.md Phase 6): a Collection-side
+# save that moved copies into or out of a deck has already happened — the
+# lots are changed and in the move log. This asks, per deck, whether the
+# deck's LIST should follow. There is no silent default: closing the dialog
+# without answering leaves "just the collection", and Workbench Reconcile
+# shows the gap as "to pull" / "to put away" as it always has.
+#
+# The offers wait in session state and the dialog body reads them from
+# there, not from its arguments: a click inside a dialog reruns only the
+# dialog, with the arguments it was first opened with, which would still
+# list a deck that was already answered.
+# ------------------------------------------------------------------
+_DECK_SYNC_KEY = "_deck_sync_offers"
+_DECK_SYNC_DONE_KEY = "_deck_sync_done_lines"
+
+
+def deck_sync_line(offer):
+    """One offer as a sentence: "Add Sol Ring ×1 (list ×2 → ×3)"."""
+    delta = offer["quantity"] if offer["action"] == "add" else -offer["quantity"]
+    verb = "Add" if offer["action"] == "add" else "Remove"
+    return (f"{verb} {offer['card']} ×{offer['quantity']} "
+            f"(list ×{offer['list_quantity']} → ×{offer['list_quantity'] + delta})")
+
+
+def _answer_deck_sync(deck_name, follow):
+    """One deck answered: apply its offers when `follow`, drop them either
+    way, and close the dialog (a full rerun) once none are left."""
+    from . import db, writes  # local: neither is needed outside a click
+
+    offers = st.session_state.get(_DECK_SYNC_KEY, [])
+    mine = [o for o in offers if o["deck_name"] == deck_name]
+    rest = [o for o in offers if o["deck_name"] != deck_name]
+    st.session_state[_DECK_SYNC_KEY] = rest
+    done = st.session_state.get(_DECK_SYNC_DONE_KEY, [])
+    moves = []
+    if follow:
+        lines, moves = writes.sync_deck_lists(db.get_connection(), mine)
+        done = done + lines
+        st.session_state[_DECK_SYNC_DONE_KEY] = done
+        # Caches are cleared per answer: the dialog may be dismissed before
+        # the last deck is answered, and what's written is written.
+        stash_edit({"message": done, "moves": moves})
+    if not rest:
+        st.session_state.pop(_DECK_SYNC_DONE_KEY, None)
+        st.rerun(scope="app")
+    # Bare st.rerun() is an app rerun, which would close the dialog with
+    # decks still unanswered — rerun just the dialog to drop this deck's block.
+    st.rerun(scope="fragment")
+
+
+def _deck_sync_dialog_body():
+    offers = st.session_state.get(_DECK_SYNC_KEY, [])
+    st.caption("This save moved copies into or out of a deck. Should its list follow, "
+               "or is this just a correction to the collection?")
+    decks = {}
+    for offer in offers:
+        decks.setdefault(offer["deck_name"], []).append(offer)
+    for deck_name, group in decks.items():
+        st.markdown(f"**{deck_name}**")
+        st.markdown("\n".join(f"- {deck_sync_line(o)}" for o in group))
+        follow_col, keep_col = st.columns(2)
+        if follow_col.button(f"Also update {deck_name}'s list", key=f"_deck_sync_yes_{deck_name}",
+                             type="primary", width="stretch"):
+            _answer_deck_sync(deck_name, True)
+        if keep_col.button("Just the collection", key=f"_deck_sync_no_{deck_name}", width="stretch"):
+            _answer_deck_sync(deck_name, False)
+
+
+def show_deck_sync(offers):
+    """Open the dialog for `offers` (queries.deck_sync_offers' shape)."""
+    st.session_state[_DECK_SYNC_KEY] = list(offers)
+    st.session_state.pop(_DECK_SYNC_DONE_KEY, None)
+    # Declared when shown, like show_moves(): the offline test harnesses
+    # import this module under a Streamlit stub with no st.dialog.
+    st.dialog("Update deck lists?", width="large")(_deck_sync_dialog_body)()
 
 
 # ------------------------------------------------------------------

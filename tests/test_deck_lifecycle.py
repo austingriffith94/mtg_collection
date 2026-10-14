@@ -293,7 +293,10 @@ def test_lots_sleeved_here_but_not_on_the_list_are_strays(conn, add_card):
     assert [c["card"] for c in plan["to_box"]] == ["Sol Ring"]
     assert [c["card"] for c in plan["strays"]] == ["Heirloom Blade"]
 
-    assert writes.move_dismantle_strays(conn, vilis) == 1
+    # Phase 1 of EDIT_FLOW_PLAN.md: the moves come back for the pop-up.
+    moves = writes.move_dismantle_strays(conn, vilis)
+    assert [(m["card"], m["from"], m["to"], m["kind"]) for m in moves] == [
+        ("Heirloom Blade", "Vilis", "Box", "move")]
     assert _location(conn, stray_lot) == "Box"
 
 

@@ -214,6 +214,7 @@ def import_rows(conn, rows, *, location=None, date_acquired=None, source_prefix=
             date_acquired=date_acquired,
             price_paid=row["unit_price"],
             source=source,
+            reason="import",  # the move log's word for it (EDIT_FLOW_PLAN.md Phase 6)
         )
         results.append({
             "row": row,

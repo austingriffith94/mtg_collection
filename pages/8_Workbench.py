@@ -26,6 +26,15 @@ list-vs-physical diff, and per-deck build status.
 UI plan Phase 4: each deck's planned-changes block is an st.fragment
 (_planned_block), so ticking its checkboxes doesn't recompute the whole
 page; every write still ends in a full-app rerun via _refresh().
+
+EDIT_FLOW_PLAN.md Phase 1: applying, the contention "Drop", and
+Reconcile's "Sleeved here" / "Put away" all report the copies they moved
+through the shared pop-up (card_view.show_moves).
+
+EDIT_FLOW_PLAN.md Phase 6: assigning unlocated lots to a Location can put
+copies into a deck's sleeves, so those saves ask whether the deck's list
+should follow (card_view.show_deck_sync). Reconcile's own moves are logged
+as "reconcile" in the move log.
 """
 import sys
 import os
@@ -58,13 +67,16 @@ VER_KEY = "workbench_ver"
 ver = st.session_state.get(VER_KEY, 0)
 
 
-def _refresh(lines, collection=False):
+def _refresh(lines, collection=False, moves=None, deck_sync=None):
     """Bump the editor version, then finish the write (EDIT_FLOW_PLAN.md
-    Phase 0): `lines` are "✅ ..." / "❌ ..." outcomes. finish_edit() reruns
-    the whole app even from a fragment (_planned_block), since a write
-    changes sections outside it."""
+    Phase 0): `lines` are "✅ ..." / "❌ ..." outcomes; `moves` are the
+    copies the write moved (Phase 1), named in the pop-up; `deck_sync` are
+    the list changes a collection-side save could make (Phase 6) —
+    finish_edit() asks about them. It reruns the whole app even from a
+    fragment (_planned_block), since a write changes sections outside it."""
     st.session_state[VER_KEY] = ver + 1
-    cv.finish_edit(cv.result_from_lines(lines, collection=collection))
+    cv.finish_edit(cv.result_from_lines(lines, collection=collection, moves=moves or [],
+                                        deck_sync=deck_sync or []))
 
 
 def _apply(change_ids, label="Applied"):
@@ -86,7 +98,7 @@ def _apply(change_ids, label="Applied"):
             lines.append(f"✅ {label} {r['add_name']}{fetch}, replaced {r['remove_name']}{lot}.")
         else:
             lines.append(f"❌ {r['add_name']}: {r['error']}")
-    _refresh(lines, collection=True)
+    _refresh(lines, moves=[m for r in results for m in r["moves"]])
 
 
 # ------------------------------------------------------------------
@@ -371,7 +383,8 @@ st.header(
         "Demand = decks running this card mainboard + decks with an open idea/planned add "
         "for it. Shortfall = demand minus copies owned. Buying the shortfall is already "
         "reflected in the Buy list below; dropping it from a deck here removes it from that "
-        "deck's mainboard immediately (logged to its history like any hand edit)."
+        "deck's mainboard immediately (logged to its history like any hand edit) and puts its "
+        f"sleeved copy away in {writes.DEFAULT_LOCATION}."
     ),
 )
 if not contention:
@@ -399,8 +412,8 @@ else:
                     )
                     sid = q.deck_card_scryfall_id_for_oracle(conn, deck_id, row["oracle_id"])
                     if sid:
-                        writes.remove_deck_card(conn, deck_id, sid)
-                        _refresh([f"✅ Dropped {row['card']} from {drop_choice}."])
+                        moves = writes.remove_deck_card(conn, deck_id, sid)
+                        _refresh([f"✅ Dropped {row['card']} from {drop_choice}."], moves=moves)
 
 # ------------------------------------------------------------------
 # Buy list (Phase 3) — unowned ideas, deduplicated across decks, plus one
@@ -487,16 +500,20 @@ else:
         if not picked or not bulk_loc:
             st.warning("Tick **Select** on at least one row and choose a location first.")
         else:
+            mark = q.last_move_id(conn)
             writes.bulk_update_collection(conn, {cid: {"location": bulk_loc} for cid in picked})
-            _refresh([f"✅ Assigned {len(picked)} lot(s) to {bulk_loc}."], collection=True)
+            _refresh([f"✅ Assigned {len(picked)} lot(s) to {bulk_loc}."], collection=True,
+                     deck_sync=q.deck_sync_offers(conn, mark))
     if u3.button("💾 Save row locations", key=f"workbench_unloc_save_{ver}"):
         edits = {int(r["collection_id"]): {"location": r["Location"]}
                  for _, r in unloc_edited.iterrows() if isinstance(r["Location"], str) and r["Location"]}
         if not edits:
             st.warning("Choose a **Location** on at least one row first.")
         else:
+            mark = q.last_move_id(conn)
             writes.bulk_update_collection(conn, edits)
-            _refresh([f"✅ Located {len(edits)} lot(s)."], collection=True)
+            _refresh([f"✅ Located {len(edits)} lot(s)."], collection=True,
+                     deck_sync=q.deck_sync_offers(conn, mark))
 
 # --- 2 + 3. Per-deck list vs. physical, with build status ----------
 recon = q.deck_reconciliation(conn)
@@ -536,9 +553,9 @@ for deck in recon:
                                   label_visibility="collapsed")
             if c3.button("Sleeved here", key=f"wb_pull_{dk}_{row['oracle_id']}_{ver}"):
                 lot = opts[choice]
-                writes.move_lot(conn, lot["collection_id"], deck["deck_name"],
-                                quantity=min(row["short"], lot["quantity"]))
-                _refresh([f"✅ {row['card']} located to {deck['deck_name']}."], collection=True)
+                moves = writes.move_copies(conn, lot["collection_id"], deck["deck_name"],
+                                           quantity=min(row["short"], lot["quantity"]))
+                _refresh([f"✅ {row['card']} located to {deck['deck_name']}."], moves=moves)
             c4.caption("It's elsewhere → set its Location on the Collection page.")
         if deck["to_put_away"]:
             st.markdown("**To put away**")
@@ -551,11 +568,11 @@ for deck in recon:
                                 key=f"wb_away_pick_{dk}_{row['oracle_id']}_{ver}",
                                 label_visibility="collapsed")
             if c3.button("Put away", key=f"wb_away_{dk}_{row['oracle_id']}_{ver}") and dest:
-                remaining = row["surplus"]
+                remaining, moves = row["surplus"], []
                 for lot in row["lots"]:
                     if remaining <= 0:
                         break
                     take = min(remaining, lot["quantity"])
-                    writes.move_lot(conn, lot["collection_id"], dest, quantity=take)
+                    moves += writes.move_copies(conn, lot["collection_id"], dest, quantity=take)
                     remaining -= take
-                _refresh([f"✅ {row['card']} put away in {dest}."], collection=True)
+                _refresh([f"✅ {row['card']} put away in {dest}."], moves=moves)

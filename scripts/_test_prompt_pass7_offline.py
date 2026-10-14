@@ -246,7 +246,7 @@ def main():
     my_deck_seat = next(p for p in detail_before["participants"] if p["deck_name"] == "My Deck")
     check("sanity: My Deck's participant row is tracked (deck_id set) before deletion", my_deck_seat["deck_id"] == 1)
 
-    deleted_name, del_err, _redirected = w.delete_deck(conn, 1)
+    deleted_name, del_err, _redirected, _dropped = w.delete_deck(conn, 1)
     check("delete_deck succeeds", deleted_name == "My Deck" and del_err is None)
     check("the deck row itself is gone", conn.execute("SELECT 1 FROM decks WHERE deck_id=1").fetchone() is None)
     check("the game itself still exists (not deleted)", conn.execute("SELECT 1 FROM games WHERE game_id=?", (gid,)).fetchone() is not None)

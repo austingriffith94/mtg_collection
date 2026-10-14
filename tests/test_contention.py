@@ -203,7 +203,8 @@ def test_card_lookup_shows_shortlist_and_demand(conn, add_card):
     assert result["owned_qty"] == 0
     assert result["shortlisted_in"] == [
         {"change_id": change_id, "deck_id": deck_id,
-         "deck_name": "Prosper's Payday Loans", "status": "idea"}
+         "deck_name": "Prosper's Payday Loans", "status": "idea",
+         "source": None, "source_location": None}
     ]
     assert result["demand"] == 1
     assert result["shortfall"] == 1

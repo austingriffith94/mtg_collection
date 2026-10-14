@@ -26,6 +26,15 @@ or a storage Location holding a free copy), the Board's Add / Apply and its
 −1 / Remove menus ask the same, and the Mainboard save has "Removed copies
 go to". The choice is saved on the Shortlist row and shows in History.
 
+Phase 3: "Comes from" also lists other decks that run the card. Taking it
+from Gisa changes Gisa's list too, so the add bar asks first, then moves
+Gisa's copy straight into this deck (writes.transfer_between_decks); on the
+Shortlist it stages a linked pair — this deck's idea plus a planned removal
+on Gisa — that applies or drops as one. A brewing deck takes the card onto
+its list at once and leaves Gisa's copy where it is until it's built. The
+Board shows a card another deck is taking with a "→ Prosper" badge and
+lists it under "Leaving" in the rail.
+
 Card Tags (bulk-editing any tag_type across a deck's mainboard) lives
 here too, moved from the earlier standalone Tag Editor page. Deck-level
 tags were removed entirely — use description/tutors instead.
@@ -149,6 +158,15 @@ def _add_card_to_deck(deck_id, name, set_code, number, qty, source=None, source_
                                      source=source, source_location=source_location)
     except ValueError as exc:
         return None, str(exc), []
+    if source == "deck":
+        held = loaders.load_deck_meta(conn, deck_id).get("build_state") == "brewing"
+        return (
+            f"Took {qty}x {name or sid} from {source_location}"
+            + (f" — {source_location} keeps its copy until you build this deck." if held
+               else f", off {source_location}'s list" + (f" — now ×{existing + qty}." if existing else ".")),
+            None,
+            moves,
+        )
     return (
         f"Added {qty}x {name or sid}"
         + (f" from {source_location}" if source and source_location else "")
@@ -179,20 +197,47 @@ def _render_add_card_form(deck_id, key_prefix, on_added=None):
     typed_sid = card_resolver.find_local_card(
         conn, name=name.strip() or None, set_code=set_code.strip() or None,
         collector_number=number.strip() or None)
+    # Phase 3: other decks too — every one before a card is typed, then the
+    # ones whose list runs it.
+    other_decks = [n for n in decks_df["name"] if n != loaders.load_deck_meta(conn, deck_id).get("name")]
     source, source_location = cv.render_source_picker(
         fmt.source_choices(q.card_sources(conn, typed_sid, deck_id) if typed_sid else None,
-                           q.storage_locations(conn)),
+                           q.storage_locations(conn), other_decks),
         key=f"{key_prefix}_add_source", container=ac5)
-    if st.button("➕ Add to mainboard", key=f"{key_prefix}_add_btn"):
-        message, err, moves = _add_card_to_deck(
-            deck_id, name.strip(), set_code.strip(), number.strip(), int(qty), source, source_location
-        )
+    confirm_key = f"{key_prefix}_add_take_confirm"
+
+    def _do_add(pending):
+        message, err, moves = _add_card_to_deck(deck_id, *pending)
         if err:
             st.error(err)
         else:
             if on_added:
                 on_added()
             cv.finish_edit({"message": message, "moves": moves})
+
+    if st.button("➕ Add to mainboard", key=f"{key_prefix}_add_btn"):
+        pending = (name.strip(), set_code.strip(), number.strip(), int(qty), source, source_location)
+        brewing = loaders.load_deck_meta(conn, deck_id).get("build_state") == "brewing"
+        if source == "deck" and not brewing:
+            # Taking from another deck edits THAT deck's list too, so it is
+            # confirmed first. A brewing deck's take only promises the copy
+            # (nothing leaves Gisa yet), so it goes straight through.
+            st.session_state[confirm_key] = pending
+        else:
+            st.session_state.pop(confirm_key, None)
+            _do_add(pending)
+    pending = st.session_state.get(confirm_key)
+    if pending:
+        card_label = pending[0] or f"{pending[1].upper()} {pending[2]}"
+        st.warning(f"This also takes **{card_label}** out of **{pending[5]}**'s list, and moves its "
+                   f"copy from {pending[5]}'s sleeves into this deck. Continue?")
+        yes, no = st.columns(2)
+        if yes.button(f"Yes, take it from {pending[5]}", key=f"{key_prefix}_add_take_yes", type="primary"):
+            st.session_state.pop(confirm_key, None)
+            _do_add(pending)
+        if no.button("Cancel", key=f"{key_prefix}_add_take_no"):
+            st.session_state.pop(confirm_key, None)
+            st.rerun()
 
 
 # ------------------------------------------------------------------
@@ -236,6 +281,7 @@ def _board_fragment(deck_id):
         cards_df, loaders.load_deck_meta(conn, deck_id), loaders.load_owned_card_quantities(conn),
         key=board_key, editable=True, conn=conn, deck_id=deck_id,
         shortlist=deck_board.load_board_shortlist(conn, deck_id),
+        leaving=deck_board.load_board_leaving(conn, deck_id),
     )
 
 
@@ -578,7 +624,7 @@ with tab_info:
             if del_confirm.strip() != meta.get("name"):
                 st.error("Name didn't match — nothing was deleted.")
             else:
-                deleted_name, err, redirected = writes.delete_deck(
+                deleted_name, err, redirected, dropped = writes.delete_deck(
                     conn, deck_id, clear_collection_locations=del_clear_loc
                 )
                 if err:
@@ -587,6 +633,9 @@ with tab_info:
                     msg = f"Deleted '{deleted_name}'."
                     if redirected:
                         msg += f" Redirected {redirected} other open change(s) that were headed there to Box."
+                    if dropped:
+                        msg += (f" Dropped {dropped} other deck(s)' side of a take from or to it — "
+                                "it can't be applied any more.")
                     cv.finish_edit({"message": msg, "collection": del_clear_loc})
 
 # ------------------------------------------------------------------
@@ -828,13 +877,22 @@ AUTO_SOURCE = "Auto"
 
 
 def _source_label(source, location):
-    """A change row's saved source as its table cell: "Auto" or the Location."""
-    return location if source == "storage" and isinstance(location, str) and location.strip() else AUTO_SOURCE
+    """A change row's saved source as its table cell: "Auto", the Location,
+    or (Phase 3) "Deck: Gisa"."""
+    if not (isinstance(location, str) and location.strip()):
+        return AUTO_SOURCE
+    if source == "deck":
+        return fmt.deck_source_label(location.strip())
+    return location if source == "storage" else AUTO_SOURCE
 
 
 def _source_edit(label):
     """The table cell back as the (source, source_location) pair to save."""
-    return (None, None) if label in (None, AUTO_SOURCE) else ("storage", label)
+    if label in (None, AUTO_SOURCE):
+        return None, None
+    if label.startswith(fmt.DECK_SOURCE_PREFIX):
+        return "deck", label[len(fmt.DECK_SOURCE_PREFIX):]
+    return "storage", label
 
 
 def _choices_with(base, *extra):
@@ -878,22 +936,9 @@ def _initial_replace_label(row, by_sid, by_name):
 
 
 def _apply_flash(results):
-    """apply_changes() results -> the ✅/❌ lines shown after the rerun."""
-    lines = []
-    for r in results:
-        if r["ok"]:
-            outcome = r["outcome"] or {}
-            fetch = " (fetched fresh from Scryfall)" if r["was_new"] else ""
-            if outcome.get("created_lot"):
-                lot = " — created a new starter collection lot"
-            elif outcome.get("assigned_lot_id"):
-                lot = " — reassigned an existing owned copy"
-            else:
-                lot = ""
-            lines.append(f"✅ Added {r['add_name']}{fetch}, replaced {r['remove_name']}{lot}.")
-        else:
-            lines.append(f"❌ {r['add_name']}: {r['error']}")
-    return lines
+    """apply_changes() results -> the ✅/❌ lines shown after the rerun
+    (one per take from another deck, which applies as a pair)."""
+    return [fmt.apply_result_line(r, "Added") for r in results]
 
 
 with tab_shortlist:
@@ -910,6 +955,9 @@ with tab_shortlist:
         availability = q.plan_availability(conn, deck_open_df)
         replace_map, label_by_sid, label_by_name = _replace_options(main_df)
         replace_choices = [NO_TARGET] + list(replace_map)
+        # Phase 3: every other deck, as a "Comes from" choice ("Deck: Gisa").
+        other_deck_names = [n for n in decks_df["name"] if n != deck_name]
+        deck_choices = [fmt.deck_source_label(n) for n in other_deck_names]
 
         # Part of every data_editor key below and bumped after each write.
         # A data_editor keeps its pending edits by ROW POSITION under a fixed
@@ -948,10 +996,11 @@ with tab_shortlist:
             f4, f5, f6 = st.columns([2, 2, 3])
             sl_replace = f4.selectbox("Replaces (optional)", replace_choices, key=f"editor_{deck_id}_sl_add_replace")
             # Inside a form nothing reruns while typing, so the card isn't
-            # known yet: every storage Location is offered (applying the
-            # idea later checks the Location still has a copy).
+            # known yet: every storage Location and every other deck is
+            # offered (applying the idea later checks the Location still has
+            # a copy; a deck that doesn't run the card refuses right away).
             sl_source, sl_source_location = cv.render_source_picker(
-                fmt.source_choices(None, q.storage_locations(conn)),
+                fmt.source_choices(None, q.storage_locations(conn), other_deck_names),
                 key=f"editor_{deck_id}_sl_add_source", container=f5)
             sl_notes = f6.text_input("Notes (optional)", key=f"editor_{deck_id}_sl_add_notes")
             sl_submit = st.form_submit_button("➕ Add to shortlist")
@@ -982,7 +1031,9 @@ with tab_shortlist:
                         st.warning(str(exc))
                     else:
                         fetched = " (fetched fresh from Scryfall)" if was_new else ""
-                        _refresh([f"✅ Added {resolved_name} to the shortlist{fetched}."])
+                        taken = (f" {sl_source_location}'s copy is promised to this deck until you apply "
+                                 "or drop it." if sl_source == "deck" else "")
+                        _refresh([f"✅ Added {resolved_name} to the shortlist{fetched}.{taken}"])
 
         # ---------------- Ideas ----------------
         st.divider()
@@ -1018,16 +1069,19 @@ with tab_shortlist:
                     "Price": st.column_config.NumberColumn("Price", format="$%.2f", disabled=True, width="small"),
                     "Comes from": st.column_config.SelectboxColumn(
                         "Comes from",
-                        options=_choices_with([AUTO_SOURCE, *storage_choices], *initial_sources.values()),
+                        options=_choices_with([AUTO_SOURCE, *storage_choices, *deck_choices],
+                                              *initial_sources.values()),
                         required=True, width="small",
-                        help="Auto, or the storage Location the copy should be taken from when this "
-                             "is applied or added."),
+                        help="Auto, the storage Location the copy should be taken from when this "
+                             "is applied or added, or another deck — which promises that deck's copy "
+                             "here and takes the card off its list when applied."),
                     "Replaces": st.column_config.SelectboxColumn("Replaces", options=replace_choices, required=True),
                     "Review?": st.column_config.CheckboxColumn("Review?", width="small"),
                     "Notes": st.column_config.TextColumn("Notes"),
                     "→ Plan": st.column_config.CheckboxColumn(
                         "→ Plan", width="small",
-                        help="Stage this as a swap. Needs a card in 'Replaces'."),
+                        help="Stage this as a swap. Needs a card in 'Replaces' — unless it comes from "
+                             "another deck, which can be planned as a plain add."),
                     "Drop": st.column_config.CheckboxColumn(
                         "Drop", width="small",
                         help="Reject it. Kept in History rather than deleted."),
@@ -1062,17 +1116,22 @@ with tab_shortlist:
                 planned_n = dropped_n = 0
                 for cid, row in to_plan:
                     target = replace_map.get(row["Replaces"])
-                    if not target:
+                    # A take from another deck (Phase 3) can be planned with
+                    # nothing cut: the card brings its own removal, on the
+                    # deck it leaves. Its source was saved just above.
+                    is_take = str(row["Comes from"]).startswith(fmt.DECK_SOURCE_PREFIX)
+                    if not target and not is_take:
                         flash.append(f"❌ {row['Card']}: pick a card for it to replace before planning it.")
                         continue
                     try:
-                        writes.promote_change(conn, cid, remove_scryfall_id=target[0], remove_name=target[1])
+                        writes.promote_change(conn, cid, remove_scryfall_id=target[0] if target else None,
+                                              remove_name=target[1] if target else None)
                         planned_n += 1
                     except ValueError as exc:
                         flash.append(f"❌ {row['Card']}: {exc}")
                 for cid, row in to_drop:
                     try:
-                        writes.drop_change(conn, cid)
+                        flash += [f"✅ {line}" for line in writes.drop_change(conn, cid)]
                         dropped_n += 1
                     except ValueError as exc:
                         flash.append(f"❌ {row['Card']}: {exc}")
@@ -1125,7 +1184,7 @@ with tab_shortlist:
                     "Availability": st.column_config.TextColumn("Availability", disabled=True),
                     "Comes from": st.column_config.SelectboxColumn(
                         "Comes from",
-                        options=_choices_with([AUTO_SOURCE, *storage_choices],
+                        options=_choices_with([AUTO_SOURCE, *storage_choices, *deck_choices],
                                               *(v[0] for v in planned_initial.values())),
                         required=True, width="small"),
                     "Replaces": st.column_config.TextColumn("Replaces", disabled=True),
@@ -1184,7 +1243,7 @@ with tab_shortlist:
                     cid = int(row["change_id"])
                     try:
                         if row["Drop"]:
-                            writes.drop_change(conn, cid)
+                            flash += [f"✅ {line}" for line in writes.drop_change(conn, cid)]
                             dropped_n += 1
                         elif row["← Idea"]:
                             writes.demote_change(conn, cid)
@@ -1240,8 +1299,9 @@ with tab_shortlist:
                     )
                     if st.button("↩️ Restore as idea", key=f"editor_{deck_id}_sl_restore_btn_{ver}"):
                         try:
-                            writes.reopen_change(conn, restore_options[restore_pick])
+                            notes = writes.reopen_change(conn, restore_options[restore_pick])
                         except ValueError as exc:
                             st.warning(str(exc))
                         else:
-                            _refresh([f"✅ Restored {restore_pick.rsplit(' (#', 1)[0]} as an idea."])
+                            _refresh([f"✅ Restored {restore_pick.rsplit(' (#', 1)[0]} as an idea.",
+                                      *(f"✅ {n}" for n in notes or [])])

@@ -712,8 +712,8 @@ Shortlist tab or the Workbench, and the Workbench's contention "Drop".
 - **A card joins (or goes up in quantity):** copies already sleeved in the
   deck count first; then free copies in storage, biggest lot first (a lot
   of 3 is split if only one is needed); then, for whatever is left, a
-  starter lot tagged `Auto-added (deck edit)`. A copy sleeved in another
-  deck is never taken.
+  starter lot tagged `Auto-added (deck edit)`. Auto never takes a copy
+  sleeved in another deck — only choosing that deck does (below).
 - **A card leaves (or goes down):** the copies the list no longer needs go
   back to "Box". A deck that was never fully sleeved keeps what it still
   needs, and swapping one printing for another of the same card moves
@@ -751,14 +751,51 @@ rather than the only choice.
   to…** and **Remove to…** (they're left out for a brewing deck, where no copy
   moves).
 - **A Location that can't supply the copy refuses the edit** with the
-  reason and changes nothing; it never falls back to a starter lot, and a
-  deck isn't a storage Location (taking a card from another deck is a later
-  phase).
+  reason and changes nothing; it never falls back to a starter lot. A deck
+  isn't a storage Location — pick it as the deck the card comes from instead
+  (next section).
 - **History records the choice** ("from Lands Box", "to Binder") on the
   Decks page History tab, Card Lookup and the Shortlist History table. A
   Workbench verdict of 📍 means the idea's chosen Location has run out
   while another still has a copy. A brewing deck remembers its picks without
   moving anything, and other plans can't promise the copy it picked.
+
+### Taking a card from another deck
+
+Since [EDIT_FLOW_PLAN.md](EDIT_FLOW_PLAN.md) Phase 3, **Comes from** also
+lists your other decks that run the card (*"Deck: Gisa — 1 sleeved"*).
+Taking it from Gisa changes Gisa's list too, so both decks show it.
+
+- **Right away** (the add bar, or an idea's **Add** on the Board): it asks
+  first (*"This also takes Sol Ring out of Gisa's list"*; on the Board, a
+  second click). Then the card leaves Gisa's list, joins this one, and
+  Gisa's copy moves straight from Gisa's sleeves into this deck — no stop in
+  the Box. Both decks get a history row ("to Prosper" / "from Gisa"). The
+  Board has no Undo for it, since it changed another deck.
+- **Staged** (a Shortlist idea or planned change with Comes from = a deck):
+  this deck gets the idea, and Gisa gets a matching planned removal — the
+  copy is promised. Gisa's Board shows the card with a **→ Prosper** badge
+  and lists it under **Leaving** in the rail (**Keep here** cancels the
+  take). Applying either side applies both, Gisa's first; dropping either
+  drops both; the Workbench shows the pair as one row, *"Sol Ring: Gisa →
+  Prosper"*, under the deck getting the card. An idea can be planned
+  without naming a card to cut — the card it brings comes with its own
+  removal.
+- **Into a brewing deck** the card joins the brew's list at once, but
+  Gisa's list and sleeves stay as they are: Gisa's side waits as a planned
+  removal until the brew is built (or you apply it from the Workbench).
+  Taking the card back off the brew's list cancels the promise.
+- **What's refused, with nothing written:** a deck that doesn't run the card
+  (or not that many), a dismantled deck taking cards, a second take of a
+  card that's already promised elsewhere, and — for a deck that isn't
+  brewing — a donor whose copy isn't recorded as sleeved there (mark it
+  with the Workbench's Reconcile first). A deck can promise one card to one
+  other deck at a time.
+- **Everywhere else agrees:** other plans wanting that copy show it as
+  promised (⚠️ claimed), the Conflicts section counts a promised copy as
+  supply, and Card Lookup lists **Pending moves** (*"Gisa → Prosper"*). A
+  dismantle's transfers are takes too, so they read "from Vilis" and
+  apply or drop as pairs.
 
 ## Every copy has a history, and collection edits flow back to decks
 

@@ -100,7 +100,8 @@ def test_card_sources_lists_locations_decks_and_the_auto_pick(c):
     out = q.card_sources(c, RING, _deck(c))
     assert out["storage"] == [{"location": "Lands Box", "quantity": 2}, {"location": "Box", "quantity": 1}]
     assert out["unlocated"] == 1
-    assert out["decks"] == [{"deck": "Tuvasa", "quantity": 1}]
+    # Phase 3: `listed` says whether Tuvasa could give it (its list would have to run it).
+    assert out["decks"] == [{"deck": "Tuvasa", "quantity": 1, "listed": 0}]
     assert out["here"] == 0 and not out["bulk"]
     assert out["auto"] == {"kind": "storage", "location": "Lands Box"}   # the biggest lot, as Auto moves it
 
@@ -190,7 +191,9 @@ def test_bad_sources_and_destinations_are_refused_with_a_reason(c):
     for source, location, match in (
         ("storage", None, "Pick which storage Location"),
         ("storage", "Tuvasa", "is a deck"),
-        ("deck", "Tuvasa", "isn't available yet"),
+        ("deck", "Tuvasa", "doesn't run Sol Ring"),   # Phase 3: a real source, checked
+        ("deck", "Gisa", "can't take a card from itself"),
+        ("deck", "Nobody", "no deck called"),
         ("buy", None, "isn't available yet"),
     ):
         with pytest.raises(ValueError, match=match):

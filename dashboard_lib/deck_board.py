@@ -18,6 +18,11 @@ Split so the logic stays testable:
     and Undo puts them back (writes.revert_moves). Phase 2: an add (`add`,
     `apply`) may name a storage Location to take its copy from, and a
     removal (`dec`, `remove`, `to_shortlist`) the Location to put it in.
+    Phase 3: an add may also name another deck — a take, which changes
+    that deck's list too (writes.transfer_between_decks), so it has no Undo;
+    `drop` on a take drops both halves.
+  - leaving_payload(): PURE. Phase 3's "Leaving" rail group — this deck's
+    cards another deck has a take of.
   - shortlist_payload() / planned_cuts(): PURE. Phase C's Shortlist column,
     with each row's availability verdict allocated across every deck.
   - render_deck_board(): the page-facing wrapper that mounts the component.
@@ -87,7 +92,7 @@ def _front_face(name):
     return (name or "").split(" // ")[0].strip().lower()
 
 
-def board_payload(cards_df, deck_meta, owned_qty, cut_for=None):
+def board_payload(cards_df, deck_meta, owned_qty, cut_for=None, leaving=None):
     """The mainboard as a list of card dicts for the component (one per
     deck_cards row — a card with quantity 30 is one dict with qty 30).
 
@@ -101,6 +106,10 @@ def board_payload(cards_df, deck_meta, owned_qty, cut_for=None):
     cut_for    : planned_cuts() — {scryfall_id: [incoming card names]}; each
                  card a planned swap would cut carries those names as
                  `cut_for` (empty list otherwise) for its "cut for Y" badge.
+    leaving    : queries.deck_leaving() — {scryfall_id: [receiving decks]};
+                 a card another deck has a take of carries those names as
+                 `leaving` for its "→ Prosper" badge (EDIT_FLOW_PLAN.md
+                 Phase 3).
 
     Sorted commander(s) first, then mana value, then name; the JS relies on
     this order within each stack.
@@ -115,6 +124,7 @@ def board_payload(cards_df, deck_meta, owned_qty, cut_for=None):
     }
     owned_qty = owned_qty or {}
     cut_for = cut_for or {}
+    leaving = leaving or {}
 
     cards = []
     for _, row in cards_df.iterrows():
@@ -138,6 +148,7 @@ def board_payload(cards_df, deck_meta, owned_qty, cut_for=None):
             "tags": _split_csv(row.get("strategy_tags")),
             "price": float(price) if pd.notna(price) else None,
             "cut_for": list(cut_for.get(row["scryfall_id"], [])),
+            "leaving": list(leaving.get(row["scryfall_id"], [])),
             "flags": {
                 "game_changer": bool(row.get("is_game_changer")) if pd.notna(row.get("is_game_changer")) else False,
                 "reserved": bool(row.get("is_reserved")) if pd.notna(row.get("is_reserved")) else False,
@@ -197,6 +208,11 @@ def _source_fields(row, sources):
         "source_location": location,
         "source_options": [{"location": o["location"], "quantity": o["quantity"]}
                            for o in (sources or {}).get("storage", [])],
+        # Phase 3: other decks whose list runs the card. `label` says whether
+        # one can hand a copy over right now; picking it also changes that
+        # deck's list, which the board confirms first.
+        "deck_options": [{"deck": o["deck"], "label": fmt.deck_choice_label(o)}
+                         for o in (sources or {}).get("decks", []) if o.get("listed")],
         "auto_label": fmt.auto_source_label(sources),
     }
 
@@ -300,6 +316,24 @@ def load_board_shortlist(conn, deck_id):
     sources = {int(r["change_id"]): q.card_sources(conn, r["scryfall_id"], deck_id)
                for _, r in shortlist_df.iterrows()}
     return shortlist_payload(shortlist_df, shortlist_availability(conn, open_df), unlinked, sources)
+
+
+def load_board_leaving(conn, deck_id):
+    """leaving_payload() for one deck. A live read, like the allocator's: a
+    take staged on another deck's page shows here on the next run."""
+    return leaving_payload(q.open_takes(conn, deck_id=deck_id))
+
+
+def leaving_payload(takes):
+    """This deck's cards other decks have a take of (queries.open_takes(conn,
+    deck_id=...)), for the rail's "Leaving" group: [{change_id (the donor's
+    removal, which `drop` acts on), id, name, qty, to_deck,
+    receiver_status}]. Phase 3; text only — the card itself is on the
+    board with its "→ Prosper" badge."""
+    return [{"change_id": int(t["donor_change_id"]), "id": t["scryfall_id"], "name": t["card"],
+             "qty": int(t["quantity"] or 1), "to_deck": t["receiver_deck_name"],
+             "receiver_status": t["receiver_status"]}
+            for t in takes]
 
 
 def planned_cuts(shortlist_items):
@@ -575,15 +609,23 @@ def _apply_change_action(conn, deck_id, op, action, resolve_add=None, with_moves
         raise ValueError(f"{add_name} is {now} — the board was out of date, nothing changed.")
 
     if op == "drop":
-        writes.drop_change(conn, change_id)
-        return {"message": f"Dropped {add_name} from the Shortlist",
+        donor_side = q.is_donor_row(change)
+        partner_lines = writes.drop_change(conn, change_id)
+        if donor_side:
+            # The "Leaving" rail's Drop: this deck keeps the card. The other
+            # deck's half went with it, and can only be reopened over there,
+            # so there is no Undo here.
+            card = _card_label(conn, deck_id, change["remove_scryfall_id"], change["remove_name"])
+            return {"message": " ".join([f"Kept {card} — the take is cancelled.", *partner_lines]),
+                    "undo": None}
+        return {"message": " ".join([f"Dropped {add_name} from the Shortlist", *partner_lines]),
                 "undo": {"op": "reopen", "change_id": change_id}}
 
     if op == "reopen":
         # A dropped swap comes back as an idea (its pairing is kept), the same
-        # as the Shortlist tab's reopen.
-        writes.reopen_change(conn, change_id)
-        return {"message": f"Brought {add_name} back to the Shortlist",
+        # as the Shortlist tab's reopen; a take re-promises the donor's copy.
+        lines = writes.reopen_change(conn, change_id) or []
+        return {"message": " ".join([f"Brought {add_name} back to the Shortlist", *lines]),
                 "undo": {"op": "drop", "change_id": change_id}}
 
     if op == "add":
@@ -609,6 +651,15 @@ def _apply_change_action(conn, deck_id, op, action, resolve_add=None, with_moves
         again = writes.get_change(conn, change_id)
         if again and again["status"] in writes.OPEN_CHANGE_STATUSES:
             writes.drop_change(conn, change_id)
+        if source == "deck":
+            # Phase 3: the card also left the other deck's list. Undoing
+            # that is an edit to another deck, which a one-level Undo here
+            # can't do — so, like apply, there is none.
+            held = q.deck_meta(conn, deck_id).get("build_state") == "brewing"
+            tail = (f" — {location} keeps its copy until you build this deck" if held
+                    else f", off {location}'s list")
+            return {"message": f"Took {_qty_label(add_name, qty)} from {location}{tail}",
+                    "undo": None, "moves": moves}
         where = f" (from {location})" if source and location else ""
         return {"message": f"Added {_qty_label(add_name, qty)} to the deck{where}",
                 "undo": {"op": "to_shortlist", "id": sid}, "moves": moves}
@@ -642,6 +693,11 @@ def _apply_change_action(conn, deck_id, op, action, resolve_add=None, with_moves
     (result,) = writes.apply_changes(conn, [change_id], resolve_add=resolve_add)
     if not result["ok"]:
         raise ValueError(f"Couldn't apply {add_name}: {result['error']}")
+    if result["pair"]:
+        # Phase 3: a take, applied as a pair (or, on a brewing deck, just
+        # this deck's half).
+        return {"message": fmt.apply_result_line(result)[2:], "undo": None,
+                "moves": result["moves"]}
     outcome = result["outcome"] or {}
     if outcome.get("created_lot"):
         lot = " (not owned — added a starter collection lot)"
@@ -777,12 +833,14 @@ def render_undo_button(conn, deck_id, key):
 
 
 def render_deck_board(cards_df, deck_meta, owned_qty, *, key, editable=False, conn=None, deck_id=None,
-                      shortlist=None):
+                      shortlist=None, leaving=None):
     """Mount the Stacks board. `key` must be unique per deck: it also keys the
     saved group-by in session_state.
 
     `shortlist` (load_board_shortlist()) feeds the Shortlist column and the
     "cut for Y" badges; None leaves both out (the read-only Decks page).
+    `leaving` (load_board_leaving(), Phase 3) feeds the rail's "Leaving"
+    group and the "→ Prosper" badges on cards other decks are taking.
 
     editable=True (needs conn + deck_id) lets the card menu send edits back;
     each one runs run_board_action() in the component callback — before the
@@ -802,11 +860,17 @@ def render_deck_board(cards_df, deck_meta, owned_qty, *, key, editable=False, co
     callbacks = {"on_group_by_change": lambda: None}
     if editable:
         callbacks["on_action_change"] = _on_action
+    leaving = leaving or []
+    leaving_by_card = {}
+    for item in leaving:
+        leaving_by_card.setdefault(item["id"], []).append(item["to_deck"])
     return _BOARD(
         key=key,
         data={
-            "cards": board_payload(cards_df, deck_meta, owned_qty, cut_for=planned_cuts(shortlist or [])),
+            "cards": board_payload(cards_df, deck_meta, owned_qty, cut_for=planned_cuts(shortlist or []),
+                                   leaving=leaving_by_card),
             "shortlist": shortlist or [],
+            "leaving": leaving,
             "group_by": group_by,
             "group_options": GROUP_BY_OPTIONS,
             "type_order": BOARD_TYPE_ORDER,

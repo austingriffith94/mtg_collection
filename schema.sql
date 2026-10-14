@@ -282,6 +282,12 @@ CREATE TABLE deck_changes (
     -- named where its copy went.
     source              TEXT,
     source_location     TEXT,
+    -- EDIT_FLOW_PLAN.md Phase 3: a card taken from another deck is a linked PAIR —
+    -- a removal on the donor deck (dest_location = the receiving deck) and an add
+    -- on the receiving deck (source = 'deck', source_location = the donor). Each
+    -- row's linked_change_id names the other. Applying either side applies both
+    -- (removal first); dropping either drops both. NULL = not part of a pair.
+    linked_change_id    INTEGER,
     -- A row must add a card, remove one, or both — never neither.
     CHECK(add_scryfall_id IS NOT NULL OR add_name IS NOT NULL
           OR remove_scryfall_id IS NOT NULL)

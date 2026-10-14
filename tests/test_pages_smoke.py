@@ -18,6 +18,7 @@ Phase 2 added a second deck plus tests that the shared current deck
 that the Deck Editor's create flow selects the new deck.
 """
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -1030,7 +1031,9 @@ def test_deck_editor_add_bar_refuses_an_empty_location_and_writes_nothing(smoke_
         _forget_deck_board()
         at.run()
         picker = at.selectbox(key="editor_3_board_add_source")
-        assert picker.options == ["Auto", "Box", "Lands Box"]
+        # Every storage Location, then (Phase 3) every other deck.
+        assert picker.options[:3] == ["Auto", "Box", "Lands Box"]
+        assert all(o.startswith("Deck: ") for o in picker.options[3:]) and picker.options[3:]
         picker.select("Lands Box")
         _forget_deck_board()
         at.button(key="editor_3_board_add_btn").click().run()
@@ -1102,6 +1105,187 @@ def test_deck_editor_shortlist_tab_shows_the_saved_choices(smoke_db_path, tmp_pa
         _forget_deck_board()
         at.run()
         assert not at.exception
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+# ------------------------------------------------------------------
+# EDIT_FLOW_PLAN.md Phase 3: taking a card from another deck, through the
+# pages. The smoke DB runs Sol Ring in Smoke Test Deck (its copy sleeved
+# there) and in Second Deck (none sleeved); deck 3 is empty.
+# ------------------------------------------------------------------
+def _take_world(smoke_db_path, tmp_path, staged=None):
+    """_signet_db() plus, optionally, a take of Sol Ring from Smoke Test Deck
+    into Empty Deck staged as `staged` ("idea" / "planned")."""
+    path = _signet_db(smoke_db_path, tmp_path)
+    if staged:
+        from dashboard_lib import queries, writes
+        conn = queries.open_connection(path)
+        writes.add_change(conn, 3, add_scryfall_id="sol-ring-cmd-1", status=staged,
+                          source="deck", source_location="Smoke Test Deck")
+        conn.close()
+    return path
+
+
+def test_deck_editor_add_bar_takes_from_another_deck_after_confirming(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = _take_world(smoke_db_path, tmp_path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "4_Deck_Editor.py"), default_timeout=15)
+        at.session_state["current_deck_id"] = 3
+        _forget_deck_board()
+        at.run()
+        at.text_input(key="editor_3_board_add_name").set_value("Sol Ring")
+        _forget_deck_board()
+        at.run()
+        picker = at.selectbox(key="editor_3_board_add_source")
+        assert "Deck: Smoke Test Deck — 1 sleeved" in picker.options
+        assert "Deck: Second Deck — on its list, not recorded as sleeved" in picker.options
+        picker.select("Deck: Smoke Test Deck — 1 sleeved")
+        _forget_deck_board()
+        at.button(key="editor_3_board_add_btn").click().run()
+        assert not at.exception
+        # Asked first; nothing written yet.
+        assert any("out of **Smoke Test Deck**'s list" in w.value for w in at.warning)
+        assert _location_of(path, "sol-ring-cmd-1") == ["Smoke Test Deck"]
+        _forget_deck_board()
+        at.button(key="editor_3_board_add_take_yes").click().run()
+        assert not at.exception
+        assert _location_of(path, "sol-ring-cmd-1") == ["Empty Deck"]
+        assert _list_of(path, 1) == [] and _list_of(path, 3) == [("sol-ring-cmd-1", 1)]
+        bodies = [t.body for t in at.toast]
+        assert "Took 1x Sol Ring from Smoke Test Deck, off Smoke Test Deck's list." in bodies
+        assert "Sol Ring: Smoke Test Deck → Empty Deck" in bodies
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_deck_editor_add_bar_take_can_be_cancelled(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = _take_world(smoke_db_path, tmp_path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "4_Deck_Editor.py"), default_timeout=15)
+        at.session_state["current_deck_id"] = 3
+        _forget_deck_board()
+        at.run()
+        at.text_input(key="editor_3_board_add_name").set_value("Sol Ring")
+        _forget_deck_board()
+        at.run()
+        at.selectbox(key="editor_3_board_add_source").select("Deck: Smoke Test Deck — 1 sleeved")
+        _forget_deck_board()
+        at.button(key="editor_3_board_add_btn").click().run()
+        _forget_deck_board()
+        at.button(key="editor_3_board_add_take_no").click().run()
+        assert not at.exception
+        assert not any("out of **Smoke Test Deck**" in w.value for w in at.warning)
+        assert _location_of(path, "sol-ring-cmd-1") == ["Smoke Test Deck"]
+        assert _list_of(path, 3) == []
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_deck_editor_shortlist_tab_shows_a_take(smoke_db_path, tmp_path, monkeypatch):
+    # The idea's "Comes from" cell holds "Deck: Smoke Test Deck" (an option
+    # the column must offer), and the donor deck's Planned table renders its
+    # half of the pair.
+    from dashboard_lib import db
+
+    path = _take_world(smoke_db_path, tmp_path, staged="idea")
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        for deck in (3, 1):
+            at = AppTest.from_file(os.path.join(PAGES_DIR, "4_Deck_Editor.py"), default_timeout=15)
+            at.session_state["current_deck_id"] = deck
+            _forget_deck_board()
+            at.run()
+            assert not at.exception
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_workbench_shows_a_take_as_one_row_and_applies_the_pair(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = _take_world(smoke_db_path, tmp_path, staged="planned")
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "8_Workbench.py"), default_timeout=15)
+        at.run()
+        assert not at.exception
+        assert "📋 Planned changes (1)" in [h.value for h in at.header]
+        # One block, under the receiving deck — not one per half. (Reconcile's
+        # per-deck expanders start with the deck name too, hence the match.)
+        planned_blocks = [e.label for e in at.expander
+                          if re.fullmatch(r"(Empty Deck|Smoke Test Deck) \(\d+\)", e.label)]
+        assert planned_blocks == ["Empty Deck (1)"]
+        at.button(key="workbench_apply_all_3_0").click().run()
+        assert not at.exception
+        assert _location_of(path, "sol-ring-cmd-1") == ["Empty Deck"]
+        assert _list_of(path, 1) == []
+        assert "Took Sol Ring from Smoke Test Deck into Empty Deck." in [t.body for t in at.toast]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_card_lookup_shows_a_pending_take(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = _take_world(smoke_db_path, tmp_path, staged="idea")
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "9_Card_Lookup.py"), default_timeout=15)
+        at.run()
+        at.text_input(key="card_lookup_search").set_value("Sol Ring").run()
+        assert not at.exception
+        captions = [c.value for c in at.caption]
+        # (st.caption values come back with the leading ideographic space stripped.)
+        assert "Smoke Test Deck → Empty Deck — still an idea there" in captions
+        assert "Empty Deck (idea, from Smoke Test Deck)" in captions
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_deck_editor_ideas_table_plans_a_take_with_nothing_cut(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = _take_world(smoke_db_path, tmp_path, staged="idea")
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "4_Deck_Editor.py"), default_timeout=15)
+        at.session_state["current_deck_id"] = 3
+        _forget_deck_board()
+        at.run()
+        at.session_state["editor_3_sl_ideas_0"] = {
+            "edited_rows": {0: {"→ Plan": True}}, "added_rows": [], "deleted_rows": []}
+        _forget_deck_board()
+        at.button(key="editor_3_sl_ideas_save_0").click().run()
+        assert not at.exception
+        statuses = sqlite3.connect(path).execute(
+            "SELECT deck_id, status FROM deck_changes ORDER BY change_id").fetchall()
+        assert statuses == [(1, "planned"), (3, "planned")]
+        assert "Saved 0 edit(s), planned 1, dropped 0." in [t.body for t in at.toast]
     finally:
         st.cache_resource.clear()
         st.cache_data.clear()

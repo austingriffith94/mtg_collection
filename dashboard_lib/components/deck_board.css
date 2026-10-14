@@ -182,6 +182,11 @@
 .board.saving { pointer-events: none; opacity: 0.7; }
 .b-cut { background: #7a3b1f; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card.is-cut .card-img { filter: saturate(0.6); }
+/* EDIT_FLOW_PLAN.md Phase 3: a card another deck is taking ("→ Prosper"). */
+.b-leave { background: #1f4f7a; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card.is-leaving .card-img { filter: saturate(0.6); }
+/* The rail's "Leaving" rows: no image, the card is on the board. */
+.sl-card.sl-leaving { border-style: dashed; }
 
 @media (max-width: 760px) {
   .shortlist { max-height: max(160px, 40vh); }   /* keep the stacks reachable */

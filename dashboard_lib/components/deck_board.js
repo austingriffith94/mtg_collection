@@ -20,6 +20,13 @@
 //                   source_location, source_options [{location, quantity}]
 //                   (storage Locations holding a free copy) and auto_label
 //                   (what Auto would do right now)
+//                 Phase 3 adds deck_options [{deck, label}] — other decks whose
+//                 list runs the card; source "deck" + source_location = that
+//                 deck is a take, shown "from Gisa"
+//   leaving       [{change_id,id,name,qty,to_deck,receiver_status}] — this
+//                   deck's cards another deck is taking (Phase 3): a "Leaving"
+//                   rail group with Drop (keep it here), and each card in it
+//                   carries leaving:[deck names] for its "→ Prosper" badge
 //   locations     storage Locations a removed copy can be put in, Box first
 //   copies_move   false while the deck is brewing/dismantled: edits are list
 //                   only, so the menu doesn't ask where copies go
@@ -34,6 +41,11 @@
 // to..." ask where the copy is put. The pick rides on the same trigger as
 // extra fields: {source, source_location} / {dest}. Python re-validates all of
 // it; nothing here names a lot.
+//
+// Taking from another deck (Phase 3): the same menu lists each other deck
+// that runs the card. Picking one edits THAT deck's list too, so the first
+// click only arms it ("Also takes it off Gisa's list — click again"); on a
+// brewing deck (copies_move false) nothing leaves Gisa yet, so one click.
 //
 // Regrouping and the hover preview are pure browser work (no rerun). Sent
 // back to Python:
@@ -167,6 +179,7 @@ export default function (component) {
   const typeOrder = data.type_order || [];
   const editable = !!data.editable;
   const shortlist = data.shortlist || [];
+  const leaving = data.leaving || [];
   const locations = data.locations || [];
   const copiesMove = data.copies_move !== false;
   const options = data.group_options || ["Type"];
@@ -214,7 +227,7 @@ export default function (component) {
   const rail = el("div", "rail");
   const preview = el("aside", "preview");
   const shortlistEl = el("aside", "shortlist");
-  if (shortlist.length) rail.append(shortlistEl);
+  if (shortlist.length || leaving.length) rail.append(shortlistEl);
   rail.append(preview);
   layout.append(stacksEl, rail);
   root.appendChild(layout);
@@ -409,6 +422,11 @@ export default function (component) {
       node.classList.add("is-cut");
       badges.appendChild(badge("b-cut", "✂ " + card.cut_for.join(", "), "Planned to be cut for " + card.cut_for.join(", ")));
     }
+    // Another deck is taking it (Phase 3): it leaves when that take applies.
+    if (card.leaving && card.leaving.length) {
+      node.classList.add("is-leaving");
+      badges.appendChild(badge("b-leave", "→ " + card.leaving.join(", "), "Leaving → " + card.leaving.join(", ")));
+    }
     if (badges.childElementCount) node.appendChild(badges);
 
     node.addEventListener("click", ev => {
@@ -471,8 +489,9 @@ export default function (component) {
     if (item.status === "planned" && item.replaces) {
       body.appendChild(el("div", "sl-replaces", "→ replaces " + item.replaces));
     }
-    // A saved choice shows where the copy will come from.
-    if (item.source === "storage" && item.source_location) {
+    // A saved choice shows where the copy will come from: a storage
+    // Location, or another deck (a take, Phase 3).
+    if ((item.source === "storage" || item.source === "deck") && item.source_location) {
       body.appendChild(el("div", "sl-route", "from " + item.source_location));
     }
     if (editable) {
@@ -491,7 +510,7 @@ export default function (component) {
   let srcMenu = null;
 
   function hasSourceChoice(item) {
-    return (item.source_options || []).length > 0;
+    return (item.source_options || []).length > 0 || (item.deck_options || []).length > 0;
   }
 
   function toggleSourceMenu(item, op) {
@@ -506,12 +525,45 @@ export default function (component) {
     const saved = item.source === "storage" ? item.source_location : null;
     list.appendChild(menuButton(item.auto_label || "Auto",
       () => commit({ op, change_id: item.change_id, source: "auto" }), saved ? "" : "menu-primary"));
-    for (const o of item.source_options) {
+    for (const o of item.source_options || []) {
       list.appendChild(menuButton(o.location + " — " + o.quantity + " free",
         () => commit({ op, change_id: item.change_id, source: "storage", source_location: o.location }),
         saved === o.location ? "menu-primary" : ""));
     }
+    // Another deck (Phase 3). Arm-then-confirm unless the deck is brewing.
+    const savedDeck = item.source === "deck" ? item.source_location : null;
+    for (const o of item.deck_options || []) {
+      const b = menuButton(o.label, () => {
+        if (copiesMove && !b.dataset.armed) {
+          b.dataset.armed = "1";
+          b.textContent = "Also takes it off " + o.deck + "'s list — click again";
+          b.classList.add("menu-danger");
+          return;
+        }
+        commit({ op, change_id: item.change_id, source: "deck", source_location: o.deck });
+      }, savedDeck === o.deck ? "menu-primary" : "");
+      list.appendChild(b);
+    }
     return list;
+  }
+
+  // The "Leaving" rail group: this deck's cards another deck is taking. Drop
+  // cancels the take (both halves) and keeps the card here.
+  function leavingCard(item) {
+    const box = el("div", "sl-card sl-leaving");
+    const body = el("div", "sl-body");
+    body.appendChild(el("div", "sl-name", item.qty > 1 ? item.name + " ×" + item.qty : item.name));
+    const when = item.receiver_status === "applied" ? " (on its list)"
+      : item.receiver_status === "idea" ? " (an idea there)" : "";
+    body.appendChild(el("div", "sl-route", "→ " + item.to_deck + when));
+    if (editable) {
+      const row = el("div", "sl-actions");
+      row.appendChild(menuButton("Keep here", () => commit({ op: "drop", change_id: item.change_id }), "menu-danger"));
+      body.appendChild(row);
+    }
+    box.appendChild(body);
+    box.title = item.to_deck + " is taking this card";
+    return box;
   }
 
   function shortlistActions(item) {
@@ -564,6 +616,12 @@ export default function (component) {
       head.append(el("span", "stack-title", label), el("span", "stack-count", String(items.length)));
       shortlistEl.appendChild(head);
       for (const item of items) shortlistEl.appendChild(shortlistCard(item));
+    }
+    if (leaving.length) {
+      const head = el("header", "stack-head");
+      head.append(el("span", "stack-title", "Leaving"), el("span", "stack-count", String(leaving.length)));
+      shortlistEl.appendChild(head);
+      for (const item of leaving) shortlistEl.appendChild(leavingCard(item));
     }
   }
 

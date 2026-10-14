@@ -14,6 +14,10 @@ one card (or a card referenced by either face of an MDFC) answer as one.
 EDIT_FLOW_PLAN.md Phase 6: the History section sets the card's deck-list
 changes beside its move log — where each copy went, when and why — so
 "where did my Blood Crypt go?" has one answer.
+
+EDIT_FLOW_PLAN.md Phase 3: "Pending moves" lists copies one deck has
+promised another (a take not applied yet), and a shortlist entry taking
+the card from another deck says "from Gisa".
 """
 import sys
 import os
@@ -94,9 +98,19 @@ with info_col:
     st.markdown("**Shortlisted in**")
     if result["shortlisted_in"]:
         for row in result["shortlisted_in"]:
-            st.caption(f"　{row['deck_name']} ({row['status']})")
+            route = fmt.format_change_route(row.get("source"), row.get("source_location"))
+            st.caption(f"　{row['deck_name']} ({row['status']}{', ' + route if route else ''})")
     else:
         st.caption("　Not on any open shortlist.")
+
+    # EDIT_FLOW_PLAN.md Phase 3: copies promised from one deck to another.
+    if result.get("pending_takes"):
+        st.markdown("**Pending moves**")
+        for take in result["pending_takes"]:
+            qty = f" ×{take['quantity']}" if (take["quantity"] or 1) > 1 else ""
+            waits = {"idea": " — still an idea there", "applied": " — on its list, copy not moved yet"}.get(
+                take["receiver_status"], "")
+            st.caption(f"　{take['from_deck']} → {take['to_deck']}{qty}{waits}")
 
     if result["shortfall"] > 0:
         st.warning(

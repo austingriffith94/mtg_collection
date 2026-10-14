@@ -534,7 +534,7 @@ def main():
           len(q.deck_combos(conn, 1, "included")) == 2
           and conn.execute("SELECT COUNT(*) FROM deck_swap_queue WHERE deck_id=1").fetchone()[0] == 1
           and len(w.list_changes(conn, 1)) == 1)
-    deleted_name, delete_error, _redirected = w.delete_deck(conn, 1)
+    deleted_name, delete_error, _redirected, _dropped = w.delete_deck(conn, 1)
     check("delete_deck() succeeds with combo rows and a queued swap present",
           delete_error is None and deleted_name == "Deck One")
     check("delete_deck() leaves no orphaned deck_combos rows",

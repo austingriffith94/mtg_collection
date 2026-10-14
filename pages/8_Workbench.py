@@ -35,6 +35,13 @@ EDIT_FLOW_PLAN.md Phase 6: assigning unlocated lots to a Location can put
 copies into a deck's sleeves, so those saves ask whether the deck's list
 should follow (card_view.show_deck_sync). Reconcile's own moves are logged
 as "reconcile" in the move log.
+
+EDIT_FLOW_PLAN.md Phase 3: a card taken from another deck is a linked pair
+(a removal on the donor, an add on the receiver). Planned changes shows it
+as ONE row — "Sol Ring: Gisa → Prosper", under the receiving deck — counted
+once in the header, applied or dropped together
+(queries.collapse_linked_pairs). A Conflicts group counts a take's promised
+copy as supply.
 """
 import sys
 import os
@@ -44,7 +51,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pandas as pd
 import streamlit as st
 
-from dashboard_lib import db, loaders, writes, card_resolver, queries as q
+from dashboard_lib import db, loaders, writes, card_resolver, formatting as fmt, queries as q
 from dashboard_lib import card_view as cv, nav
 from dashboard_lib import moxfield_export as mox
 
@@ -84,20 +91,7 @@ def _apply(change_ids, label="Applied"):
         conn, change_ids,
         resolve_add=lambda name: card_resolver.resolve_or_fetch_card(conn, name=name),
     )
-    lines = []
-    for r in results:
-        if r["ok"]:
-            outcome = r["outcome"] or {}
-            fetch = " (fetched fresh from Scryfall)" if r["was_new"] else ""
-            if outcome.get("created_lot"):
-                lot = " — created a new starter collection lot"
-            elif outcome.get("assigned_lot_id"):
-                lot = " — reassigned an existing owned copy"
-            else:
-                lot = ""
-            lines.append(f"✅ {label} {r['add_name']}{fetch}, replaced {r['remove_name']}{lot}.")
-        else:
-            lines.append(f"❌ {r['add_name']}: {r['error']}")
+    lines = [fmt.apply_result_line(r, label) for r in results]
     _refresh(lines, moves=[m for r in results for m in r["moves"]])
 
 
@@ -114,6 +108,9 @@ ideas_df = open_df[open_df["status"] == "idea"] if not open_df.empty else open_d
 
 availability = q.plan_availability(conn, open_df)
 conflicts = q.plan_conflicts(conn, open_df, availability)
+# One entry per planned change, a take from another deck (a linked pair of
+# rows) counting once — see queries.collapse_linked_pairs().
+planned_entries = q.collapse_linked_pairs(planned_df) if not planned_df.empty else []
 unlocated = loaders.load_unlocated_lot_summary(conn)
 # Not cached, like plan_availability above: contention counts mainboard
 # usage too, so an apply or a hand edit made earlier in this same page run
@@ -121,9 +118,9 @@ unlocated = loaders.load_unlocated_lot_summary(conn)
 contention = q.contention_table(conn)
 buy = q.buy_list(conn, contention=contention)
 
-deck_count = int(planned_df["deck_id"].nunique()) if not planned_df.empty else 0
+deck_count = len({e["group_deck_id"] for e in planned_entries})
 st.caption(
-    f"**{len(planned_df)}** planned change(s) across **{deck_count}** deck(s) · "
+    f"**{len(planned_entries)}** planned change(s) across **{deck_count}** deck(s) · "
     f"**{len(conflicts)}** conflict(s) · "
     f"**{len(contention)}** card(s) in contention · "
     f"**{unlocated['lots']}** lot(s) with no location (${unlocated['value']:,.0f})"
@@ -174,8 +171,10 @@ else:
     for group in conflicts:
         free = group["available_qty"] or 0
         with st.container(border=True):
+            promised = (f", {group['promised_qty']} promised from another deck"
+                        if group.get("promised_qty") else "")
             st.markdown(
-                f"**{group['card']}** — {group['owned_qty']} owned, {free} free in storage, "
+                f"**{group['card']}** — {group['owned_qty']} owned, {free} free in storage{promised}, "
                 f"{group['wanted_qty']} wanted (short {group['shortfall']})"
             )
             rows = [{
@@ -229,26 +228,52 @@ else:
                                         f"row(s) for {group['card']}.")
                         _refresh(lines)
 
+def _entry_cells(entry):
+    """(Add, Availability, Replaces) for one planned_entries item. A take
+    from another deck reads "Sol Ring: Gisa → Prosper", with the receiving
+    row's verdict — or, when that row isn't planned, why Apply waits or
+    what it will do."""
+    r, pair = entry["row"], entry["pair"]
+    replaces = r["remove_card"] if isinstance(r.get("remove_card"), str) and not pair else ""
+    if not pair:
+        return (r["add_card"] if isinstance(r.get("add_card"), str) else "",
+                _verdict_cell(entry["change_id"]), replaces)
+    label = f"{pair['card']}: {pair['from_deck']} → {pair['to_deck']}"
+    if q.is_donor_row(r):
+        if pair["receiver_status"] == "idea":
+            return label, f"💡 Still an idea on {pair['to_deck']} — plan it there to apply", ""
+        return label, (f"📦 On {pair['to_deck']}'s list already — applying moves {pair['from_deck']}'s "
+                       "copy over"), ""
+    cut = r["remove_card"] if isinstance(r.get("remove_card"), str) else ""
+    return label, _verdict_cell(entry["change_id"]), cut
+
+
 @st.fragment
-def _planned_block(deck_id, deck_rows):
+def _planned_block(deck_id, deck_name, entries):
     """One deck's planned changes: editor + Apply / ← Idea / Drop buttons.
     A fragment (UI plan Phase 4), so ticking checkboxes reruns only this
     block instead of the whole page (which recomputes the allocator,
     contention and the buy list). Every write ends in _refresh(), a
     full-app rerun, since it changes the conflicts, counts and other
-    decks' verdicts outside this block."""
-    deck_name = deck_rows["deck_name"].iloc[0]
-    with st.expander(f"{deck_name} ({len(deck_rows)})"):
-        table = [{
-            "change_id": int(r["change_id"]),
-            "Add": r["add_card"] if isinstance(r["add_card"], str) else "",
-            "Availability": _verdict_cell(int(r["change_id"])),
-            "Replaces": r["remove_card"] if isinstance(r["remove_card"], str) else "",
-            "Qty": int(r["quantity"]),
-            "Apply": False,
-            "← Idea": False,
-            "Drop": False,
-        } for _, r in deck_rows.iterrows()]
+    decks' verdicts outside this block.
+
+    `entries` are queries.collapse_linked_pairs() items grouped under this
+    deck: a take from another deck is one row whose actions name either
+    half, and writes applies / drops the pair (EDIT_FLOW_PLAN.md Phase 3)."""
+    with st.expander(f"{deck_name} ({len(entries)})"):
+        table = []
+        for e in entries:
+            add, availability_text, replaces = _entry_cells(e)
+            table.append({
+                "change_id": e["change_id"],
+                "Add": add,
+                "Availability": availability_text,
+                "Replaces": replaces,
+                "Qty": int(e["row"]["quantity"]),
+                "Apply": False,
+                "← Idea": False,
+                "Drop": False,
+            })
         edited = st.data_editor(
             pd.DataFrame(table),
             column_config={
@@ -259,7 +284,8 @@ def _planned_block(deck_id, deck_rows):
                 "Apply": st.column_config.CheckboxColumn("Apply", width="small"),
                 "← Idea": st.column_config.CheckboxColumn(
                     "← Idea", width="small", help="Un-stage it, keeping what it replaces."),
-                "Drop": st.column_config.CheckboxColumn("Drop", width="small"),
+                "Drop": st.column_config.CheckboxColumn(
+                    "Drop", width="small", help="A take from another deck drops both sides."),
             },
             column_order=["Add", "Availability", "Replaces", "Qty", "Apply", "← Idea", "Drop"],
             hide_index=True, width="stretch",
@@ -283,7 +309,7 @@ def _planned_block(deck_id, deck_rows):
                 cid = int(r["change_id"])
                 try:
                     if r["Drop"]:
-                        writes.drop_change(conn, cid)
+                        lines += [f"✅ {line}" for line in writes.drop_change(conn, cid)]
                         dropped += 1
                     elif r["← Idea"]:
                         writes.demote_change(conn, cid)
@@ -296,18 +322,19 @@ def _planned_block(deck_id, deck_rows):
 
 # ------------------------------------------------------------------
 # Planned changes, by deck — the same table the Shortlist tab shows,
-# with the queue-aware verdict instead of the per-row one.
+# with the queue-aware verdict instead of the per-row one. A take from
+# another deck is one row, under the deck receiving the card.
 # ------------------------------------------------------------------
-st.header(f"📋 Planned changes ({len(planned_df)})")
-if planned_df.empty:
+st.header(f"📋 Planned changes ({len(planned_entries)})")
+if not planned_entries:
     nav.render_empty_state(
         "Nothing staged yet. Promote an idea on a deck's **Shortlist** tab to stage it.",
         "Deck_Editor", "✏️ Open the Deck Editor",
     )
 else:
     blocked = sum(
-        1 for cid in planned_df["change_id"]
-        if availability.get(int(cid), {}).get("verdict") in (
+        1 for e in planned_entries
+        if availability.get(e["change_id"], {}).get("verdict") in (
             "claimed_by", "not_owned", "in_other_deck", "wrong_location")
     )
     if blocked:
@@ -315,8 +342,11 @@ else:
             f"{blocked} of these can't be sourced from storage right now — they'll buy a copy "
             "(creating a starter collection lot) or need a card unsleeved first."
         )
-    for deck_id, deck_rows in planned_df.groupby("deck_id", sort=False):
-        _planned_block(deck_id, deck_rows)
+    by_deck = {}
+    for e in planned_entries:
+        by_deck.setdefault((e["group_deck_id"], e["group_deck_name"]), []).append(e)
+    for (group_id, group_name), entries in by_deck.items():
+        _planned_block(group_id, group_name, entries)
 
 # ------------------------------------------------------------------
 # Ideas flagged for review — the ones you marked "decide on this",

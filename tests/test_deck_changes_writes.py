@@ -532,7 +532,7 @@ def test_deleting_a_deck_removes_its_changes_and_the_frozen_legacy_rows(conn, de
     )
     conn.commit()
 
-    name, err, redirected = writes.delete_deck(conn, deck)
+    name, err, redirected, _dropped = writes.delete_deck(conn, deck)
 
     assert err is None and name == "Gisa" and redirected == 0
     assert conn.execute("SELECT COUNT(*) FROM deck_changes").fetchone()[0] == 0
@@ -605,7 +605,7 @@ def test_delete_redirects_other_decks_open_dest_location_rows_to_box(conn, deck,
     conn.execute("UPDATE deck_changes SET dest_location='Gisa' WHERE change_id=?", (open_row,))
     conn.commit()
 
-    name, err, redirected = writes.delete_deck(conn, deck)
+    name, err, redirected, _dropped = writes.delete_deck(conn, deck)
 
     assert err is None and name == "Gisa" and redirected == 1
     assert writes.get_change(conn, open_row)["dest_location"] == writes.DEFAULT_LOCATION

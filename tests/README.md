@@ -58,6 +58,16 @@ plus pytest (`pip install -r requirements-dev.txt`):
   under-sleeved deck, printing swaps, bulk basics, Undo putting each copy back (and deleting a starter
   lot), brewing / dismantled decks, and lot-only `move_copies()`. The page side (add bar toast, Mainboard
   save dialog, "Mark deck as built" count, Reconcile "Sleeved here", Board Undo) is in `test_pages_smoke.py`.
+- `test_edit_sources.py` — EDIT_FLOW_PLAN.md Phase 2: picking the storage Location an add comes from
+  and where a removal goes — the reads, refusal before writing, history rows, staged rows, the
+  allocator's pinned rows and brewing claims, and the Board's source / dest actions.
+- `test_edit_takes.py` — EDIT_FLOW_PLAN.md Phase 3: taking a card from another deck. A direct take
+  (both lists, the lot moving deck to deck, linked history rows, every refusal writing nothing), a
+  brewing receiver's lopsided pair, staged takes (the pair, guards, apply / drop / demote / re-point /
+  reopen from either side), dismantle pairs, the allocator and conflicts, delete / rename of a deck in a
+  pair, the Workbench's one-row-per-pair view, the Board payload and actions, Card Lookup. The page
+  side (add bar confirm and cancel, a Shortlist tab holding a take and planning one with nothing cut, the
+  Workbench applying a pair, Card Lookup's Pending moves) is in `test_pages_smoke.py`; the Board's menus were clicked in headless Edge.
 - `test_collection_moves.py` — EDIT_FLOW_PLAN.md Phase 6: each lot writer logs exactly the moves it made
   (new copy record, move, split, quantity up/down, delete, bulk, prune, a deck's deletion), a rename logs
   none, Phase 1's deck edits log with their `change_id`, and `queries.deck_sync_offers()` /

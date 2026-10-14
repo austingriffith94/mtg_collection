@@ -599,30 +599,85 @@ def auto_source_label(sources):
     return "Auto"
 
 
-def source_choices(sources, locations):
+# A deck as a source (EDIT_FLOW_PLAN.md Phase 3) is shown with this prefix
+# wherever sources share one list of plain strings (a data_editor column), so
+# "Deck: Gisa" can't be mistaken for a storage box called Gisa.
+DECK_SOURCE_PREFIX = "Deck: "
+
+
+def deck_source_label(deck_name):
+    return f"{DECK_SOURCE_PREFIX}{deck_name}"
+
+
+def deck_choice_label(opt):
+    """A deck in the source picker, from queries.card_sources()["decks"]:
+    "Deck: Gisa — 1 sleeved", or why it can't give a copy right now (the
+    write explains in full if it's picked anyway)."""
+    if opt.get("quantity", 0) >= opt.get("listed", 0) > 0:
+        return f"{deck_source_label(opt['deck'])} — {opt['quantity']} sleeved"
+    return f"{deck_source_label(opt['deck'])} — on its list, not recorded as sleeved"
+
+
+def source_choices(sources, locations, decks=()):
     """[(label, source, source_location), ...] for the source picker, Auto
     first. With a known card (`sources` = queries.card_sources()) only the
-    storage Locations that hold a free copy are offered, with counts; with
-    no card yet (the add bar before a name is typed) every storage Location
-    in `locations` is, and the write itself says if one is empty."""
+    storage Locations that hold a free copy are offered, with counts, then
+    (Phase 3) each other deck whose list runs it; with no card yet (the add
+    bar before a name is typed, the Shortlist form) every storage Location
+    in `locations` and every deck name in `decks` is, and the write itself
+    says if one can't supply it."""
     choices = [(auto_source_label(sources), None, None)]
     if sources is None:
         choices += [(loc, "storage", loc) for loc in locations]
+        choices += [(deck_source_label(d), "deck", d) for d in decks]
     else:
         choices += [(f"{opt['location']} — {opt['quantity']} free", "storage", opt["location"])
                     for opt in sources.get("storage") or []]
+        choices += [(deck_choice_label(opt), "deck", opt["deck"])
+                    for opt in sources.get("decks") or [] if opt.get("listed")]
     return choices
+
+
+def apply_result_line(result, verb="Applied"):
+    """One writes.apply_changes() result as a "✅ ..." / "❌ ..." line, for
+    the Shortlist tab and the Workbench. Reads every shape a planned row can
+    have: a swap, a pure add or cut (a dismantle's halves), and (Phase 3) a
+    take from another deck, applied as one pair."""
+    name = result.get("add_name") or result.get("remove_name") or "That change"
+    if not result.get("ok"):
+        return f"❌ {name}: {result.get('error')}"
+    pair = result.get("pair")
+    if pair:
+        if pair.get("held"):
+            return (f"✅ {pair['card']} joins {pair['to_deck']}'s list; {pair['from_deck']} keeps "
+                    f"its copy until {pair['to_deck']} is built.")
+        return f"✅ Took {pair['card']} from {pair['from_deck']} into {pair['to_deck']}."
+    outcome = result.get("outcome") or {}
+    fetch = " (fetched fresh from Scryfall)" if result.get("was_new") else ""
+    if outcome.get("created_lot"):
+        lot = " — created a new starter collection lot"
+    elif outcome.get("assigned_lot_id"):
+        lot = " — reassigned an existing owned copy"
+    else:
+        lot = ""
+    add, cut = result.get("add_name"), result.get("remove_name")
+    if add and cut:
+        return f"✅ {verb} {add}{fetch}, replaced {cut}{lot}."
+    if add:
+        return f"✅ {verb} {add}{fetch}, nothing cut{lot}."
+    return f"✅ Removed {cut}."
 
 
 def format_change_route(source=None, source_location=None, dest_location=None):
     """A change row's recorded choices as a phrase for History: "from Lands
-    Box", "to Lands Box", both, or "" for a row left on Auto / Box."""
+    Box", "to Lands Box", both, or "" for a row left on Auto / Box. A deck
+    reads the same way (Phase 3): "from Gisa", "to Prosper"."""
     # A pandas NULL text column comes back as NaN, which isn't a string.
     def text(value):
         return value.strip() if isinstance(value, str) else ""
 
     parts = []
-    if source == "storage" and text(source_location):
+    if source in ("storage", "deck") and text(source_location):
         parts.append(f"from {text(source_location)}")
     if text(dest_location):
         parts.append(f"to {text(dest_location)}")

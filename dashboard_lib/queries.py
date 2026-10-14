@@ -64,6 +64,11 @@ _SCHEMA_UPGRADES = [
     # history row a direct edit writes both carry the choice.
     ("deck_changes", "source", "ALTER TABLE deck_changes ADD COLUMN source TEXT"),
     ("deck_changes", "source_location", "ALTER TABLE deck_changes ADD COLUMN source_location TEXT"),
+    # EDIT_FLOW_PLAN.md Phase 3: ties a donor deck's removal to the receiving
+    # deck's add when a card is taken from another deck (set on BOTH rows,
+    # each naming the other). NULL = not part of a pair, which is every row
+    # written before this phase (old dismantle pairs aren't backfilled).
+    ("deck_changes", "linked_change_id", "ALTER TABLE deck_changes ADD COLUMN linked_change_id INTEGER"),
 ]
 
 # The values decks.build_state may hold. NULL (absent from this tuple) is
@@ -239,6 +244,7 @@ _SCHEMA_TABLE_UPGRADES = [
                dest_location       TEXT,
                source              TEXT,
                source_location     TEXT,
+               linked_change_id    INTEGER,
                CHECK(add_scryfall_id IS NOT NULL OR add_name IS NOT NULL
                      OR remove_scryfall_id IS NOT NULL)
            )""",
@@ -887,6 +893,7 @@ def deck_changes_dataframe(conn, deck_id, statuses=("idea", "planned")):
         f"""SELECT dc.change_id, dc.deck_id, dc.status, dc.quantity, dc.review_flag, dc.notes,
                    dc.created_at, dc.planned_at, dc.resolved_at,
                    dc.source, dc.source_location, dc.dest_location,
+                   dc.linked_change_id, lk.status AS linked_status, ld.name AS linked_deck_name,
                    dc.add_scryfall_id,    COALESCE(ac.name, dc.add_name)    AS add_card,
                    dc.remove_scryfall_id, COALESCE(rc.name, dc.remove_name) AS remove_card,
                    COALESCE(ac.current_price_usd,
@@ -895,6 +902,8 @@ def deck_changes_dataframe(conn, deck_id, statuses=("idea", "planned")):
             FROM deck_changes dc
             LEFT JOIN cards ac ON ac.scryfall_id = dc.add_scryfall_id
             LEFT JOIN cards rc ON rc.scryfall_id = dc.remove_scryfall_id
+            LEFT JOIN deck_changes lk ON lk.change_id = dc.linked_change_id
+            LEFT JOIN decks ld ON ld.deck_id = lk.deck_id
             WHERE dc.deck_id = ? AND dc.status IN ({placeholders})
             ORDER BY COALESCE(ac.name, dc.add_name, dc.remove_name) COLLATE NOCASE, dc.change_id""",
         conn,
@@ -931,6 +940,8 @@ def open_changes_dataframe(conn, statuses=("planned",), deck_id=None):
                    dc.quantity, dc.review_flag, dc.notes,
                    dc.created_at, dc.planned_at, dc.resolved_at,
                    dc.source, dc.source_location, dc.dest_location,
+                   dc.linked_change_id, lk.status AS linked_status,
+                   lk.deck_id AS linked_deck_id, ld.name AS linked_deck_name,
                    dc.add_scryfall_id,    COALESCE(ac.name, dc.add_name)    AS add_card,
                    dc.remove_scryfall_id, COALESCE(rc.name, dc.remove_name) AS remove_card,
                    ac.oracle_id,
@@ -941,6 +952,8 @@ def open_changes_dataframe(conn, statuses=("planned",), deck_id=None):
             JOIN decks d ON d.deck_id = dc.deck_id
             LEFT JOIN cards ac ON ac.scryfall_id = dc.add_scryfall_id
             LEFT JOIN cards rc ON rc.scryfall_id = dc.remove_scryfall_id
+            LEFT JOIN deck_changes lk ON lk.change_id = dc.linked_change_id
+            LEFT JOIN decks ld ON ld.deck_id = lk.deck_id
             WHERE dc.status IN ({placeholders}) {deck_filter}
             ORDER BY COALESCE(dc.planned_at, dc.created_at), dc.change_id""",
         conn,
@@ -1265,7 +1278,16 @@ def plan_availability(conn, changes):
     `source_location` (a row without the columns, or with source NULL, is
     Auto, as before). A brewing deck's saved storage choices that it hasn't
     pulled yet (brewing_claims()) are claimed before any row is walked: the
-    list has already decided them, whereas a shortlist row is only a plan."""
+    list has already decided them, whereas a shortlist row is only a plan.
+
+    Phase 3: every open take from another deck (open_takes() — read from the
+    database, so a per-deck call sees other decks' takes too) claims that
+    deck's sleeved copy before any row is walked, as the brewing claims do.
+    The receiving row (source='deck') reads its verdict off that claim:
+    `available` ("From Gisa"), `claimed_by` when an earlier take got the
+    copy, or why the donor can't give it. An Auto row short of storage whose
+    only other copies are all promised this way is `claimed_by` the takers
+    rather than `in_other_deck` — unsleeving one would break the promise."""
     rows = sorted(_rows_of(changes), key=_change_sort_key)
     deck_names = deck_name_set(conn)
     key_cache = {}
@@ -1293,7 +1315,10 @@ def plan_availability(conn, changes):
         # Biggest lot first, matching execute_swap()'s own preference for
         # reassigning an existing lot over creating a redundant one.
         lots.sort(key=lambda lot: (-lot["remaining"], lot["collection_id"]))
-        pools[key] = {"lots": lots, "deck_holdings": deck_holdings, "owned": owned, "claims": []}
+        # deck_remaining: each deck's sleeved copies not yet promised to a
+        # take; deck_claims: who has been promised one (Phase 3).
+        pools[key] = {"lots": lots, "deck_holdings": deck_holdings, "owned": owned, "claims": [],
+                      "deck_remaining": dict(deck_holdings), "deck_claims": []}
         return pools[key]
 
     # A brewing deck's pinned-but-unpulled cards take their copy first.
@@ -1313,6 +1338,24 @@ def plan_availability(conn, changes):
                                     for c in pool["claims"]):
                 pool["claims"].append({"change_id": None, "deck_id": claim["deck_id"],
                                        "deck_name": claim["deck_name"], "status": "brewing"})
+
+    # Takes from another deck claim the donor's copy, oldest first. Keyed by
+    # the RECEIVING row, whose verdict this decides.
+    takes = {}
+    for take in open_takes(conn):
+        stub = {"add_scryfall_id": take["receiver_scryfall_id"] or take["scryfall_id"], "add_card": take["card"]}
+        pool = pool_for(_card_key(conn, stub, key_cache), stub)
+        donor = take["donor_deck_name"]
+        earlier = [c for c in pool["deck_claims"] if c["from"] == donor]
+        got = min(pool["deck_remaining"].get(donor, 0), max(1, int(take["quantity"] or 1)))
+        pool["deck_remaining"][donor] = pool["deck_remaining"].get(donor, 0) - got
+        claimant = {"change_id": take["receiver_change_id"], "deck_id": take["receiver_deck_id"],
+                    "deck_name": take["receiver_deck_name"], "status": take["receiver_status"],
+                    "from": donor}
+        if got:
+            pool["deck_claims"].append(claimant)
+        takes[take["receiver_change_id"]] = {"claimed": got, "earlier": earlier, "donor": donor,
+                                             "held": pool["deck_holdings"].get(donor, 0)}
 
     out = {}
     for row in rows:
@@ -1352,6 +1395,38 @@ def plan_availability(conn, changes):
             verdict["bulk"] = True
             verdict["claimed"] = wanted
             verdict["text"] = "Bulk basic land — untracked quantity"
+            out[change_id] = verdict
+            continue
+
+        if row.get("source") == "deck":
+            # A take from another deck (Phase 3): settled by the claim made
+            # above, never from storage.
+            donor = (row.get("source_location") or "").strip()
+            take = takes.get(change_id) or {"claimed": 0, "earlier": [], "donor": donor,
+                                            "held": pool["deck_holdings"].get(donor, 0)}
+            verdict["claimed"] = min(wanted, take["claimed"])
+            got = f" (got {verdict['claimed']} of {wanted})" if verdict["claimed"] else ""
+            if verdict["claimed"] >= wanted:
+                verdict["verdict"] = "available"
+                verdict["locations"] = [donor]
+                verdict["text"] = f"From {donor} (your pick)"
+            elif take["earlier"]:
+                verdict["verdict"] = "claimed_by"
+                verdict["claimed_by"] = [{k: c[k] for k in ("change_id", "deck_id", "deck_name", "status")}
+                                         for c in take["earlier"]]
+                who = ", ".join(f"{c['deck_name']} (#{c['change_id']})" for c in take["earlier"])
+                verdict["text"] = f"{donor}'s copy is promised to {who} first{got}"
+            elif any(lot["remaining"] > 0 for lot in pool["lots"]):
+                verdict["verdict"] = "wrong_location"
+                free_at = sorted({(lot["location"] or "").strip() or "location unknown"
+                                  for lot in pool["lots"] if lot["remaining"] > 0})
+                verdict["text"] = f"None sleeved in {donor}{got} — free in {', '.join(free_at)}"
+            elif verdict["in_other_decks"]:
+                verdict["verdict"] = "in_other_deck"
+                verdict["text"] = f"None sleeved in {donor}{got}"
+            else:
+                verdict["verdict"] = "not_owned"
+                verdict["text"] = f"None sleeved in {donor}, none owned elsewhere — buy{got}"
             out[change_id] = verdict
             continue
 
@@ -1398,6 +1473,16 @@ def plan_availability(conn, changes):
                                     for lot in pool["lots"] if lot["remaining"] > 0})
                 verdict["verdict"] = "wrong_location"
                 verdict["text"] = f"None free in {pinned}{got} — free in {', '.join(elsewhere)}"
+            elif verdict["in_other_decks"] and not any(
+                    pool["deck_remaining"].get(d, 0) > 0 for d in verdict["in_other_decks"]) \
+                    and pool["deck_claims"]:
+                # Every copy in another deck is already promised to a take.
+                takers = [{k: c[k] for k in ("change_id", "deck_id", "deck_name", "status")}
+                          for c in pool["deck_claims"] if c["deck_name"] != deck_name]
+                verdict["verdict"] = "claimed_by"
+                verdict["claimed_by"] = takers
+                who = ", ".join(f"{c['deck_name']} (from {c['from']})" for c in pool["deck_claims"])
+                verdict["text"] = f"Only in other decks, promised to {who}{got}"
             elif verdict["in_other_decks"]:
                 verdict["verdict"] = "in_other_deck"
                 who = ", ".join(f"{d} (x{n})" for d, n in verdict["in_other_decks"].items())
@@ -1422,12 +1507,15 @@ def plan_conflicts(conn, changes, availability=None):
     `availability` reuses an existing plan_availability() result instead of
     re-allocating. Returns a list of dicts, biggest shortfall first:
 
-      {card, owned_qty, available_qty, wanted_qty, shortfall,
+      {card, owned_qty, available_qty, promised_qty, wanted_qty, shortfall,
        wanters: [{change_id, deck_id, deck_name, status, quantity,
                   verdict}, ...]}
 
     `available_qty` is copies in storage (sleeved nowhere), which is what
-    the competing rows are actually competing over."""
+    the competing rows are actually competing over. `promised_qty` (Phase
+    3) is the other-deck copies the group's takes were promised: supply
+    too, so a take plus a row served from storage isn't a conflict, but a
+    take of a deck's only copy plus a row with nowhere else to look is."""
     rows = sorted(_rows_of(changes), key=_change_sort_key)
     if availability is None:
         availability = plan_availability(conn, rows)
@@ -1448,10 +1536,15 @@ def plan_conflicts(conn, changes, availability=None):
             "card": row.get("add_card") or row.get("add_name") or "(unnamed)",
             "owned_qty": verdict.get("owned_qty", 0),
             "available_qty": None,
+            "promised_qty": 0,
             "wanted_qty": 0,
             "wanters": [],
         })
         group["wanted_qty"] += quantity
+        if row.get("source") == "deck":
+            # A take (Phase 3) is supplied by the donor deck's copy it was
+            # promised, not by storage — count that copy as supply too.
+            group["promised_qty"] += verdict.get("claimed", 0)
         group["wanters"].append({
             "change_id": change_id, "deck_id": row.get("deck_id"),
             "deck_name": row.get("deck_name"), "status": row.get("status"),
@@ -1468,9 +1561,9 @@ def plan_conflicts(conn, changes, availability=None):
             group["available_qty"] = free
 
     conflicts = [
-        dict(g, shortfall=g["wanted_qty"] - (g["available_qty"] or 0))
+        dict(g, shortfall=g["wanted_qty"] - (g["available_qty"] or 0) - g["promised_qty"])
         for g in groups.values()
-        if len(g["wanters"]) > 1 and g["wanted_qty"] > (g["available_qty"] or 0)
+        if len(g["wanters"]) > 1 and g["wanted_qty"] > (g["available_qty"] or 0) + g["promised_qty"]
     ]
     conflicts.sort(key=lambda g: (-g["shortfall"], g["card"].casefold()))
     return conflicts
@@ -2246,10 +2339,11 @@ def deck_list_quantity(conn, deck_id, scryfall_id):
 # DEFAULT_LOCATION is the same value (writes can't be imported from here).
 DEFAULT_STORAGE = "Box"
 
-# The `deck_changes.source` values a caller may set (NULL is Auto). 'deck'
-# (Phase 3) and 'buy' (Phase 4) are added here when they exist, so a write
-# that names one now is refused instead of saved and ignored.
-SOURCES = ("storage",)
+# The `deck_changes.source` values a caller may set (NULL is Auto): a storage
+# Location (Phase 2) or another deck (Phase 3, source_location = its name).
+# 'buy' (Phase 4) is added here when it exists, so a write that names it now
+# is refused instead of saved and ignored.
+SOURCES = ("storage", "deck")
 
 
 def same_location(a, b):
@@ -2296,8 +2390,13 @@ def card_sources(conn, scryfall_id, deck_id):
                 name. Unlocated lots are left out: there's no place to name
                 (they're counted in `unlocated` and Auto still uses them)
       unlocated free copies with no Location recorded
-      decks     [{"deck", "quantity"}, ...] copies sleeved in other decks —
-                shown now, a choosable source from Phase 3
+      decks     [{"deck", "quantity", "listed"}, ...] every other deck that
+                holds a sleeved copy (`quantity`) or runs the card on its list
+                (`listed`, across printings). Phase 3: a deck with `listed`
+                is a choosable source — taking it changes that deck's list
+                too — and it can give copies only once it's fully sleeved
+                (quantity >= listed), since the move helpers take only what
+                a list no longer needs
       price     the printing's current USD price, or None (Phase 4's Buy)
       bulk      True for an untracked basic land: nothing is ever moved
       auto      what Auto would do right now: {"kind": "here" | "storage" |
@@ -2331,12 +2430,28 @@ def card_sources(conn, scryfall_id, deck_id):
     price_row = conn.execute(
         "SELECT current_price_usd FROM cards WHERE scryfall_id=?", (scryfall_id,)
     ).fetchone()
+    # What every other deck's list runs, across printings — deck_list_quantity()'s
+    # match, in one grouped query rather than one per deck.
+    oracle_ids = oracle_ids_for_card(conn, scryfall_id=scryfall_id)
+    if oracle_ids:
+        where, params = f"c.oracle_id IN ({','.join('?' for _ in oracle_ids)})", tuple(oracle_ids)
+    else:
+        where, params = "c.name = (SELECT name FROM cards WHERE scryfall_id = ?) COLLATE NOCASE", (scryfall_id,)
+    listed = {name: int(n) for name, n in conn.execute(
+        f"""SELECT d.name, SUM(COALESCE(dc.quantity, 1))
+            FROM deck_cards dc JOIN cards c ON c.scryfall_id = dc.scryfall_id
+            JOIN decks d ON d.deck_id = dc.deck_id
+            WHERE dc.deck_id IS NOT ? AND {where}
+            GROUP BY d.deck_id""",
+        (deck_id, *params),
+    ).fetchall() if n}
     return {
         "here": here,
         "storage": [{"location": loc, "quantity": n}
                     for loc, n in sorted(per_location.items(), key=lambda kv: (-kv[1], kv[0].casefold()))],
         "unlocated": unlocated,
-        "decks": [{"deck": d, "quantity": n} for d, n in sorted(others.items(), key=lambda kv: kv[0].casefold())],
+        "decks": [{"deck": d, "quantity": others.get(d, 0), "listed": listed.get(d, 0)}
+                  for d in sorted(set(others) | set(listed), key=str.casefold)],
         "price": price_row[0] if price_row else None,
         "bulk": bulk,
         "auto": auto,
@@ -2379,6 +2494,114 @@ def brewing_claims(conn):
             claims.append({"deck_id": deck_id, "deck_name": deck_name, "scryfall_id": sid,
                            "card": card, "quantity": owed, "location": location.strip()})
     return claims
+
+
+# ------------------------------------------------------------------
+# Linked pairs (EDIT_FLOW_PLAN.md Phase 3): a card taken from another deck
+# is a removal on the donor (add side empty, dest_location = the receiving
+# deck) and an add on the receiver (source='deck', source_location = the
+# donor), each naming the other in linked_change_id. The donor's half is
+# the one with no add — a receiver always adds.
+# ------------------------------------------------------------------
+def is_donor_row(row):
+    """True for the donor's half of a pair: a removal with no add side."""
+    return (bool(row.get("remove_scryfall_id")) and not row.get("add_scryfall_id")
+            and not (row.get("add_name") or "").strip())
+
+
+def open_takes(conn, deck_id=None, oracle_id=None):
+    """Every OPEN donor removal that is half of a pair — a copy promised to
+    another deck and not handed over yet — oldest first. The receiver may be
+    open too (a staged take) or already applied (a brewing deck's take,
+    whose list changed at once: "lopsided" in the plan). `deck_id` narrows
+    it to one donor deck; `oracle_id` to one card. Each row:
+
+      {donor_change_id, donor_deck_id, donor_deck_name, scryfall_id (the
+       donor list's printing), card, quantity, donor_status,
+       receiver_change_id, receiver_deck_id, receiver_deck_name,
+       receiver_status, receiver_scryfall_id, oracle_id, planned_at,
+       created_at}"""
+    sql = """SELECT d.change_id, d.deck_id, dd.name, d.remove_scryfall_id,
+                    COALESCE(rc.name, d.remove_name), d.quantity, d.status,
+                    r.change_id, r.deck_id, rd.name, r.status, r.add_scryfall_id,
+                    rc.oracle_id, d.planned_at, d.created_at
+             FROM deck_changes d
+             JOIN decks dd ON dd.deck_id = d.deck_id
+             JOIN deck_changes r ON r.change_id = d.linked_change_id
+             JOIN decks rd ON rd.deck_id = r.deck_id
+             LEFT JOIN cards rc ON rc.scryfall_id = d.remove_scryfall_id
+             WHERE d.status IN ('idea','planned') AND r.status IN ('idea','planned','applied')
+               AND d.add_scryfall_id IS NULL AND COALESCE(TRIM(d.add_name), '') = ''
+               AND d.remove_scryfall_id IS NOT NULL"""
+    params = []
+    if deck_id is not None:
+        sql += " AND d.deck_id = ?"
+        params.append(deck_id)
+    if oracle_id is not None:
+        sql += " AND rc.oracle_id = ?"
+        params.append(oracle_id)
+    sql += " ORDER BY COALESCE(d.planned_at, d.created_at), d.change_id"
+    keys = ("donor_change_id", "donor_deck_id", "donor_deck_name", "scryfall_id", "card",
+            "quantity", "donor_status", "receiver_change_id", "receiver_deck_id",
+            "receiver_deck_name", "receiver_status", "receiver_scryfall_id", "oracle_id",
+            "planned_at", "created_at")
+    return [dict(zip(keys, r)) for r in conn.execute(sql, params).fetchall()]
+
+
+def deck_leaving(conn, deck_id):
+    """{scryfall_id on this deck's list: [receiving deck names]} for the
+    Board's "leaving → Prosper" badge: every open take of one of this deck's
+    cards. Keyed by the printing the removal names (the donor's own list
+    printing), the way deck_board.planned_cuts() keys its "cut for" badge."""
+    out = {}
+    for take in open_takes(conn, deck_id=deck_id):
+        out.setdefault(take["scryfall_id"], []).append(take["receiver_deck_name"])
+    return out
+
+
+def collapse_linked_pairs(rows):
+    """The Workbench's planned queue with each linked pair as ONE row.
+
+    `rows` is open_changes_dataframe()'s planned rows (a DataFrame or dicts,
+    with its linked_* columns). A donor removal whose partner is open or
+    already applied is folded into its pair and shown under the RECEIVING
+    deck — the deck gaining the card is where the decision lives, and its
+    side may not be in `rows` at all (an idea, or a brewing deck's add that
+    is already applied). Every other row passes through as itself.
+
+    Returns [{"group_deck_id", "group_deck_name", "change_id", "row",
+    "pair"}] in input order. `change_id` is the row an action should name
+    (applying or dropping either side handles both): the receiver's when
+    it is planned, else the donor's. `pair` is None, or {"card",
+    "from_deck", "to_deck", "receiver_status"}."""
+    records = _rows_of(rows)
+    by_id = {int(r["change_id"]): r for r in records}
+    out, seen = [], set()
+    for r in records:
+        cid = int(r["change_id"])
+        if cid in seen:
+            continue
+        linked = r.get("linked_change_id")
+        linked = int(linked) if linked is not None else None
+        if linked is None or r.get("linked_status") not in ("idea", "planned", "applied"):
+            out.append({"group_deck_id": r["deck_id"], "group_deck_name": r["deck_name"],
+                        "change_id": cid, "row": r, "pair": None})
+            continue
+        seen.update({cid, linked})
+        partner = by_id.get(linked)
+        donor, receiver = (r, partner) if is_donor_row(r) else (partner, r)
+        if receiver is not None:
+            to_id, to_name, to_status = receiver["deck_id"], receiver["deck_name"], receiver["status"]
+        else:
+            to_id, to_name, to_status = r.get("linked_deck_id"), r.get("linked_deck_name"), r.get("linked_status")
+        from_deck = donor["deck_name"] if donor is not None else r.get("linked_deck_name")
+        card = (receiver or {}).get("add_card") or (donor or {}).get("remove_card")
+        acting = receiver if receiver is not None and receiver["status"] == "planned" else (donor or r)
+        out.append({"group_deck_id": to_id, "group_deck_name": to_name,
+                    "change_id": int(acting["change_id"]), "row": acting,
+                    "pair": {"card": card, "from_deck": from_deck, "to_deck": to_name,
+                             "receiver_status": to_status}})
+    return out
 
 
 # ------------------------------------------------------------------
@@ -2609,8 +2832,9 @@ def card_lookup(conn, name):
     ]
 
     shortlisted_in = []
-    for change_id, deck_id, status, add_sid, add_name, add_oracle_id in conn.execute(
-        """SELECT dc.change_id, dc.deck_id, dc.status, dc.add_scryfall_id, dc.add_name, ac.oracle_id
+    for change_id, deck_id, status, add_sid, add_name, add_oracle_id, source, source_location in conn.execute(
+        """SELECT dc.change_id, dc.deck_id, dc.status, dc.add_scryfall_id, dc.add_name, ac.oracle_id,
+                  dc.source, dc.source_location
            FROM deck_changes dc LEFT JOIN cards ac ON ac.scryfall_id = dc.add_scryfall_id
            WHERE dc.status IN ('idea', 'planned')"""
     ).fetchall():
@@ -2623,6 +2847,7 @@ def card_lookup(conn, name):
             shortlisted_in.append({
                 "change_id": change_id, "deck_id": deck_id,
                 "deck_name": deck_id_to_name.get(deck_id, "?"), "status": status,
+                "source": source, "source_location": source_location,
             })
 
     history = []
@@ -2658,6 +2883,10 @@ def card_lookup(conn, name):
         "history": history,
         # Phase 6: where each copy went (newest first), beside the list history above.
         "moves": collection_moves_for_card(conn, card["name"]),
+        # Phase 3: copies promised from one deck to another, not handed over yet.
+        "pending_takes": ([{"from_deck": t["donor_deck_name"], "to_deck": t["receiver_deck_name"],
+                            "quantity": t["quantity"], "receiver_status": t["receiver_status"]}
+                           for t in open_takes(conn, oracle_id=oracle_id)] if oracle_id else []),
     }
 
 

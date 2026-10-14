@@ -20,7 +20,7 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] **Phase 0** — Fix what's already out of sync: deck renames and deletes, one finish-an-edit helper, quantity changes in history, the combo staleness warning. *Done 2026-10-13: every database write on every page ends in `card_view.finish_edit()` (or `stash_edit()` from a widget callback); see "As built" at the end of the phase.*
 - [x] **Phase 1** — One write path for every deck edit; physical copies move right away; a pop-up says what moved. *Done 2026-10-13: every deck edit moves copies through `writes.sleeve_into_deck()` / `unsleeve_from_deck()` and returns its moves, `card_view.show_moves()` names them, and Board Undo reverts them; see "As built" at the end of the phase.*
 - [x] **Phase 2** — Choose where a card comes from (storage location) and where a removed card goes. *Done 2026-10-13: `deck_changes.source` / `source_location` record where an add comes from, every add and removal takes a `source` / `dest`, `queries.card_sources()` feeds the pickers, and the allocator honors the choice; see "As built" at the end of the phase.*
-- [ ] **Phase 3** — Take a card from another deck, as a linked pair that shows on both decks.
+- [x] **Phase 3** — Take a card from another deck, as a linked pair that shows on both decks. *Done 2026-10-13: `deck_changes.linked_change_id` pairs the donor's removal with the receiver's add, `writes.transfer_between_decks()` takes a card right away and `add_linked_take()` stages one, either half applies or drops both, and the allocator, Workbench, Board and Card Lookup all show the promise; see "As built" at the end of the phase.*
 - [ ] **Phase 4** — Planned buys: a card can be on a deck's list while you wait to buy it.
 - [ ] **Phase 5** — Building new decks from those choices, and one place per job.
 - [x] **Phase 6** — Collection-side edits tracked and flowing back: a move log for every copy, and Collection page / order import edits that touch a deck offer to update its list. *Done 2026-10-13, ahead of Phases 2–5 (it only needed Phase 1): every lot writer logs to `collection_moves`, Card Lookup shows it, and `card_view.show_deck_sync()` asks whether a deck's list should follow; see "As built" at the end of the phase.*
@@ -726,6 +726,144 @@ sees the claim; the Workbench shows and counts one row per pair.
 
 You can take a card from another deck from the add bar, the Shortlist or
 the Board, and both decks show it — before (staged) and after (history).
+
+### As built (2026-10-13)
+
+Where the build differs from, or adds to, the spec above:
+
+- **Both rows point at each other.** `linked_change_id` is set on the donor's
+  removal AND the receiver's add, so either side finds its partner in one
+  read. The donor's half is always the one with no add side
+  (`queries.is_donor_row()`); a receiver always adds.
+- **The donor's half of a staged take is always `planned`**, as the spec
+  says, even when the receiving row is only an idea — the copy is promised
+  from the moment the take is written, which is what the allocator and the
+  donor's Board show. So "applying either side applies both" needs the
+  receiving row to be planned: applying either half of a pair whose
+  receiver is still an idea is refused, naming that deck ("Prosper's side
+  of this take is still an idea — plan it on Prosper first"). An idea that
+  takes from a deck can be planned with no card to cut (`promote_change()`
+  allows it; any other idea still needs one). `add_linked_take()` also takes
+  an optional cut, so a staged swap's incoming card can come from Gisa.
+- **"Unpairing", read two ways.** Demoting the receiving row (planned →
+  idea, the Board's Unpair) keeps the pair: the donor's half stays planned.
+  Re-pointing it (`update_change()` with a new `source`) is what breaks a
+  pair: away from a deck drops the donor's half; onto a deck (or another
+  one) writes a fresh one, checked like a new take. The donor's half can't
+  be demoted, reopened or sent elsewhere (`dest_location`) on its own —
+  each is refused with "promised to Prosper — change it on Prosper's side,
+  or drop it". A quantity edit on either half is copied to the other,
+  within what the donor's list runs.
+- **What the donor can hand over.** The move helpers only take copies a
+  list no longer runs (Phase 1), so `sleeve_into_deck(source="deck")` takes
+  only Gisa's surplus once Gisa's list has given the card up, and a take
+  into a deck that isn't brewing is refused up front when Gisa's copy isn't
+  recorded as sleeved there ("Mark the copy as sleeved in Gisa (Workbench →
+  Reconcile) first, or take it from storage"). It never falls back to a
+  starter lot. A take into a brewing deck isn't checked — nothing moves.
+- **A take gives up only the copies taken.** A linked removal on a live
+  deck takes `quantity` copies off its list (Gisa running ×3 and handing
+  two over keeps one); an unlinked removal, or one on a dismantled deck,
+  still takes the whole entry as before.
+- **Brewing receivers, staged.** Applying a planned take into a brewing deck
+  applies only the brew's add and leaves the donor's half planned — the
+  same lopsided pair a direct take on a brew writes — so a batch apply never
+  pulls a card out of a played deck for a brew. The lopsided donor half can
+  be applied on its own (from the Workbench, or by Phase 5's Build it, which
+  is what the spec has it do): that moves Gisa's copy into the brew.
+- **A promise is dropped when the card leaves the brew's list entirely**
+  (`writes._drop_promises()`, called by `remove_deck_card()`, a pure
+  removal's apply, and `execute_swap()` after both list writes so a
+  printing swap keeps it). Going from ×2 to ×1 leaves it.
+- **A direct take supersedes this deck's own staged take of the card**: the
+  idea and its donor half are retired (dropped, like any idea a hand edit
+  satisfies), and a second open take of the same card from the same donor —
+  by any deck — is refused, as the spec's one-removal guard says.
+- **`add_deck_card(source="deck")` is a take.** It hands the increase to
+  `transfer_between_decks()`, so the add bar and the Board's Add needed no
+  path of their own. `add_change(source="deck")` likewise hands off to
+  `add_linked_take()` and returns the receiving row's id.
+- **`normalize_source()`** accepts `"deck"` with an exact deck name (refusing
+  an unknown deck and a deck taking from itself); `normalize_dest()` still
+  refuses a deck name — a copy only goes to another deck as a take, asked
+  for on that deck's side. `queries.SOURCES` is `("storage", "deck")`.
+- **Allocator.** Every open take (`queries.open_takes()`, read from the
+  database so a one-deck call sees other decks' takes) claims the donor's
+  sleeved copy before any row is walked, as Phase 2's brewing claims do. The
+  receiving row reads its verdict off that claim: `available` "From Gisa
+  (your pick)", `claimed_by` when an earlier take got it, `wrong_location`
+  ("None sleeved in Gisa — free in Box") or `in_other_deck` / `not_owned`.
+  No new verdict. An Auto row short of storage whose only other-deck copies
+  are all promised is `claimed_by` the takers ("Only in other decks,
+  promised to Prosper (from Gisa)") rather than "unsleeve one".
+- **Conflicts keep takes.** `plan_conflicts()` counts the copies a group's
+  takes were promised as supply (`promised_qty`): a take plus a row served
+  from storage is no conflict, but a take of a deck's only copy plus a row
+  with nowhere else to look still is (one short). The existing dismantle
+  conflict test was updated to that.
+- **`delete_deck()` returns a 4-tuple**: `(name, error, redirected,
+  dropped)`, `dropped` being the other decks' open halves of takes with the
+  deleted deck. It clears `linked_change_id` on every other-deck row that
+  pointed at the deleted deck's rows, applied ones included, and resets an
+  unlinked open row still naming the deck as its source to Auto. The Deck
+  Editor's delete message, two tests and two `scripts/_test_*` harnesses
+  were updated.
+- **`card_sources()["decks"]`** gained `listed` (what each other deck's list
+  runs, in one grouped query) and lists a deck whose list runs the card even
+  with nothing sleeved. A deck is a choosable source only when its list runs
+  the card; the picker says "Deck: Gisa — 1 sleeved" or "— on its list, not
+  recorded as sleeved". In data_editor columns a deck reads "Deck: Gisa"
+  (`formatting.DECK_SOURCE_PREFIX`).
+- **Messages.** `formatting.apply_result_line()` now words every
+  `apply_changes()` result for the Shortlist tab, the Workbench and the
+  Board ("Took Sol Ring from Gisa into Prosper.", "… keeps its copy until
+  Prosper is built.", and no more "replaced None" for a pure add);
+  `apply_changes()` results carry `pair` and report a pair once.
+  `drop_change()` and `reopen_change()` return lines naming what else
+  happened.
+- **UI.** The add bar's Comes from lists every other deck before a card is
+  typed, then the ones whose list runs it; picking one on a deck that isn't
+  brewing shows a confirm (*"This also takes Sol Ring out of Gisa's list…"*,
+  Yes / Cancel) before anything is written. The Shortlist form lists every
+  other deck; the Ideas and Planned tables' Comes from offer "Deck: …". On
+  the Board, an idea's Add / a planned row's Apply menu lists `deck_options`
+  after the storage ones, and a deck needs a second click ("Also takes it
+  off Gisa's list — click again") unless the deck is brewing. An Add from a
+  deck has **no Undo** (it changed another deck's list). The donor's Board
+  gets a "→ Prosper" badge (`board_payload(leaving=…)`) and a **Leaving**
+  rail group (`deck_board.load_board_leaving()`) whose **Keep here** drops
+  the take, also with no Undo (the other half can only be reopened on its
+  own deck).
+- **Workbench.** `queries.collapse_linked_pairs()` folds each pair into one
+  row under the receiving deck — including a pair whose receiver is an idea
+  or (lopsided) already applied, which planned_df alone wouldn't show
+  there. The row's actions name the receiver when it's planned, else the
+  donor's half; the header, the deck count and the "can't be sourced"
+  caption count entries, not rows.
+- **Not done (deliberately):** the Deck Editor's own Planned table on the
+  donor still lists its half as a removal ("Cut goes to: Prosper") rather
+  than folding it, which is its truthful per-deck view; the Decks page Cards
+  tab shows no "leaving" yet (Phase 5's view-only pass); a "give this card
+  to another deck" action on the donor side wasn't added — a take is asked
+  for by the deck getting the card.
+- **Tests:** `tests/test_edit_takes.py` (50 tests: reads, direct takes and
+  every refusal writing nothing, a take of part of a stack, superseding,
+  brewing receivers and their promise, staged pairs from either side,
+  dismantle pairs, allocator and conflicts, delete / rename, the Workbench
+  view, Board payload and actions, Card Lookup and History routes) and six
+  smoke tests (the add bar's confirm and cancel, a Shortlist tab holding a
+  take on both decks, its Ideas table planning a take with nothing cut, the
+  Workbench showing one row and applying the pair, Card Lookup's Pending
+  moves). 599 pass. The Board JS (parsed with
+  esprima) was clicked in headless Edge against a scratch database: an
+  idea's Add menu listed "Deck: Gisa — 1 sleeved", the first click only
+  armed it and wrote nothing, the second moved Sol Ring Gisa → Prosper with
+  linked rows and both toasts; a staged take showed "from Gisa"; Gisa's
+  board showed "→ Prosper" and a Leaving row whose Keep here dropped both
+  halves; on a brewing Prosper one click took Command Tower onto its list,
+  left Gisa's list and copy alone, and wrote the planned promise. The schema
+  upgrade ran on a copy of the real database (column added; the allocator
+  ran over its 231 open rows, no takes yet).
 
 ---
 

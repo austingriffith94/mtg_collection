@@ -592,11 +592,20 @@ _DECK_SCOPED_TABLES = (
 def delete_deck(conn, deck_id, clear_collection_locations=True):
     """Permanently removes a deck and everything scoped to it (mainboard,
     shortlist/history, card tags, themes, win conditions/strengths/weaknesses).
-    Returns (deck_name, error, redirected) — error is None on success;
-    redirected is the number of OTHER decks' open deck_changes rows whose
-    dest_location named this deck (e.g. a dismantle transfer feeding it)
-    that got reassigned to DEFAULT_LOCATION, since that target no longer
-    exists to receive them. Applied rows are left alone — they're history.
+    Returns (deck_name, error, redirected, dropped) — error is None on
+    success; redirected is the number of OTHER decks' open deck_changes rows
+    whose dest_location named this deck (e.g. an old, unlinked dismantle
+    transfer feeding it) that got reassigned to DEFAULT_LOCATION, since that
+    target no longer exists to receive them. Applied rows are left alone —
+    they're history.
+
+    `dropped` (EDIT_FLOW_PLAN.md Phase 3) is the number of other decks' open
+    rows dropped because they were half of a take with this deck — a take
+    from a deck that no longer exists can't be applied, nor can a promise to
+    one. linked_change_id is cleared on every other-deck row (applied ones
+    too) that pointed at this deck's rows, so no reference dangles; an
+    unlinked open row still naming this deck as its source goes back to
+    Auto.
 
     game_participants rows referencing this deck are deliberately NOT
     deleted outright, to avoid corrupting data that isn't really "this
@@ -630,11 +639,31 @@ def delete_deck(conn, deck_id, clear_collection_locations=True):
     """
     row = conn.execute("SELECT name FROM decks WHERE deck_id=?", (deck_id,)).fetchone()
     if not row:
-        return None, "Deck not found.", 0
+        return None, "Deck not found.", 0, 0
     deck_name = row[0]
 
     conn.execute(
         "UPDATE game_participants SET deck_id=NULL, is_own_deck=0 WHERE deck_id=?", (deck_id,)
+    )
+
+    # Phase 3: the other halves of this deck's takes. Before the redirect
+    # below, so a dropped promise isn't also counted as redirected.
+    partners = conn.execute(
+        """SELECT p.change_id, p.status FROM deck_changes p
+           JOIN deck_changes mine ON mine.change_id = p.linked_change_id
+           WHERE mine.deck_id = ? AND p.deck_id != ?""",
+        (deck_id, deck_id),
+    ).fetchall()
+    dropped = 0
+    for change_id, status in partners:
+        if status in OPEN_CHANGE_STATUSES:
+            _set_dropped(conn, change_id, f"{TAKE_DROPPED_NOTE}: {deck_name} was deleted")
+            dropped += 1
+        conn.execute("UPDATE deck_changes SET linked_change_id=NULL WHERE change_id=?", (change_id,))
+    conn.execute(
+        """UPDATE deck_changes SET source=NULL, source_location=NULL
+           WHERE source='deck' AND source_location=? AND status IN ('idea','planned') AND deck_id != ?""",
+        (deck_name, deck_id),
     )
 
     # Other decks' open rows pointed at this deck as a removal's
@@ -670,9 +699,9 @@ def delete_deck(conn, deck_id, clear_collection_locations=True):
 
     conn.execute("DELETE FROM decks WHERE deck_id=?", (deck_id,))
     conn.commit()
-    logger.info("Deleted deck %r (deck_id=%d); redirected %d open row(s) pointed at it",
-                deck_name, deck_id, redirected)
-    return deck_name, None, redirected
+    logger.info("Deleted deck %r (deck_id=%d); redirected %d open row(s) pointed at it, dropped %d "
+                "linked row(s)", deck_name, deck_id, redirected, dropped)
+    return deck_name, None, redirected, dropped
 
 
 # ------------------------------------------------------------------
@@ -754,16 +783,12 @@ def _auto_drop_stale_ideas(conn, deck_id, scryfall_id):
     ).fetchall()
     change_ids = [r[0] for r in rows]
     for change_id in change_ids:
-        conn.execute(
-            """UPDATE deck_changes
-                  SET status='dropped', resolved_at=CURRENT_TIMESTAMP,
-                      notes = CASE
-                          WHEN notes IS NULL OR TRIM(notes) = '' THEN ?
-                          ELSE notes || ' — ' || ?
-                      END
-                WHERE change_id = ?""",
-            (AUTO_DROP_NOTE, AUTO_DROP_NOTE, change_id),
-        )
+        _set_dropped(conn, change_id, AUTO_DROP_NOTE)
+        # A take from another deck (Phase 3) goes as a pair: the donor's
+        # promised removal has nothing left to feed.
+        partner = _open_partner(conn, get_change(conn, change_id))
+        if partner:
+            _set_dropped(conn, partner["change_id"], TAKE_DROPPED_NOTE)
     if change_ids:
         conn.commit()
         logger.info("Auto-dropped %d stale shortlist row(s) on deck %s: %s",
@@ -789,8 +814,12 @@ def add_deck_card(conn, deck_id, scryfall_id, quantity=1, with_moves=True, note=
     checked: no copy moves there). They go on the history row, so History
     can say where it came from. `dest` is where a DECREASE puts the copies
     away (default Box), logged the same way. Each applies only in its own
-    direction and is ignored in the other."""
-    source, source_location = normalize_source(conn, source, source_location)
+    direction and is ignored in the other.
+
+    ("deck", "Gisa") (Phase 3) takes the increase out of Gisa: its list gives
+    the card up too, through transfer_between_decks(), which this hands the
+    increase to — see there for what it checks and writes."""
+    source, source_location = normalize_source(conn, source, source_location, deck_id=deck_id)
     dest = normalize_dest(conn, dest)
     existing = _deck_card_quantity(conn, deck_id, scryfall_id)
     growing = existing is None or quantity > existing
@@ -798,6 +827,9 @@ def add_deck_card(conn, deck_id, scryfall_id, quantity=1, with_moves=True, note=
         source, source_location = None, None
     if growing or quantity == existing:
         dest = None
+    if source == "deck":
+        return transfer_between_decks(conn, _deck_id_by_name(conn, source_location), deck_id,
+                                      scryfall_id, quantity - (existing or 0), note=note)["moves"]
     if source and with_moves:
         _check_stock(conn, deck_id, scryfall_id,
                      q.deck_list_quantity(conn, deck_id, scryfall_id) - (existing or 0) + quantity,
@@ -851,6 +883,7 @@ def remove_deck_card(conn, deck_id, scryfall_id, with_moves=True, note=None, des
         return []
     change_id = _log_applied_change(conn, deck_id, remove_scryfall_id=scryfall_id,
                                     quantity=existing, notes=note, dest_location=dest)
+    _drop_promises(conn, deck_id, scryfall_id)
     return (unsleeve_from_deck(conn, deck_id, scryfall_id, existing, dest=dest, change_id=change_id)
             if with_moves else [])
 
@@ -915,24 +948,35 @@ STARTER_LOT_SOURCE = "Auto-added (deck edit)"
 # value (a typo from the browser, a deck name, a source that doesn't exist
 # yet) is refused with a reason before a list or a lot is touched.
 # ------------------------------------------------------------------
-def normalize_source(conn, source, source_location):
+def normalize_source(conn, source, source_location, deck_id=None):
     """(source, source_location) as stored: (None, None) for Auto (None, "",
-    "auto", or a Location with no source), else ("storage", <Location in the
-    catalog's spelling>). ValueError for a source that doesn't exist yet
-    (Phase 3 / 4 add 'deck' and 'buy'), a storage pick with no Location, or
-    a deck name as the Location."""
+    "auto", or a Location with no source), ("storage", <Location in the
+    catalog's spelling>), or (Phase 3) ("deck", <another deck's exact name>).
+    ValueError for a source that doesn't exist yet ('buy' is Phase 4), a pick
+    with no Location / deck, a deck name given as a storage Location, an
+    unknown deck, or — with `deck_id`, the deck receiving the card — a deck
+    taking a card from itself."""
     if source in (None, "", "auto"):
         return None, None
     if source not in q.SOURCES:
         raise ValueError(
-            f"Taking a card from {source!r} isn't available yet — leave it on Auto or pick a storage Location."
+            f"Taking a card from {source!r} isn't available yet — leave it on Auto, or pick a storage "
+            "Location or another deck."
         )
     place = (source_location or "").strip()
+    if source == "deck":
+        if not place:
+            raise ValueError("Pick which deck it comes from.")
+        if place not in q.deck_name_set(conn):
+            raise ValueError(f"There's no deck called {place!r} to take it from.")
+        if deck_id is not None and _deck_name_and_state(conn, deck_id)[0] == place:
+            raise ValueError("A deck can't take a card from itself.")
+        return "deck", place
     if not place:
         raise ValueError("Pick which storage Location it comes from.")
     if place in q.deck_name_set(conn):
-        raise ValueError(f"{place} is a deck, not a storage Location — taking a card from another "
-                         "deck isn't available yet.")
+        raise ValueError(f"{place} is a deck, not a storage Location — choose it as the deck the card "
+                         "comes from instead.")
     return "storage", next((known for known in q.storage_locations(conn)
                             if q.same_location(known, place)), place)
 
@@ -940,15 +984,15 @@ def normalize_source(conn, source, source_location):
 def normalize_dest(conn, dest):
     """A removal's destination as stored: None for the default, else a known
     storage Location in the catalog's spelling. ValueError for a deck name
-    (moving a copy to another deck is Phase 3's explicit transfer) or a
-    Location nobody has set up, so a typo can't strand a copy somewhere that
-    isn't on any list."""
+    (a copy goes to another deck only as a take, which that deck asks for —
+    Phase 3 — so both lists change together) or a Location nobody has set
+    up, so a typo can't strand a copy somewhere that isn't on any list."""
     place = (dest or "").strip()
     if not place:
         return None
     if place in q.deck_name_set(conn):
-        raise ValueError(f"{place} is a deck, not a storage Location — moving a copy straight to "
-                         "another deck isn't available yet.")
+        raise ValueError(f"{place} is a deck, not a storage Location — to hand the card to {place}, "
+                         f"take it from this deck on {place}'s side instead.")
     for known in q.storage_locations(conn):
         if q.same_location(known, place):
             return known
@@ -1021,8 +1065,12 @@ def sleeve_into_deck(conn, deck_id, scryfall_id, quantity, source=None, source_l
     anything — if it can't supply them. Copies already sleeved here still
     count first. A starter lot is never made for a chosen Location.
 
-    It never takes a copy out of another deck: that becomes an explicit
-    choice in Phase 3.
+    `source="deck"` (Phase 3) takes copies sleeved in the deck named by
+    `source_location` — only those its list no longer runs, so call it after
+    that deck's list has given the card up (transfer_between_decks() and a
+    linked pair's apply do). Short of them it raises, like a storage pick.
+    Auto never takes a copy out of another deck: only this explicit choice
+    does.
 
     A brewing or dismantled deck (rule 4) changes its list only: no lot is
     touched and one placeholder move comes back instead, unless `force`
@@ -1048,9 +1096,17 @@ def sleeve_into_deck(conn, deck_id, scryfall_id, quantity, source=None, source_l
     if q.is_bulk_basic(conn, scryfall_id=scryfall_id):
         return [_move(card, need, "bulk", frm="bulk", to="bulk")]
 
-    free = [(cid, qty, loc) for cid, qty, loc, _ in
-            q.free_lots(conn, scryfall_id, location=source_location if source else None)]
-    if source and sum(lot[1] for lot in free) < need:
+    if source == "deck":
+        free = _spare_in_deck(conn, source_location, scryfall_id)
+        if sum(lot[1] for lot in free) < need:
+            raise ValueError(
+                f"{card}: {source_location} has {sum(lot[1] for lot in free)} sleeved cop"
+                f"{'y' if sum(lot[1] for lot in free) == 1 else 'ies'} it no longer needs, {need} needed."
+            )
+    else:
+        free = [(cid, qty, loc) for cid, qty, loc, _ in
+                q.free_lots(conn, scryfall_id, location=source_location if source else None)]
+    if source == "storage" and sum(lot[1] for lot in free) < need:
         raise ValueError(
             f"{card}: {source_location} has {sum(lot[1] for lot in free)} free, {need} needed. "
             "Pick another Location, or leave it on Auto."
@@ -1064,7 +1120,7 @@ def sleeve_into_deck(conn, deck_id, scryfall_id, quantity, source=None, source_l
                             reason=reason, change_id=change_id)
         moves.append(_move(card, take, "move", moved_id, location, deck_name))
         need -= take
-    if need > 0:   # only reachable on Auto: a chosen Location is checked above
+    if need > 0:   # only reachable on Auto: a chosen Location or deck is checked above
         if _is_basic_land(conn, scryfall_id):
             moves.append(_move(card, need, "bulk", frm="bulk", to="bulk"))
         else:
@@ -1299,13 +1355,24 @@ def add_change(conn, deck_id, *, add_scryfall_id=None, add_name=None,
     `source` / `source_location` (Phase 2) save where the add's copy should
     come from for when the row is applied (None = Auto); `dest_location`
     where the cut copy goes (None = Box). See normalize_source /
-    normalize_dest for what is refused."""
-    source, source_location = normalize_source(conn, source, source_location)
+    normalize_dest for what is refused.
+
+    source="deck" (Phase 3) is a take from another deck, written as a
+    linked pair by add_linked_take(); its change_id (the receiving row's)
+    is returned the same way."""
+    source, source_location = normalize_source(conn, source, source_location, deck_id=deck_id)
     dest_location = normalize_dest(conn, dest_location)
     if status not in OPEN_CHANGE_STATUSES:
         raise ValueError("A new change starts as an idea or a planned swap.")
     if not (add_scryfall_id or add_name or remove_scryfall_id):
         raise ValueError("A change has to add a card, remove one, or both.")
+    if source == "deck":
+        if not add_scryfall_id:
+            raise ValueError("Pick the card's printing before taking it from another deck.")
+        return add_linked_take(conn, deck_id, _deck_id_by_name(conn, source_location), add_scryfall_id,
+                               quantity, status, add_name=add_name, remove_scryfall_id=remove_scryfall_id,
+                               remove_name=remove_name, notes=notes, review_flag=review_flag,
+                               dest_location=dest_location)
     if status == "planned" and not remove_scryfall_id:
         raise ValueError("A planned swap needs a card to replace.")
     if int(quantity) < 1:
@@ -1350,24 +1417,63 @@ def _log_applied_change(conn, deck_id, add_scryfall_id=None, remove_scryfall_id=
 
 
 def update_change(conn, change_id, **fields):
+    """Edit an open row's editable columns. Every check runs before anything
+    is written.
+
+    Phase 3: on a take's receiving row, a new `source` re-links the pair —
+    away from a deck drops the promised removal on it, onto a deck (or
+    another one) writes a fresh one, checked like a new take — and a new
+    `quantity` is copied to the donor's half. The donor's half can't be
+    pointed somewhere else (`dest_location`): the copy is promised."""
     fields = {k: v for k, v in fields.items() if k in _CHANGE_EDITABLE}
     if not fields:
         return
+    row = _require_change(conn, change_id)
     if "review_flag" in fields:
         fields["review_flag"] = 1 if fields["review_flag"] else 0
+    relink = None
     if "source" in fields or "source_location" in fields:
         # The pair is validated together, against what the row already
         # holds for whichever half the caller left out.
-        row = _require_change(conn, change_id)
         fields["source"], fields["source_location"] = normalize_source(
-            conn, fields.get("source", row["source"]), fields.get("source_location", row["source_location"]))
+            conn, fields.get("source", row["source"]), fields.get("source_location", row["source_location"]),
+            deck_id=row["deck_id"])
+        if ((fields["source"], fields["source_location"]) != (row["source"], row["source_location"])
+                and row["status"] in OPEN_CHANGE_STATUSES):
+            relink = {"ctx": None}
+            if fields["source"] == "deck":
+                if not (fields.get("add_scryfall_id") or row["add_scryfall_id"]):
+                    raise ValueError("Pick the card's printing before taking it from another deck.")
+                ctx = _take_context(conn, _deck_id_by_name(conn, fields["source_location"]), row["deck_id"],
+                                    fields.get("add_scryfall_id") or row["add_scryfall_id"],
+                                    fields.get("quantity") or row["quantity"] or 1)
+                _refuse_second_take(conn, ctx)
+                relink["ctx"] = ctx
+    partner = _open_partner(conn, row)
     if "dest_location" in fields:
+        if partner and q.is_donor_row(row) and fields["dest_location"] != row["dest_location"]:
+            raise ValueError(_donor_refusal(conn, row))
         fields["dest_location"] = normalize_dest(conn, fields["dest_location"])
+    if "quantity" in fields and partner and relink is None:
+        donor = row if q.is_donor_row(row) else partner
+        listed = _deck_card_quantity(conn, donor["deck_id"], donor["remove_scryfall_id"]) or 0
+        if int(fields["quantity"]) > listed:
+            raise ValueError(f"{_deck_name_and_state(conn, donor['deck_id'])[0]} only runs "
+                             f"{donor['remove_name'] or 'that card'} ×{listed}.")
     set_clause = ", ".join(f"{k}=?" for k in fields)
     conn.execute(
         f"UPDATE deck_changes SET {set_clause} WHERE change_id=?",
         (*fields.values(), change_id),
     )
+    if relink is not None:
+        if partner:
+            _set_dropped(conn, partner["change_id"], TAKE_DROPPED_NOTE)
+        conn.execute("UPDATE deck_changes SET linked_change_id=NULL WHERE change_id=?", (change_id,))
+        if relink["ctx"]:
+            _link(conn, _insert_donor_removal(conn, relink["ctx"]), change_id)
+    elif "quantity" in fields and partner:
+        conn.execute("UPDATE deck_changes SET quantity=? WHERE change_id=?",
+                     (int(fields["quantity"]), partner["change_id"]))
     conn.commit()
 
 
@@ -1398,9 +1504,11 @@ def promote_change(conn, change_id, remove_scryfall_id=None, remove_name=None, q
     nothing ever read it."""
     row = _require_change(conn, change_id, "idea")
     target = remove_scryfall_id or row["remove_scryfall_id"]
-    if not target:
+    # A take from another deck (Phase 3) can be planned as a plain add: the
+    # card it brings comes with its own removal, on the deck it leaves.
+    if not target and row["source"] != "deck":
         raise ValueError("Pick a card for this to replace before planning it.")
-    target_name = remove_name or _card_name(conn, target) or row["remove_name"]
+    target_name = (remove_name or _card_name(conn, target) or row["remove_name"]) if target else None
     conn.execute(
         """UPDATE deck_changes
            SET status='planned', planned_at=CURRENT_TIMESTAMP,
@@ -1412,8 +1520,14 @@ def promote_change(conn, change_id, remove_scryfall_id=None, remove_name=None, q
 
 
 def demote_change(conn, change_id):
-    """planned -> idea, keeping the pairing so re-planning it is one click."""
-    _require_change(conn, change_id, "planned")
+    """planned -> idea, keeping the pairing so re-planning it is one click.
+    A take's receiving row keeps its promised removal on the donor (Phase 3:
+    the donor's half is always planned, so the copy stays promised); the
+    donor's half itself can't go back to an idea — it isn't this deck's
+    plan — so that is refused."""
+    row = _require_change(conn, change_id, "planned")
+    if row["linked_change_id"] and q.is_donor_row(row):
+        raise ValueError(_donor_refusal(conn, row))
     conn.execute(
         "UPDATE deck_changes SET status='idea', planned_at=NULL WHERE change_id=?", (change_id,)
     )
@@ -1422,13 +1536,39 @@ def demote_change(conn, change_id):
 
 def drop_change(conn, change_id):
     """idea/planned -> dropped. Never deletes: the row is the memory of why
-    a card lost, so it isn't re-evaluated from scratch next month."""
-    _require_change(conn, change_id, *OPEN_CHANGE_STATUSES)
-    conn.execute(
-        "UPDATE deck_changes SET status='dropped', resolved_at=CURRENT_TIMESTAMP WHERE change_id=?",
-        (change_id,),
-    )
+    a card lost, so it isn't re-evaluated from scratch next month.
+
+    Half of a take from another deck (Phase 3) takes its open partner with
+    it — a promised removal with no add to feed, or an add whose copy is no
+    longer promised. An already-applied partner is left alone (a brewing
+    deck's list kept the card; it just needs another source now). Returns a
+    line per partner dropped, naming it, for the caller's message ([] when
+    there was none)."""
+    row = _require_change(conn, change_id, *OPEN_CHANGE_STATUSES)
+    _set_dropped(conn, change_id)
+    lines = []
+    partner = _open_partner(conn, row)
+    if partner:
+        _set_dropped(conn, partner["change_id"], TAKE_DROPPED_NOTE)
+        lines.append(_partner_line(conn, partner, "Also dropped"))
     conn.commit()
+    return lines
+
+
+def _set_dropped(conn, change_id, note=None):
+    """Mark one row dropped, appending `note` to its notes when given. No
+    commit — the caller's transition commits."""
+    conn.execute(
+        """UPDATE deck_changes
+              SET status='dropped', resolved_at=CURRENT_TIMESTAMP,
+                  notes = CASE
+                      WHEN ? IS NULL THEN notes
+                      WHEN notes IS NULL OR TRIM(notes) = '' THEN ?
+                      ELSE notes || ' — ' || ?
+                  END
+            WHERE change_id = ?""",
+        (note, note, note, change_id),
+    )
 
 
 def resolve_contention(conn, change_ids, keep_change_id=None, drop_change_ids=()):
@@ -1482,15 +1622,40 @@ def resolve_contention(conn, change_ids, keep_change_id=None, drop_change_ids=()
 def reopen_change(conn, change_id):
     """dropped -> idea. Refuses if the same card has since been re-added to
     the shortlist, since two open rows for one card is the state
-    add_change() exists to prevent."""
+    add_change() exists to prevent.
+
+    A take from another deck (Phase 3) comes back with a fresh promised
+    removal on the donor, checked like a new take; if the donor can't give
+    the card any more it comes back on Auto instead, and the returned line
+    says so. The donor's half of a take can't be reopened on its own — it
+    is the receiving deck's to reopen. Returns lines for the message."""
     row = _require_change(conn, change_id, "dropped")
+    if row["linked_change_id"] and q.is_donor_row(row):
+        raise ValueError(_donor_refusal(conn, row))
     if row["add_scryfall_id"] and _open_change_for_card(conn, row["deck_id"], row["add_scryfall_id"]):
         raise ValueError(f"{row['add_name'] or 'That card'} is already back on the shortlist.")
+    lines = []
+    donor_id = None
+    if row["source"] == "deck":
+        try:
+            ctx = _take_context(conn, _deck_id_by_name(conn, row["source_location"]), row["deck_id"],
+                                row["add_scryfall_id"], row["quantity"] or 1)
+            _refuse_second_take(conn, ctx)
+        except ValueError as exc:
+            conn.execute("UPDATE deck_changes SET source=NULL, source_location=NULL, linked_change_id=NULL "
+                         "WHERE change_id=?", (change_id,))
+            lines.append(f"Brought back on Auto: {exc}")
+        else:
+            donor_id = _insert_donor_removal(conn, ctx)
     conn.execute(
         "UPDATE deck_changes SET status='idea', planned_at=NULL, resolved_at=NULL WHERE change_id=?",
         (change_id,),
     )
+    if donor_id:
+        _link(conn, donor_id, change_id)
+        lines.append(f"{row['source_location']}'s copy is promised again.")
     conn.commit()
+    return lines
 
 
 def _move_outcome(moves_out, moves_in):
@@ -1542,8 +1707,37 @@ def apply_change(conn, change_id, add_scryfall_id=None):
     unexpected failure part-way (a database error, not one of the checks
     above) can leave the deck changed while the row is still 'planned'. The
     checks above run first precisely so that the expected failures happen
-    before anything is touched."""
+    before anything is touched.
+
+    Phase 3: half of a take from another deck applies its open partner too,
+    removal first, with both sides checked before either is written — see
+    _apply_pair(). Its outcome adds "pair": {"card", "from_deck", "to_deck",
+    "held", "partner_id"}."""
     row = _require_change(conn, change_id, "planned")
+    partner = _open_partner(conn, row)
+    if partner is not None:
+        return _apply_pair(conn, row, partner, add_scryfall_id)
+    return _execute_apply(conn, _prepare_apply(conn, row, add_scryfall_id))
+
+
+def _removal_count(conn, row, deck_state):
+    """Copies a planned removal takes off its deck's list. A take's donor
+    half (Phase 3) gives up only the copies taken — Gisa running Rats ×4
+    and handing two over keeps two. Any other removal, a dismantle's
+    included, takes the whole entry: a dismantle's row may carry fewer
+    copies than the list did (see stage_dismantle())."""
+    listed = _deck_card_quantity(conn, row["deck_id"], row["remove_scryfall_id"]) or 0
+    quantity = row["quantity"] or 1
+    if row.get("linked_change_id") and deck_state != "dismantled":
+        return min(quantity, listed)
+    return max(quantity, listed)
+
+
+def _prepare_apply(conn, row, add_scryfall_id=None, donor_removing=0):
+    """apply_change()'s checks for one row, raising before anything is
+    written; returns what _execute_apply() needs. `donor_removing` is how
+    many copies the donor's half of a pair is about to give up, for a
+    receiving row's "can the donor hand it over" check."""
     add_sid = row["add_scryfall_id"] or add_scryfall_id
     remove_sid = row["remove_scryfall_id"]
     # An add side that exists but hasn't resolved to a printing is an error,
@@ -1554,23 +1748,32 @@ def apply_change(conn, change_id, add_scryfall_id=None):
         raise ValueError("The card to add isn't linked to a printing yet.")
 
     deck_id = row["deck_id"]
-    deck_name = conn.execute("SELECT name FROM decks WHERE deck_id=?", (deck_id,)).fetchone()[0]
-    add_card_name = _card_name(conn, add_sid) or row["add_name"]
-    remove_card_name = _card_name(conn, remove_sid) or row["remove_name"]
+    deck_name, deck_state = _deck_name_and_state(conn, deck_id)
     quantity = row["quantity"] or 1
-    # Phase 6 rows name their destination; everything older means storage.
-    dest = (row["dest_location"] if "dest_location" in row else None) or DEFAULT_LOCATION
+    ctx = {
+        "row": row, "deck_id": deck_id, "deck_name": deck_name, "add_sid": add_sid,
+        "remove_sid": remove_sid, "quantity": quantity,
+        "add_card_name": _card_name(conn, add_sid) or row["add_name"],
+        "remove_card_name": _card_name(conn, remove_sid) or row["remove_name"],
+        # Phase 6 rows name their destination; everything older means storage.
+        "dest": (row["dest_location"] if "dest_location" in row else None) or DEFAULT_LOCATION,
+        "cut_count": 0,
+    }
 
     if remove_sid and _deck_card_quantity(conn, deck_id, remove_sid) is None:
         raise ValueError(
-            f"{remove_card_name} is no longer in this deck's mainboard, so there is nothing to "
+            f"{ctx['remove_card_name']} is no longer in this deck's mainboard, so there is nothing to "
             "replace. Send it back to an idea or drop it."
         )
+    if remove_sid and not add_sid:
+        ctx["cut_count"] = _removal_count(conn, row, deck_state)
 
-    # A chosen storage Location (Phase 2) is checked before anything is
-    # written, so one that has run dry since the row was saved refuses the
-    # apply cleanly instead of leaving the list changed and nothing sleeved.
+    # A chosen storage Location (Phase 2) or donor deck (Phase 3) is checked
+    # before anything is written, so one that can't supply the copy any more
+    # refuses the apply cleanly instead of leaving the list changed and
+    # nothing sleeved.
     source, source_location = (row["source"], row["source_location"]) if add_sid else (None, None)
+    ctx["source"], ctx["source_location"] = source, source_location
     if source:
         list_after = (q.deck_list_quantity(conn, deck_id, add_sid)
                       - (_deck_card_quantity(conn, deck_id, add_sid) or 0) + quantity)
@@ -1578,23 +1781,33 @@ def apply_change(conn, change_id, add_scryfall_id=None):
                 q.oracle_ids_for_card(conn, scryfall_id=remove_sid)
                 == q.oracle_ids_for_card(conn, scryfall_id=add_sid)):
             list_after -= _deck_card_quantity(conn, deck_id, remove_sid) or 0
-        _check_stock(conn, deck_id, add_sid, list_after, source_location)
+        if source == "deck":
+            _check_deck_stock(conn, deck_id, add_sid, list_after, source_location, donor_removing)
+        else:
+            _check_stock(conn, deck_id, add_sid, list_after, source_location)
+    return ctx
 
+
+def _execute_apply(conn, ctx):
+    """apply_change()'s writes for one row _prepare_apply() checked."""
+    row, deck_id, deck_name = ctx["row"], ctx["deck_id"], ctx["deck_name"]
+    add_sid, remove_sid, quantity = ctx["add_sid"], ctx["remove_sid"], ctx["quantity"]
+    change_id = row["change_id"]
+    source, source_location = ctx["source"], ctx["source_location"]
     if add_sid and remove_sid:
         outcome = execute_swap(
             conn, deck_id, deck_name,
-            remove_scryfall_id=remove_sid, remove_card_name=remove_card_name,
-            add_scryfall_id=add_sid, add_card_name=add_card_name, quantity=quantity,
-            default_location=dest, reason="apply", change_id=change_id,
+            remove_scryfall_id=remove_sid, remove_card_name=ctx["remove_card_name"],
+            add_scryfall_id=add_sid, add_card_name=ctx["add_card_name"], quantity=quantity,
+            default_location=ctx["dest"], reason="apply", change_id=change_id,
             source=source, source_location=source_location,
         )
     elif remove_sid:
-        # Everything the list ran comes out (a dismantle's removal row may
-        # carry fewer copies than the list did — see stage_dismantle()).
-        cut_qty = max(quantity, _deck_card_quantity(conn, deck_id, remove_sid) or 0)
-        _delete_deck_card(conn, deck_id, remove_sid)
-        outcome = _move_outcome(unsleeve_from_deck(conn, deck_id, remove_sid, cut_qty, dest=dest,
+        cut = ctx["cut_count"]
+        _reduce_deck_card(conn, deck_id, remove_sid, cut)
+        outcome = _move_outcome(unsleeve_from_deck(conn, deck_id, remove_sid, cut, dest=ctx["dest"],
                                                    reason="apply", change_id=change_id), [])
+        _drop_promises(conn, deck_id, remove_sid)
     else:
         _put_deck_card(conn, deck_id, add_sid, quantity)
         outcome = _move_outcome([], sleeve_into_deck(conn, deck_id, add_sid, quantity,
@@ -1606,10 +1819,49 @@ def apply_change(conn, change_id, add_scryfall_id=None):
            SET status='applied', resolved_at=CURRENT_TIMESTAMP,
                add_scryfall_id=?, add_name=?, remove_name=?
            WHERE change_id=?""",
-        (add_sid, add_card_name, remove_card_name, change_id),
+        (add_sid, ctx["add_card_name"], ctx["remove_card_name"], change_id),
     )
     conn.commit()
     return outcome
+
+
+def _apply_pair(conn, row, partner, add_scryfall_id=None):
+    """Apply both open halves of a take (Phase 3), whichever was asked for.
+
+    The receiving half has to be planned — an idea there isn't a decision
+    yet, so the pair is refused with a reason naming that deck. Then:
+
+      - the receiver is BREWING: only its add applies (the brew's list gains
+        the card), and the donor's removal stays planned, so Gisa keeps its
+        copy until the brew is built — the same lopsided pair a direct take
+        on a brewing deck writes.
+      - otherwise both apply, the donor's removal first: its copy moves
+        donor → receiver with no stop in the box (dest_location is the
+        receiving deck), and the receiver's sleeve step finds it already
+        there. Both rows are checked before either is written.
+
+    Returns the receiver's outcome with the donor's moves in front and
+    "pair" describing it."""
+    donor, receiver = (row, partner) if q.is_donor_row(row) else (partner, row)
+    receiver_add = add_scryfall_id if receiver is row else None
+    from_deck = _deck_name_and_state(conn, donor["deck_id"])[0]
+    to_deck, to_state = _deck_name_and_state(conn, receiver["deck_id"])
+    card = receiver["add_name"] or _card_name(conn, receiver["add_scryfall_id"]) or donor["remove_name"]
+    if receiver["status"] != "planned":
+        raise ValueError(f"{card}: {to_deck}'s side of this take is still an idea — plan it on "
+                         f"{to_deck} first, or drop it.")
+    pair = {"card": card, "from_deck": from_deck, "to_deck": to_deck, "held": False,
+            "partner_id": partner["change_id"]}
+    if to_state == "brewing":
+        outcome = _execute_apply(conn, _prepare_apply(conn, receiver, receiver_add))
+        pair["held"] = True
+        return dict(outcome, pair=pair)
+    d_ctx = _prepare_apply(conn, donor)
+    r_ctx = _prepare_apply(conn, receiver, receiver_add, donor_removing=d_ctx["cut_count"])
+    out_d = _execute_apply(conn, d_ctx)
+    out_r = _execute_apply(conn, r_ctx)
+    return dict(out_r, moved_out=out_d["moved_out"] or out_r["moved_out"],
+                moves=out_d["moves"] + out_r["moves"], pair=pair)
 
 
 def apply_changes(conn, change_ids, resolve_add=None):
@@ -1619,17 +1871,23 @@ def apply_changes(conn, change_ids, resolve_add=None):
     without it such a row just fails with a clear message.
 
     Returns one dict per change: {"change_id", "ok", "add_name", "remove_name",
-    "was_new", "outcome", "moves", "error"}. `outcome` is execute_swap's
-    result; `moves` is its move list ([] on failure), for finish_edit()."""
+    "was_new", "outcome", "moves", "error", "pair"}. `outcome` is execute_swap's
+    result; `moves` is its move list ([] on failure), for finish_edit().
+
+    Phase 3: a take's two halves apply together, so a batch naming both gets
+    ONE result for the pair (`pair` from apply_change(), None otherwise) —
+    the second half is skipped, not reported as "already applied"."""
     rows = [get_change(conn, cid) for cid in change_ids]
     rows = sorted((r for r in rows if r), key=lambda r: (r["planned_at"] or r["created_at"], r["change_id"]))
-    results = []
+    results, done = [], set()
     for row in rows:
+        if row["change_id"] in done:
+            continue
         result = {
             "change_id": row["change_id"], "ok": False,
             "add_name": row["add_name"] or _card_name(conn, row["add_scryfall_id"]),
             "remove_name": row["remove_name"] or _card_name(conn, row["remove_scryfall_id"]),
-            "was_new": False, "outcome": None, "moves": [], "error": None,
+            "was_new": False, "outcome": None, "moves": [], "error": None, "pair": None,
         }
         try:
             resolved = None
@@ -1645,12 +1903,361 @@ def apply_changes(conn, change_ids, resolve_add=None):
                     raise ValueError(err)
             result["outcome"] = apply_change(conn, row["change_id"], add_scryfall_id=resolved)
             result["moves"] = result["outcome"]["moves"]
+            result["pair"] = result["outcome"].get("pair")
+            if result["pair"]:
+                # Applied with it — or, for a brew, deliberately left
+                # planned, which applying it here as well would undo.
+                done.add(result["pair"]["partner_id"])
             result["ok"] = True
         except ValueError as exc:
             result["error"] = str(exc)
         results.append(result)
     return results
 
+
+# ------------------------------------------------------------------
+# Taking a card from another deck (EDIT_FLOW_PLAN.md Phase 3).
+#
+# A take is a linked PAIR of deck_changes rows, each naming the other in
+# linked_change_id:
+#
+#   donor half     a removal on the deck giving the card up (no add side),
+#                  dest_location = the receiving deck, so applying it moves
+#                  the lot donor → receiver with no stop in the box
+#   receiving half an add on the deck getting it, source='deck',
+#                  source_location = the donor
+#
+# The same shape a dismantle transfer has always written; Phase 3 makes the
+# pairing explicit instead of a matter of change_id order and a note.
+#
+# Pair rules, enforced here and in the lifecycle transitions above:
+#   - a direct take (transfer_between_decks) writes both rows applied at
+#     once — unless the receiver is brewing, when its add applies (the list
+#     changes) and the donor's removal waits, planned, for Build it
+#   - a staged take (add_linked_take) writes the receiving row as an idea or
+#     planned add and the donor's half as PLANNED, so the copy is promised
+#     (the allocator and the donor's Board both show it) from the start
+#   - applying either half applies both, removal first; dropping either
+#     drops both; an already-applied half is never touched again
+#   - a deck has at most one open take of one of its cards
+# ------------------------------------------------------------------
+TAKE_DROPPED_NOTE = "take cancelled"
+
+
+def _deck_id_by_name(conn, name):
+    row = conn.execute("SELECT deck_id FROM decks WHERE name=?", ((name or "").strip(),)).fetchone()
+    if row is None:
+        raise ValueError(f"There's no deck called {name!r}.")
+    return row[0]
+
+
+def _sleeved_in(conn, deck_name, scryfall_id):
+    return sum(qty for _c, qty, loc, _s in q.card_lots(conn, scryfall_id) if (loc or "").strip() == deck_name)
+
+
+def _spare_in_deck(conn, deck_name, scryfall_id):
+    """The lots of a card sleeved in `deck_name` that its list no longer
+    runs, trimmed to that surplus: [(collection_id, quantity, location)] —
+    what sleeve_into_deck(source="deck") may take."""
+    deck_id = _deck_id_by_name(conn, deck_name)
+    lots = [(cid, qty, loc) for cid, qty, loc, _s in q.card_lots(conn, scryfall_id)
+            if (loc or "").strip() == deck_name]
+    spare = sum(lot[1] for lot in lots) - q.deck_list_quantity(conn, deck_id, scryfall_id)
+    out = []
+    for cid, qty, loc in lots:
+        if spare <= 0:
+            break
+        take = min(qty, spare)
+        out.append((cid, take, loc))
+        spare -= take
+    return out
+
+
+def _check_deck_stock(conn, deck_id, scryfall_id, list_after, donor_name, donor_removing):
+    """The take-from-a-deck twin of _check_stock(): refuse, before anything
+    is written, when the donor can't hand over the copies this deck's list
+    will need (`list_after` minus copies already sleeved here). The donor
+    gives only what its list stops running once `donor_removing` copies come
+    off it, so a deck whose copy was never recorded as sleeved there can't
+    give one — say so, and how to fix it. Nothing to check for a brewing /
+    dismantled receiver (list only) or an untracked bulk basic."""
+    deck_name, state = _deck_name_and_state(conn, deck_id)
+    if state in q.BUILD_STATES or q.is_bulk_basic(conn, scryfall_id=scryfall_id):
+        return
+    need = list_after - _sleeved_in(conn, deck_name, scryfall_id)
+    if need <= 0:
+        return
+    donor_id = _deck_id_by_name(conn, donor_name)
+    sleeved = _sleeved_in(conn, donor_name, scryfall_id)
+    listed = q.deck_list_quantity(conn, donor_id, scryfall_id)
+    spare = sleeved - (listed - donor_removing)
+    if spare < need:
+        card = _card_name(conn, scryfall_id) or scryfall_id
+        raise ValueError(
+            f"{card}: {donor_name} has no copy to hand over — its list runs ×{listed} and only "
+            f"{sleeved} {'is' if sleeved == 1 else 'are'} recorded as sleeved there. Mark the copy as "
+            f"sleeved in {donor_name} (Workbench → Reconcile) first, or take it from storage."
+        )
+
+
+def _reduce_deck_card(conn, deck_id, scryfall_id, count):
+    """Take `count` copies of one printing off a deck's list, deleting the
+    entry when none are left. No history row — the caller logs its own."""
+    left = (_deck_card_quantity(conn, deck_id, scryfall_id) or 0) - int(count)
+    if left > 0:
+        _put_deck_card(conn, deck_id, scryfall_id, left)
+    else:
+        _delete_deck_card(conn, deck_id, scryfall_id)
+
+
+def _open_partner(conn, row):
+    """The other half of a take, when it is still idea/planned, else None."""
+    linked = row.get("linked_change_id") if row else None
+    partner = get_change(conn, linked) if linked else None
+    return partner if partner and partner["status"] in OPEN_CHANGE_STATUSES else None
+
+
+def _partner_line(conn, partner, verb):
+    """"Also dropped Gisa's side: Sol Ring (it was going to Prosper)." for a
+    pair transition's message."""
+    deck = _deck_name_and_state(conn, partner["deck_id"])[0]
+    if q.is_donor_row(partner):
+        card = partner["remove_name"] or _card_name(conn, partner["remove_scryfall_id"])
+        return f"{verb} {deck}'s side of the take: {card} stays in {deck}."
+    card = partner["add_name"] or _card_name(conn, partner["add_scryfall_id"])
+    return f"{verb} {deck}'s side of the take: {deck} no longer gets {card}."
+
+
+def _donor_refusal(conn, row):
+    """Why a donor's half can't be changed on its own: it's the receiving
+    deck's plan."""
+    partner = get_change(conn, row["linked_change_id"]) if row["linked_change_id"] else None
+    to_deck = _deck_name_and_state(conn, partner["deck_id"])[0] if partner else "another deck"
+    card = row["remove_name"] or _card_name(conn, row["remove_scryfall_id"]) or "This card"
+    return (f"{card} is promised to {to_deck} — change it on {to_deck}'s side, or drop it to keep "
+            "the card here.")
+
+
+def _take_context(conn, from_deck_id, to_deck_id, scryfall_id, quantity):
+    """Every check a take shares, raising before anything is written:
+    different decks, a receiver that isn't dismantled (its list is a record),
+    a donor whose list runs the card (any printing) at least `quantity`
+    times. Returns {from_deck_id, from_name, from_state, to_deck_id,
+    to_name, to_state, scryfall_id, donor_sid, quantity, card}; `donor_sid`
+    is the printing the donor's list runs, which is what its removal names."""
+    from_name, from_state = _deck_name_and_state(conn, from_deck_id)
+    to_name, to_state = _deck_name_and_state(conn, to_deck_id)
+    if from_deck_id == to_deck_id:
+        raise ValueError("A deck can't take a card from itself.")
+    if to_state == "dismantled":
+        raise ValueError(f"{to_name} is dismantled — its list is a record, so it can't take cards from "
+                         "another deck. Mark it no longer dismantled first.")
+    quantity = int(quantity or 1)
+    if quantity < 1:
+        raise ValueError("Quantity must be at least 1.")
+    card = _card_name(conn, scryfall_id) or scryfall_id
+    on_list = q.deck_list_printing(conn, from_deck_id, scryfall_id)
+    if on_list is None:
+        raise ValueError(f"{from_name} doesn't run {card}, so there's nothing to take from it.")
+    if quantity > on_list[1]:
+        raise ValueError(f"{from_name} only runs {card} ×{on_list[1]}.")
+    return {"from_deck_id": from_deck_id, "from_name": from_name, "from_state": from_state,
+            "to_deck_id": to_deck_id, "to_name": to_name, "to_state": to_state,
+            "scryfall_id": scryfall_id, "donor_sid": on_list[0], "quantity": quantity, "card": card}
+
+
+def _refuse_second_take(conn, ctx, superseding=False):
+    """A deck has at most one open removal of a card, so two decks can't
+    both queue a take of Gisa's one copy (the allocator already shows the
+    second as claimed_by before it gets here). `superseding` is a direct
+    take replacing the receiver's own staged take of the card: that pair's
+    donor half doesn't block it, and its receiving row's change_id is
+    returned for the caller to retire. Returns [] otherwise."""
+    superseded = []
+    for change_id, linked in conn.execute(
+        """SELECT change_id, linked_change_id FROM deck_changes
+           WHERE deck_id=? AND remove_scryfall_id=? AND status IN ('idea','planned')""",
+        (ctx["from_deck_id"], ctx["donor_sid"]),
+    ).fetchall():
+        partner = get_change(conn, linked) if linked else None
+        if (superseding and partner and partner["deck_id"] == ctx["to_deck_id"]
+                and partner["status"] in OPEN_CHANGE_STATUSES):
+            superseded.append(partner["change_id"])
+            continue
+        whom = (f" (promised to {_deck_name_and_state(conn, partner['deck_id'])[0]})"
+                if partner and partner["deck_id"] != ctx["from_deck_id"] else "")
+        raise ValueError(f"{ctx['card']} is already queued to leave {ctx['from_name']}{whom}. "
+                         "Drop that first, or take another card.")
+    return superseded
+
+
+def _insert_donor_removal(conn, ctx):
+    """The donor's half of a take: a PLANNED removal of the donor's own
+    printing, headed for the receiving deck. Returns its change_id; the
+    caller links it. No commit."""
+    cur = conn.execute(
+        """INSERT INTO deck_changes
+               (deck_id, status, remove_scryfall_id, remove_name, quantity, notes,
+                planned_at, dest_location)
+           VALUES (?, 'planned', ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)""",
+        (ctx["from_deck_id"], ctx["donor_sid"], _card_name(conn, ctx["donor_sid"]), ctx["quantity"],
+         f"Taken by {ctx['to_name']}", ctx["to_name"]),
+    )
+    return cur.lastrowid
+
+
+def _link(conn, a, b):
+    conn.execute("UPDATE deck_changes SET linked_change_id=? WHERE change_id=?", (b, a))
+    conn.execute("UPDATE deck_changes SET linked_change_id=? WHERE change_id=?", (a, b))
+
+
+def _drop_promises(conn, deck_id, scryfall_id):
+    """A card has just come off a deck's list (any printing): drop every open
+    removal on another deck that was still promising this deck a copy of it
+    — the leftover half of a brewing deck's take (EDIT_FLOW_PLAN.md: "if you
+    drop the card from the brew first, the planned removal on Gisa is dropped
+    with it"). Only once the list runs none of the card: a brew going from ×2
+    to ×1 still wants what was promised. Returns the change_ids dropped."""
+    if q.deck_list_quantity(conn, deck_id, scryfall_id) > 0:
+        return []
+    card_oracles = q.oracle_ids_for_card(conn, scryfall_id=scryfall_id)
+    dropped = []
+    for take in q.open_takes(conn):
+        if take["receiver_deck_id"] != deck_id or take["receiver_status"] != "applied":
+            continue
+        if card_oracles:
+            same_card = q.oracle_ids_for_card(conn, scryfall_id=take["receiver_scryfall_id"]) == card_oracles
+        else:
+            same_card = take["receiver_scryfall_id"] == scryfall_id
+        if same_card:
+            _set_dropped(conn, take["donor_change_id"], TAKE_DROPPED_NOTE)
+            dropped.append(take["donor_change_id"])
+    if dropped:
+        conn.commit()
+        logger.info("Dropped %d promised removal(s) for a card leaving deck_id=%s: %s",
+                    len(dropped), deck_id, dropped)
+    return dropped
+
+
+def transfer_between_decks(conn, from_deck_id, to_deck_id, scryfall_id, quantity=1, note=None):
+    """Take `quantity` copies of a card out of another deck, right now — the
+    direct edit behind "Comes from: Gisa" on the add bar and the Board. The
+    card leaves Gisa's list and joins this one (adding to its quantity if
+    it's already there), and Gisa's sleeved copy moves Gisa → here with no
+    stop in the box: unsleeve_from_deck(dest=<this deck>), then
+    sleeve_into_deck(source="deck"), which finds it already sleeved here.
+
+    `scryfall_id` is the printing to add here; Gisa's removal names the
+    printing Gisa's own list runs. Both decks get a linked applied history
+    row — the add with source='deck', source_location=Gisa, the removal with
+    dest_location=<this deck> — so History reads "from Gisa" / "to Prosper".
+
+    A BREWING receiver changes its list only (rule 4): its add is applied,
+    but Gisa's half is written as a linked PLANNED removal, so Gisa's list
+    and sleeves stay as they are until the brew is built, and the copy shows
+    as promised meanwhile. No stock check then — nothing moves.
+
+    Raises ValueError, writing nothing, when the decks are the same, the
+    receiver is dismantled, Gisa doesn't run the card that many times, Gisa
+    already has an open removal of it (another take, or its own planned cut),
+    or — for a non-brewing receiver — Gisa has no sleeved copy to hand over.
+    A staged take of this card on THIS deck doesn't block it: this does what
+    it planned, and it is retired (dropped, with its donor half) like any
+    idea a hand edit satisfies.
+
+    Returns {"moves", "card", "from_deck", "to_deck", "held",
+    "receiver_change_id", "donor_change_id"}; `held` is True for a brewing
+    receiver (Gisa's side waits)."""
+    ctx = _take_context(conn, from_deck_id, to_deck_id, scryfall_id, quantity)
+    superseded = _refuse_second_take(conn, ctx, superseding=True)
+    quantity = ctx["quantity"]
+    held = ctx["to_state"] == "brewing"
+    existing = _deck_card_quantity(conn, to_deck_id, scryfall_id)
+    if not held:
+        _check_deck_stock(conn, to_deck_id, scryfall_id,
+                          q.deck_list_quantity(conn, to_deck_id, scryfall_id) + quantity,
+                          ctx["from_name"], quantity)
+    new_qty = (existing or 0) + quantity
+    notes = "; ".join(n for n in (f"quantity {existing} → {new_qty}" if existing else None, note) if n) or None
+
+    for change_id in superseded:
+        # This deck's own staged take of the card: done now, by hand.
+        _set_dropped(conn, change_id, AUTO_DROP_NOTE)
+        partner = _open_partner(conn, get_change(conn, change_id))
+        if partner:
+            _set_dropped(conn, partner["change_id"], TAKE_DROPPED_NOTE)
+    _put_deck_card(conn, to_deck_id, scryfall_id, new_qty)
+    if not held:
+        _reduce_deck_card(conn, from_deck_id, ctx["donor_sid"], quantity)
+        donor_id = _log_applied_change(conn, from_deck_id, remove_scryfall_id=ctx["donor_sid"],
+                                       quantity=quantity, notes=f"taken by {ctx['to_name']}",
+                                       dest_location=ctx["to_name"])
+    receiver_id = _log_applied_change(conn, to_deck_id, add_scryfall_id=scryfall_id, quantity=quantity,
+                                      notes=notes, source="deck", source_location=ctx["from_name"])
+    if existing is None:
+        # Retires this deck's own ideas for the card — a staged take of it
+        # included, donor half and all (see the docstring).
+        _auto_drop_stale_ideas(conn, to_deck_id, scryfall_id)
+    if held:
+        donor_id = _insert_donor_removal(conn, ctx)
+    _link(conn, donor_id, receiver_id)
+    conn.commit()
+
+    moves = []
+    if not held:
+        moves += [m for m in unsleeve_from_deck(conn, from_deck_id, ctx["donor_sid"], quantity,
+                                                dest=ctx["to_name"], change_id=donor_id)
+                  # A brewing donor holds its copies back on the way out, but
+                  # the receiver's sleeve step below still takes the one it
+                  # no longer lists — so that placeholder would mislead.
+                  if m["kind"] != "brewing"]
+    moves += sleeve_into_deck(conn, to_deck_id, scryfall_id, quantity, source="deck",
+                              source_location=ctx["from_name"], change_id=receiver_id)
+    logger.info("Took %s x%d from deck_id=%d into deck_id=%d%s", ctx["card"], quantity,
+                from_deck_id, to_deck_id, " (held: receiver is brewing)" if held else "")
+    return {"moves": moves, "card": ctx["card"], "from_deck": ctx["from_name"], "to_deck": ctx["to_name"],
+            "held": held, "receiver_change_id": receiver_id, "donor_change_id": donor_id}
+
+
+def add_linked_take(conn, to_deck_id, from_deck_id, scryfall_id, quantity=1, status="idea", *,
+                    add_name=None, remove_scryfall_id=None, remove_name=None, notes=None,
+                    review_flag=0, dest_location=None):
+    """Stage a take from another deck: the receiving row (an idea, or a
+    planned add — planned needs no card to cut here, the card brings its own
+    removal) plus the donor's half, a linked PLANNED removal on the donor with
+    dest_location = the receiving deck. Written the way stage_dismantle()
+    writes its pairs, removal first. Returns the receiving row's change_id.
+
+    `remove_scryfall_id` / `remove_name` let the receiving row also name a
+    card it replaces (a swap whose incoming card comes from Gisa), with
+    `dest_location` for that cut copy.
+
+    Raises ValueError, writing nothing: everything _take_context() checks,
+    the card already on this deck's shortlist, or the donor already having
+    an open removal of it — so two decks can't both queue a take of Gisa's
+    one copy."""
+    if status not in OPEN_CHANGE_STATUSES:
+        raise ValueError("A new change starts as an idea or a planned swap.")
+    ctx = _take_context(conn, from_deck_id, to_deck_id, scryfall_id, quantity)
+    if _open_change_for_card(conn, to_deck_id, scryfall_id):
+        raise ValueError(f"{add_name or ctx['card']} is already on {ctx['to_name']}'s shortlist.")
+    _refuse_second_take(conn, ctx)
+    donor_id = _insert_donor_removal(conn, ctx)
+    cur = conn.execute(
+        """INSERT INTO deck_changes
+               (deck_id, status, add_scryfall_id, add_name, remove_scryfall_id,
+                remove_name, quantity, review_flag, notes, planned_at,
+                source, source_location, dest_location)
+           VALUES (?,?,?,?,?,?,?,?,?, CASE WHEN ? = 'planned' THEN CURRENT_TIMESTAMP END, 'deck', ?, ?)""",
+        (to_deck_id, status, scryfall_id, add_name or ctx["card"], remove_scryfall_id,
+         remove_name or _card_name(conn, remove_scryfall_id), ctx["quantity"], 1 if review_flag else 0,
+         notes, status, ctx["from_name"], dest_location),
+    )
+    _link(conn, donor_id, cur.lastrowid)
+    conn.commit()
+    logger.info("Staged take of %s x%d: deck_id=%d -> deck_id=%d (#%d / #%d)", ctx["card"],
+                ctx["quantity"], from_deck_id, to_deck_id, donor_id, cur.lastrowid)
+    return cur.lastrowid
 
 # ------------------------------------------------------------------
 # Themes
@@ -2133,6 +2740,10 @@ def execute_swap(conn, deck_id, deck_name, remove_scryfall_id, remove_card_name,
     moves_out = unsleeve_from_deck(conn, deck_id, remove_scryfall_id, cut_qty,
                                    dest=default_location or DEFAULT_LOCATION,
                                    reason=reason, change_id=change_id)
+    # The cut card may still have been promised to this deck by another
+    # (a brewing deck's take, Phase 3); after both list writes, so swapping
+    # one printing for another of it keeps the promise.
+    _drop_promises(conn, deck_id, remove_scryfall_id)
     return _move_outcome(moves_out, sleeve_into_deck(conn, deck_id, add_scryfall_id, quantity,
                                                      source=source, source_location=source_location,
                                                      reason=reason, change_id=change_id))
@@ -2195,9 +2806,14 @@ def stage_dismantle(conn, deck_id, target_deck_id=None, transfer_oracle_ids=None
       - a removal against the source, carrying dest_location = the target
         deck's name, so applying it moves the physical lot source → target
         in one step with no stop in the box
-      - an addition against the target
+      - an addition against the target, with source='deck' /
+        source_location = this deck (EDIT_FLOW_PLAN.md Phase 3)
 
-    The removal is written first so that change_id order — the order
+    and the two are linked (linked_change_id on both), so applying either
+    applies the pair, removal first, and dropping either drops both — the
+    same as a take from another deck chosen by hand.
+
+    The removal is still written first so that change_id order — the order
     apply_changes() walks a batch in — applies the cut before the add.
     Reversed, the add would try to source a copy still sleeved in the deck
     being taken apart, and would create a redundant lot for it.
@@ -2262,14 +2878,20 @@ def stage_dismantle(conn, deck_id, target_deck_id=None, transfer_oracle_ids=None
             continue
         if not removal(card, target_name):
             continue
+        # EDIT_FLOW_PLAN.md Phase 3: the add says where it comes from, and
+        # the two rows are linked, so a dismantle transfer reads "from
+        # Vilis" and applies / drops as one pair, like a take chosen by hand.
         cur = conn.execute(
             """INSERT INTO deck_changes
                    (deck_id, status, add_scryfall_id, add_name, quantity,
-                    notes, planned_at)
-               VALUES (?, 'planned', ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+                    notes, planned_at, source, source_location, linked_change_id)
+               VALUES (?, 'planned', ?, ?, ?, ?, CURRENT_TIMESTAMP, 'deck', ?, ?)""",
             (plan["target_deck_id"], card["target_scryfall_id"], card["card"],
-             card["copies"], notes or f"From {plan['deck_name']}"),
+             card["copies"], notes or f"From {plan['deck_name']}", plan["deck_name"],
+             result["removed"][-1]),
         )
+        conn.execute("UPDATE deck_changes SET linked_change_id=? WHERE change_id=?",
+                     (cur.lastrowid, result["removed"][-1]))
         result["added"].append(cur.lastrowid)
 
     for card in to_box:

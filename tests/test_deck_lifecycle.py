@@ -494,8 +494,10 @@ def test_staging_the_same_deck_twice_queues_one_cut_not_two(conn, add_card):
 
 def test_a_dismantle_claiming_a_copy_someone_else_wants_is_a_conflict(conn, add_card):
     """The dismantle's add and an unrelated shortlist row both want the one
-    copy still sleeved in Vilis. The allocator promises it to neither, and
-    plan_conflicts names the card as the decision to make."""
+    copy still sleeved in Vilis. EDIT_FLOW_PLAN.md Phase 3: the dismantle's
+    pair is a take from Vilis, so it holds the copy ("From Vilis") and the
+    other row is told it's promised; plan_conflicts still names the card as
+    the decision to make, one short."""
     vilis = _deck(conn, "Vilis")
     gisa = _deck(conn, "Gisa")
     raktres = _deck(conn, "Raktres")
@@ -515,11 +517,13 @@ def test_a_dismantle_claiming_a_copy_someone_else_wants_is_a_conflict(conn, add_
     verdicts = q.plan_availability(conn, changes)
     adds = [v for v in verdicts.values() if v["verdict"] != "no_add"]
     assert len(adds) == 2
-    assert {v["verdict"] for v in adds} == {"in_other_deck"}
-    assert all(v["claimed"] == 0 for v in adds)
+    by_deck = {v["claimed_by"][0]["deck_name"] if v["claimed_by"] else "taker": v for v in adds}
+    assert by_deck["taker"]["verdict"] == "available"
+    assert by_deck["taker"]["text"] == "From Vilis (your pick)"
+    assert by_deck["Gisa"]["verdict"] == "claimed_by"     # Raktres's row: Gisa got Vilis's copy
 
     conflicts = q.plan_conflicts(conn, changes, availability=verdicts)
-    assert [(c["card"], c["shortfall"]) for c in conflicts] == [("Feed the Swarm", 2)]
+    assert [(c["card"], c["promised_qty"], c["shortfall"]) for c in conflicts] == [("Feed the Swarm", 1, 1)]
 
 
 def test_once_the_copy_reaches_storage_the_second_claim_is_told_who_took_it(conn, add_card):

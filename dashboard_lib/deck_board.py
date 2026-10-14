@@ -15,7 +15,9 @@ Split so the logic stays testable:
     one-level undo. No Streamlit and no SQL of its own; unit-tested.
     Phase C adds the Shortlist ops (plan / unpair / apply / drop / add) to it.
     EDIT_FLOW_PLAN.md Phase 1: every op also returns the copies it moved,
-    and Undo puts them back (writes.revert_moves).
+    and Undo puts them back (writes.revert_moves). Phase 2: an add (`add`,
+    `apply`) may name a storage Location to take its copy from, and a
+    removal (`dec`, `remove`, `to_shortlist`) the Location to put it in.
   - shortlist_payload() / planned_cuts(): PURE. Phase C's Shortlist column,
     with each row's availability verdict allocated across every deck.
   - render_deck_board(): the page-facing wrapper that mounts the component.
@@ -164,6 +166,7 @@ VERDICT_BADGES = {
     "available": "available",
     "claimed_by": "elsewhere",
     "in_other_deck": "elsewhere",
+    "wrong_location": "elsewhere",
     "not_owned": "buy",
     "already_here": "neutral",
     "no_add": "neutral",
@@ -182,7 +185,23 @@ def shortlist_availability(conn, open_changes_df):
     return q.plan_availability(conn, open_changes_df)
 
 
-def shortlist_payload(shortlist_df, availability, unlinked_df=None):
+def _source_fields(row, sources):
+    """The payload fields for where an add's copy comes from (Phase 2): the
+    row's saved choice, the storage Locations that could supply it (with
+    their free counts) and what Auto would do — all the browser needs to
+    offer the choice, with nothing it could use to name a lot."""
+    saved = _clean_str(row.get("source")) if "source" in row else None
+    location = _clean_str(row.get("source_location")) if "source_location" in row else None
+    return {
+        "source": saved,
+        "source_location": location,
+        "source_options": [{"location": o["location"], "quantity": o["quantity"]}
+                           for o in (sources or {}).get("storage", [])],
+        "auto_label": fmt.auto_source_label(sources),
+    }
+
+
+def shortlist_payload(shortlist_df, availability, unlinked_df=None, sources=None):
     """The deck's open Shortlist as card dicts for the side column, ideas
     first then planned, each by name.
 
@@ -200,10 +219,14 @@ def shortlist_payload(shortlist_df, availability, unlinked_df=None):
                    the printing (deck_board.run_board_action passes a
                    resolver), the same as the Shortlist tab.
 
+    sources      : {change_id: queries.card_sources()} for the choosable
+                   source options (Phase 2); a row with none offers only Auto.
+
     `id` is the card's scryfall_id (for the image / preview); edits are keyed
     by `change_id`, since the same card can't sit on one deck's Shortlist
     twice but a change row is what the writes act on."""
     availability = availability or {}
+    sources = sources or {}
     items = []
     if shortlist_df is None:
         shortlist_df = pd.DataFrame()
@@ -233,6 +256,7 @@ def shortlist_payload(shortlist_df, availability, unlinked_df=None):
             "verdict_text": verdict.get("text") or "",
             "badge": VERDICT_BADGES.get(verdict.get("verdict"), "neutral"),
             "unlinked": False,
+            **_source_fields(row, sources.get(change_id)),
         })
     if unlinked_df is not None:
         for _, row in unlinked_df.iterrows():
@@ -256,6 +280,7 @@ def shortlist_payload(shortlist_df, availability, unlinked_df=None):
                 "verdict_text": verdict.get("text") or "",
                 "badge": VERDICT_BADGES.get(verdict.get("verdict"), "neutral"),
                 "unlinked": True,
+                **_source_fields(row, None),
             })
     items.sort(key=lambda i: (SHORTLIST_STATUS_ORDER.index(i["status"]), i["name"].lower()))
     return items
@@ -269,8 +294,12 @@ def load_board_shortlist(conn, deck_id):
     open_df = loaders.load_open_changes_df(conn, statuses=SHORTLIST_STATUS_ORDER)
     unlinked = (open_df[(open_df["deck_id"] == deck_id) & open_df["add_scryfall_id"].isna()]
                 if not open_df.empty else None)
-    return shortlist_payload(loaders.load_shortlist_df(conn, deck_id),
-                             shortlist_availability(conn, open_df), unlinked)
+    shortlist_df = loaders.load_shortlist_df(conn, deck_id)
+    # Where each card could come from (Phase 2). Live reads, like the
+    # allocator's: a lot moved on another page shows on the next run.
+    sources = {int(r["change_id"]): q.card_sources(conn, r["scryfall_id"], deck_id)
+               for _, r in shortlist_df.iterrows()}
+    return shortlist_payload(shortlist_df, shortlist_availability(conn, open_df), unlinked, sources)
 
 
 def planned_cuts(shortlist_items):
@@ -340,6 +369,17 @@ def _positive_int(value, what):
     return int(value)
 
 
+def _validate_route(action):
+    """Phase 2's optional `source` / `source_location` / `dest`: strings
+    (or absent) only. Whether a Location exists or has stock is the write
+    functions' call (writes.normalize_source / normalize_dest) — this just
+    keeps the browser from sending anything that isn't plain text."""
+    for field in ("source", "source_location", "dest"):
+        value = action.get(field)
+        if value is not None and not isinstance(value, str):
+            raise ValueError("That edit had an invalid Location — nothing changed.")
+
+
 def _validate_action(action):
     """(op, scryfall_id) for a well-formed action, else ValueError with a
     message fit for a toast. Op-specific fields are checked here too, so
@@ -352,6 +392,7 @@ def _validate_action(action):
     if op in CHANGE_OPS:
         # Keyed by the Shortlist row, not a card; `id` is not needed.
         _positive_int(action.get("change_id"), "Shortlist entry")
+        _validate_route(action)
         cut_id = action.get("cut_id")
         if op == "plan" and (not isinstance(cut_id, str) or not cut_id.strip()):
             raise ValueError("That swap didn't say which card to cut — nothing changed.")
@@ -363,6 +404,7 @@ def _validate_action(action):
         tags = action.get("tags")
         if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
             raise ValueError("That tag edit had no list of tags — nothing changed.")
+    _validate_route(action)
     if op in UNDO_OPS:
         _positive_int(action.get("qty"), "quantity")
     if op == "from_shortlist":
@@ -424,8 +466,12 @@ def _apply_card_action(conn, deck_id, op, sid, action, with_moves):
     if qty is None and op in BOARD_OPS:
         raise ValueError(f"{name} isn't in this deck any more — the board was out of date, nothing changed.")
 
+    # Where a removal's copy goes (Phase 2); an Undo never names one.
+    dest = (action.get("dest") or None) if with_moves else None
+
     def set_qty(new_qty):
-        return writes.bulk_update_deck_cards(conn, deck_id, {sid: new_qty}, with_moves=with_moves)[1]
+        return writes.bulk_update_deck_cards(conn, deck_id, {sid: new_qty}, with_moves=with_moves,
+                                             dest=dest)[1]
 
     if op == "inc":
         moves = set_qty(qty + 1)
@@ -442,7 +488,7 @@ def _apply_card_action(conn, deck_id, op, sid, action, with_moves):
         return {"message": f"{name} → ×{qty - 1}", "undo": {"op": "inc", "id": sid}, "moves": moves}
 
     if op == "remove":
-        moves = writes.remove_deck_card(conn, deck_id, sid, with_moves=with_moves)
+        moves = writes.remove_deck_card(conn, deck_id, sid, with_moves=with_moves, dest=dest)
         return {"message": f"Removed {_qty_label(name, qty)}",
                 "undo": {"op": "set_qty", "id": sid, "qty": qty}, "moves": moves}
 
@@ -451,7 +497,7 @@ def _apply_card_action(conn, deck_id, op, sid, action, with_moves):
         # failing there leaves the card on the board untouched. The idea
         # keeps the old quantity so it can come back as it was.
         change_id = writes.add_change(conn, deck_id, add_scryfall_id=sid, add_name=name, quantity=qty)
-        moves = writes.remove_deck_card(conn, deck_id, sid, with_moves=with_moves)
+        moves = writes.remove_deck_card(conn, deck_id, sid, with_moves=with_moves, dest=dest)
         return {"message": f"Moved {_qty_label(name, qty)} to the Shortlist",
                 "undo": {"op": "from_shortlist", "id": sid, "qty": qty, "change_id": change_id},
                 "moves": moves}
@@ -492,6 +538,16 @@ def _apply_card_action(conn, deck_id, op, sid, action, with_moves):
     moves = writes.add_deck_card(conn, deck_id, sid, target, with_moves=with_moves) if qty is None else []
     return {"message": f"Moved {_qty_label(name, target)} back from the Shortlist",
             "undo": {"op": "to_shortlist", "id": sid}, "moves": moves}
+
+
+def _route_of(action, change):
+    """(source, source_location) for an add: the action's when it names
+    one (the browser's "auto" or absent-with-key means Auto), else the
+    change row's saved choice."""
+    if "source" in action:
+        source = action.get("source")
+        return (None, None) if source in (None, "", "auto") else (source, action.get("source_location"))
+    return change.get("source"), change.get("source_location")
 
 
 def _card_label(conn, deck_id, scryfall_id, fallback):
@@ -544,13 +600,17 @@ def _apply_change_action(conn, deck_id, op, action, resolve_add=None, with_moves
             # add_deck_card would quietly bump the quantity instead.
             raise ValueError(f"{add_name} is already in the deck — drop the idea instead. Nothing changed.")
         qty = change["quantity"] or 1
-        moves = writes.add_deck_card(conn, deck_id, sid, qty, with_moves=with_moves)
+        # A choice made in the menu wins; otherwise the idea's saved one.
+        source, location = _route_of(action, change)
+        moves = writes.add_deck_card(conn, deck_id, sid, qty, with_moves=with_moves,
+                                     source=source, source_location=location)
         # add_deck_card retires an idea it can match by printing/oracle; a
         # typed-name idea it can't, so finish the job here.
         again = writes.get_change(conn, change_id)
         if again and again["status"] in writes.OPEN_CHANGE_STATUSES:
             writes.drop_change(conn, change_id)
-        return {"message": f"Added {_qty_label(add_name, qty)} to the deck",
+        where = f" (from {location})" if source and location else ""
+        return {"message": f"Added {_qty_label(add_name, qty)} to the deck{where}",
                 "undo": {"op": "to_shortlist", "id": sid}, "moves": moves}
 
     if op == "plan":
@@ -574,7 +634,11 @@ def _apply_change_action(conn, deck_id, op, action, resolve_add=None, with_moves
 
     # apply: the same path as the Shortlist tab and the Workbench, so history
     # and collection locations move identically — including linking a
-    # name-only row's printing through resolve_add.
+    # name-only row's printing through resolve_add. A source picked in the
+    # menu is saved on the row first, so History records what was applied.
+    if "source" in action:
+        source, location = _route_of(action, change)
+        writes.update_change(conn, change_id, source=source, source_location=location)
     (result,) = writes.apply_changes(conn, [change_id], resolve_add=resolve_add)
     if not result["ok"]:
         raise ValueError(f"Couldn't apply {add_name}: {result['error']}")
@@ -747,6 +811,11 @@ def render_deck_board(cards_df, deck_meta, owned_qty, *, key, editable=False, co
             "group_options": GROUP_BY_OPTIONS,
             "type_order": BOARD_TYPE_ORDER,
             "editable": editable,
+            # Phase 2: where a removed copy can be put, and whether copies
+            # move at all (a brewing deck's edits are list-only, so the
+            # menu leaves the question out).
+            "locations": q.storage_locations(conn) if editable else [],
+            "copies_move": editable and not (loaders.load_deck_meta(conn, deck_id).get("build_state")),
         },
         # Registering a callback is what makes its field a result field.
         # group_by's does nothing: it only has to persist across reruns.

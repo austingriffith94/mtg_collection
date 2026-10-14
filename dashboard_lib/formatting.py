@@ -575,3 +575,55 @@ def safe_filename(name, max_length=150):
     cleaned = cleaned.strip().rstrip(". ")
     cleaned = cleaned[:max_length].strip()
     return cleaned or "untitled"
+
+
+# ------------------------------------------------------------------
+# Where a copy came from / went (EDIT_FLOW_PLAN.md Phase 2) — the words the
+# source picker, the Board and History share, so one choice reads the same
+# everywhere. Pure: they take queries.card_sources()'s dict / a change row.
+# ------------------------------------------------------------------
+def auto_source_label(sources):
+    """The picker's first option, saying what Auto would do right now:
+    "Auto — Box", "Auto — already sleeved here", "Auto — new copy record
+    (not owned)". Plain "Auto" when the card isn't known yet."""
+    auto = (sources or {}).get("auto") or {}
+    kind = auto.get("kind")
+    if kind == "bulk":
+        return "Auto — bulk basic, nothing moves"
+    if kind == "here":
+        return "Auto — already sleeved here"
+    if kind == "storage":
+        return f"Auto — {auto.get('location') or 'a copy with no Location'}"
+    if kind == "new":
+        return "Auto — new copy record (not owned)"
+    return "Auto"
+
+
+def source_choices(sources, locations):
+    """[(label, source, source_location), ...] for the source picker, Auto
+    first. With a known card (`sources` = queries.card_sources()) only the
+    storage Locations that hold a free copy are offered, with counts; with
+    no card yet (the add bar before a name is typed) every storage Location
+    in `locations` is, and the write itself says if one is empty."""
+    choices = [(auto_source_label(sources), None, None)]
+    if sources is None:
+        choices += [(loc, "storage", loc) for loc in locations]
+    else:
+        choices += [(f"{opt['location']} — {opt['quantity']} free", "storage", opt["location"])
+                    for opt in sources.get("storage") or []]
+    return choices
+
+
+def format_change_route(source=None, source_location=None, dest_location=None):
+    """A change row's recorded choices as a phrase for History: "from Lands
+    Box", "to Lands Box", both, or "" for a row left on Auto / Box."""
+    # A pandas NULL text column comes back as NaN, which isn't a string.
+    def text(value):
+        return value.strip() if isinstance(value, str) else ""
+
+    parts = []
+    if source == "storage" and text(source_location):
+        parts.append(f"from {text(source_location)}")
+    if text(dest_location):
+        parts.append(f"to {text(dest_location)}")
+    return " ".join(parts)

@@ -116,7 +116,8 @@ if result["history"] or result["moves"]:
             change = f"+ {h['add_card']}" if h["add_card"] else ""
             change += f"   − {h['remove_card']}" if h["remove_card"] else ""
             when = (h["resolved_at"] or "").split(" ")[0]
-            st.caption(f"{when}  {h['deck_name']}  {change}")
+            route = fmt.format_change_route(h.get("source"), h.get("source_location"), h.get("dest_location"))
+            st.caption(f"{when}  {h['deck_name']}  {change}" + (f"  ({route})" if route else ""))
     with move_col:
         st.caption("Where copies went")
         if not result["moves"]:

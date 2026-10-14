@@ -20,6 +20,12 @@ Shortlist swap — also moves the physical copies the same way
 and a pop-up names each copy moved. A brewing deck's edits change its
 list only.
 
+Where a copy comes from, and where a removed one goes, is a choice
+(Phase 2): the add bar and the Shortlist have a "Comes from" picker (Auto,
+or a storage Location holding a free copy), the Board's Add / Apply and its
+−1 / Remove menus ask the same, and the Mainboard save has "Removed copies
+go to". The choice is saved on the Shortlist row and shows in History.
+
 Card Tags (bulk-editing any tag_type across a deck's mainboard) lives
 here too, moved from the earlier standalone Tag Editor page. Deck-level
 tags were removed entirely — use description/tutors instead.
@@ -123,10 +129,13 @@ if deck_id is not None:
 # a starter lot only for what isn't owned) and returns the moves for the
 # pop-up.
 # ------------------------------------------------------------------
-def _add_card_to_deck(deck_id, name, set_code, number, qty):
+def _add_card_to_deck(deck_id, name, set_code, number, qty, source=None, source_location=None):
     """Returns (message, error, moves) — exactly one of message/error is
     set. Adding a card already on the list adds to its quantity (an "add"
-    of 1 Swamp to 30 makes 31) rather than resetting it."""
+    of 1 Swamp to 30 makes 31) rather than resetting it. `source` /
+    `source_location` are the "Comes from" pick (None = Auto); a Location
+    without enough free copies comes back as the error, with nothing
+    written."""
     if not name and not (set_code and number):
         return None, "Enter a card name, or a set code + collector number.", []
     sid, was_new, err = card_resolver.resolve_or_fetch_card(
@@ -135,9 +144,14 @@ def _add_card_to_deck(deck_id, name, set_code, number, qty):
     if err:
         return None, err, []
     existing = (q.deck_card_entry(conn, deck_id, sid) or {}).get("quantity") or 0
-    moves = writes.add_deck_card(conn, deck_id, sid, quantity=existing + qty)
+    try:
+        moves = writes.add_deck_card(conn, deck_id, sid, quantity=existing + qty,
+                                     source=source, source_location=source_location)
+    except ValueError as exc:
+        return None, str(exc), []
     return (
         f"Added {qty}x {name or sid}"
+        + (f" from {source_location}" if source and source_location else "")
         + (" (fetched fresh from Scryfall)" if was_new else "")
         + (f" — now ×{existing + qty}." if existing else "."),
         None,
@@ -153,14 +167,25 @@ def _render_add_card_form(deck_id, key_prefix, on_added=None):
         "**Add a card**",
         help="Set code + collector number picks an exact printing; leave them blank to match by name.",
     )
-    ac1, ac2, ac3, ac4 = st.columns([3, 1, 1, 1])
+    ac1, ac2, ac3, ac4, ac5 = st.columns([3, 1, 1, 1, 3])
     name = ac1.text_input("Card name", key=f"{key_prefix}_add_name")
     set_code = ac2.text_input("Set", key=f"{key_prefix}_add_set")
     number = ac3.text_input("Number", key=f"{key_prefix}_add_num")
     qty = ac4.number_input("Qty", min_value=1, value=1, step=1, key=f"{key_prefix}_add_qty")
+    # With a card already in the database the picker lists only the Locations
+    # holding a free copy, with counts; before that (or for a card yet to be
+    # fetched) it offers every storage Location and the add itself says if
+    # one is empty.
+    typed_sid = card_resolver.find_local_card(
+        conn, name=name.strip() or None, set_code=set_code.strip() or None,
+        collector_number=number.strip() or None)
+    source, source_location = cv.render_source_picker(
+        fmt.source_choices(q.card_sources(conn, typed_sid, deck_id) if typed_sid else None,
+                           q.storage_locations(conn)),
+        key=f"{key_prefix}_add_source", container=ac5)
     if st.button("➕ Add to mainboard", key=f"{key_prefix}_add_btn"):
         message, err, moves = _add_card_to_deck(
-            deck_id, name.strip(), set_code.strip(), number.strip(), int(qty)
+            deck_id, name.strip(), set_code.strip(), number.strip(), int(qty), source, source_location
         )
         if err:
             st.error(err)
@@ -742,6 +767,7 @@ with tab_main:
                 hide_index=True, width="stretch",
                 key=f"editor_{deck_id}_main_editor",
             )
+            main_dest = cv.render_dest_picker(q.storage_locations(conn), key=f"editor_{deck_id}_main_dest")
             if st.button("💾 Save mainboard changes", key=f"editor_{deck_id}_main_save"):
                 main_updates = {}
                 for _, row in main_edited.iterrows():
@@ -749,8 +775,12 @@ with tab_main:
                         main_updates[row["scryfall_id"]] = 0
                     else:
                         main_updates[row["scryfall_id"]] = int(row["Qty"]) if pd.notna(row["Qty"]) else 0
-                changed, moves = writes.bulk_update_deck_cards(conn, deck_id, main_updates)
-                cv.finish_edit({"message": f"Updated {changed} card(s).", "moves": moves})
+                try:
+                    changed, moves = writes.bulk_update_deck_cards(conn, deck_id, main_updates, dest=main_dest)
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    cv.finish_edit({"message": f"Updated {changed} card(s).", "moves": moves})
 
 # ------------------------------------------------------------------
 # Shortlist (Workbench rework, Phase 1) — replaces the separate Maybeboard
@@ -788,10 +818,32 @@ def _availability_text(availability, change_id):
     are the Workbench page's view, over the same function."""
     verdict = availability.get(change_id, {})
     icon = {
-        "available": "✅", "claimed_by": "⚠️", "in_other_deck": "📦",
+        "available": "✅", "claimed_by": "⚠️", "in_other_deck": "📦", "wrong_location": "📍",
         "not_owned": "🛒", "already_here": "↩️", "no_add": "—",
     }.get(verdict.get("verdict"), "")
     return f"{icon} {verdict.get('text', '')}".strip()
+
+
+AUTO_SOURCE = "Auto"
+
+
+def _source_label(source, location):
+    """A change row's saved source as its table cell: "Auto" or the Location."""
+    return location if source == "storage" and isinstance(location, str) and location.strip() else AUTO_SOURCE
+
+
+def _source_edit(label):
+    """The table cell back as the (source, source_location) pair to save."""
+    return (None, None) if label in (None, AUTO_SOURCE) else ("storage", label)
+
+
+def _choices_with(base, *extra):
+    """A dropdown's options plus any value a row already holds that the
+    list no longer offers — a data_editor shows an unlisted value as an
+    error, and a Location since removed from the catalog is still saved."""
+    out = list(base)
+    out += [x for x in extra if isinstance(x, str) and x and x not in out]
+    return out
 
 
 def _replace_options(main_df):
@@ -893,9 +945,15 @@ with tab_shortlist:
             sl_name = f1.text_input("Card name", key=f"editor_{deck_id}_sl_add_name")
             sl_set = f2.text_input("Set", key=f"editor_{deck_id}_sl_add_set")
             sl_num = f3.text_input("Number", key=f"editor_{deck_id}_sl_add_num")
-            f4, f5 = st.columns([2, 3])
+            f4, f5, f6 = st.columns([2, 2, 3])
             sl_replace = f4.selectbox("Replaces (optional)", replace_choices, key=f"editor_{deck_id}_sl_add_replace")
-            sl_notes = f5.text_input("Notes (optional)", key=f"editor_{deck_id}_sl_add_notes")
+            # Inside a form nothing reruns while typing, so the card isn't
+            # known yet: every storage Location is offered (applying the
+            # idea later checks the Location still has a copy).
+            sl_source, sl_source_location = cv.render_source_picker(
+                fmt.source_choices(None, q.storage_locations(conn)),
+                key=f"editor_{deck_id}_sl_add_source", container=f5)
+            sl_notes = f6.text_input("Notes (optional)", key=f"editor_{deck_id}_sl_add_notes")
             sl_submit = st.form_submit_button("➕ Add to shortlist")
         if sl_submit:
             if not sl_name.strip() and not (sl_set.strip() and sl_num.strip()):
@@ -918,6 +976,7 @@ with tab_shortlist:
                             remove_scryfall_id=target[0] if target else None,
                             remove_name=target[1] if target else None,
                             notes=_clean_text(sl_notes),
+                            source=sl_source, source_location=sl_source_location,
                         )
                     except ValueError as exc:
                         st.warning(str(exc))
@@ -932,16 +991,19 @@ with tab_shortlist:
         if ideas_df.empty:
             st.caption("No ideas yet.")
         else:
-            idea_rows, initial_labels = [], {}
+            idea_rows, initial_labels, initial_sources = [], {}, {}
+            storage_choices = q.storage_locations(conn)
             for _, r in ideas_df.iterrows():
                 card = r["add_card"] if isinstance(r["add_card"], str) else None
                 label = _initial_replace_label(r, label_by_sid, label_by_name)
                 initial_labels[int(r["change_id"])] = label
+                initial_sources[int(r["change_id"])] = _source_label(r["source"], r["source_location"])
                 idea_rows.append({
                     "change_id": int(r["change_id"]),
                     "Card": card or "(removal only)",
                     "Owned": _availability_text(availability, int(r["change_id"])),
                     "Price": float(r["price"]) if pd.notna(r["price"]) else None,
+                    "Comes from": initial_sources[int(r["change_id"])],
                     "Replaces": label,
                     "Review?": bool(r["review_flag"]),
                     "Notes": r["notes"] if isinstance(r["notes"], str) else "",
@@ -954,6 +1016,12 @@ with tab_shortlist:
                     "Card": st.column_config.TextColumn("Card", disabled=True),
                     "Owned": st.column_config.TextColumn("Owned?", disabled=True),
                     "Price": st.column_config.NumberColumn("Price", format="$%.2f", disabled=True, width="small"),
+                    "Comes from": st.column_config.SelectboxColumn(
+                        "Comes from",
+                        options=_choices_with([AUTO_SOURCE, *storage_choices], *initial_sources.values()),
+                        required=True, width="small",
+                        help="Auto, or the storage Location the copy should be taken from when this "
+                             "is applied or added."),
                     "Replaces": st.column_config.SelectboxColumn("Replaces", options=replace_choices, required=True),
                     "Review?": st.column_config.CheckboxColumn("Review?", width="small"),
                     "Notes": st.column_config.TextColumn("Notes"),
@@ -964,7 +1032,7 @@ with tab_shortlist:
                         "Drop", width="small",
                         help="Reject it. Kept in History rather than deleted."),
                 },
-                column_order=["Card", "Owned", "Price", "Replaces", "Review?", "Notes", "→ Plan", "Drop"],
+                column_order=["Card", "Owned", "Price", "Comes from", "Replaces", "Review?", "Notes", "→ Plan", "Drop"],
                 hide_index=True, width="stretch",
                 key=f"editor_{deck_id}_sl_ideas_{ver}",
             )
@@ -979,12 +1047,18 @@ with tab_shortlist:
                     if row["Replaces"] != initial_labels[cid]:
                         target = replace_map.get(row["Replaces"])
                         edit["remove_scryfall_id"], edit["remove_name"] = target if target else (None, None)
+                    if row["Comes from"] != initial_sources[cid]:
+                        edit["source"], edit["source_location"] = _source_edit(row["Comes from"])
                     updates[cid] = edit
                     if row["Drop"]:
                         to_drop.append((cid, row))
                     elif row["→ Plan"]:
                         to_plan.append((cid, row))
-                edited_n = writes.bulk_update_changes(conn, deck_id, updates)
+                try:
+                    edited_n = writes.bulk_update_changes(conn, deck_id, updates)
+                except ValueError as exc:
+                    st.error(str(exc))
+                    st.stop()
                 planned_n = dropped_n = 0
                 for cid, row in to_plan:
                     target = replace_map.get(row["Replaces"])
@@ -1017,15 +1091,21 @@ with tab_shortlist:
             main_qty = dict(zip(main_df["scryfall_id"], main_df["quantity"]))
             planned_rows = []
             net_cards = 0
+            storage_choices = q.storage_locations(conn)
+            planned_initial = {}
             for _, r in planned_df.iterrows():
                 card = r["add_card"] if isinstance(r["add_card"], str) else None
                 cut_qty = main_qty.get(r["remove_scryfall_id"])
                 net_cards += int(r["quantity"]) - int(cut_qty or 0)
+                dest_now = r["dest_location"] if isinstance(r["dest_location"], str) and r["dest_location"] else storage_choices[0]
+                planned_initial[int(r["change_id"])] = (_source_label(r["source"], r["source_location"]), dest_now)
                 planned_rows.append({
                     "change_id": int(r["change_id"]),
                     "Add": card or "",
                     "Availability": _availability_text(availability, int(r["change_id"])),
+                    "Comes from": planned_initial[int(r["change_id"])][0],
                     "Replaces": r["remove_card"] if isinstance(r["remove_card"], str) else "",
+                    "Cut goes to": dest_now,
                     "Qty": int(r["quantity"]),
                     "Check": "" if cut_qty is not None else "⚠ cut card isn't in the mainboard any more",
                     "Apply": False,
@@ -1043,7 +1123,18 @@ with tab_shortlist:
                 column_config={
                     "Add": st.column_config.TextColumn("Add", disabled=True),
                     "Availability": st.column_config.TextColumn("Availability", disabled=True),
+                    "Comes from": st.column_config.SelectboxColumn(
+                        "Comes from",
+                        options=_choices_with([AUTO_SOURCE, *storage_choices],
+                                              *(v[0] for v in planned_initial.values())),
+                        required=True, width="small"),
                     "Replaces": st.column_config.TextColumn("Replaces", disabled=True),
+                    "Cut goes to": st.column_config.SelectboxColumn(
+                        "Cut goes to",
+                        options=_choices_with(storage_choices, *(v[1] for v in planned_initial.values())),
+                        required=True, width="small",
+                        help="Where the replaced card's copy is put away when this is applied. "
+                             "A dismantle feeding another deck names that deck here."),
                     "Qty": st.column_config.NumberColumn("Qty", min_value=1, step=1, width="small"),
                     "Check": st.column_config.TextColumn("Check", disabled=True),
                     "Apply": st.column_config.CheckboxColumn("Apply", width="small"),
@@ -1051,19 +1142,32 @@ with tab_shortlist:
                         "← Idea", width="small", help="Un-stage it, keeping what it replaces."),
                     "Drop": st.column_config.CheckboxColumn("Drop", width="small"),
                 },
-                column_order=["Add", "Availability", "Replaces", "Qty", "Check", "Apply", "← Idea", "Drop"],
+                column_order=["Add", "Availability", "Comes from", "Replaces", "Cut goes to", "Qty", "Check",
+                              "Apply", "← Idea", "Drop"],
                 hide_index=True, width="stretch",
                 key=f"editor_{deck_id}_sl_planned_{ver}",
             )
 
             def _save_quantities():
-                """Qty edits made in the table, written before any action runs
-                so Apply never uses a stale quantity."""
-                qty_updates = {
-                    int(row["change_id"]): {"quantity": max(1, int(row["Qty"])) if pd.notna(row["Qty"]) else 1}
-                    for _, row in planned_edited.iterrows()
-                }
-                return writes.bulk_update_changes(conn, deck_id, qty_updates)
+                """Qty / Comes from / Cut goes to edits made in the table,
+                written before any action runs so Apply never uses a stale
+                quantity or source. A refused choice (a deck as the cut's
+                destination, say) stops the whole action with the reason."""
+                qty_updates = {}
+                for _, row in planned_edited.iterrows():
+                    cid = int(row["change_id"])
+                    edit = {"quantity": max(1, int(row["Qty"])) if pd.notna(row["Qty"]) else 1}
+                    was_source, was_dest = planned_initial[cid]
+                    if row["Comes from"] != was_source:
+                        edit["source"], edit["source_location"] = _source_edit(row["Comes from"])
+                    if row["Cut goes to"] != was_dest:
+                        edit["dest_location"] = None if row["Cut goes to"] == storage_choices[0] else row["Cut goes to"]
+                    qty_updates[cid] = edit
+                try:
+                    return writes.bulk_update_changes(conn, deck_id, qty_updates)
+                except ValueError as exc:
+                    st.error(str(exc))
+                    st.stop()
 
             def _apply(ids):
                 results = writes.apply_changes(
@@ -1118,6 +1222,8 @@ with tab_shortlist:
                         "Added": hist["add_card"],
                         "Removed": hist["remove_card"],
                         "Qty": hist["quantity"],
+                        "Route": [fmt.format_change_route(s, sl, d) for s, sl, d in
+                                  zip(hist["source"], hist["source_location"], hist["dest_location"])],
                         "Notes": hist["notes"],
                     }),
                     hide_index=True, width="stretch",

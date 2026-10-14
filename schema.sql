@@ -273,6 +273,15 @@ CREATE TABLE deck_changes (
                                      -- still-default behaviour. A dismantle feeding
                                      -- another deck sets it to that deck's name, so the
                                      -- lot moves source -> target with no stop in the box.
+    -- EDIT_FLOW_PLAN.md Phase 2: where an ADD's copy comes from. NULL = Auto (a copy
+    -- already sleeved here, then free copies in storage biggest lot first, then a
+    -- starter lot). 'storage' = take it from `source_location`, a storage Location.
+    -- Later phases add 'deck' (another deck, source_location = its name) and 'buy'.
+    -- Also written on the 'applied' rows direct edits log, so History can say
+    -- "added from Lands Box"; dest_location is likewise set there when a removal
+    -- named where its copy went.
+    source              TEXT,
+    source_location     TEXT,
     -- A row must add a card, remove one, or both — never neither.
     CHECK(add_scryfall_id IS NOT NULL OR add_name IS NOT NULL
           OR remove_scryfall_id IS NOT NULL)

@@ -150,7 +150,7 @@ def _verdict_cell(change_id):
     so the state is readable at a glance in a dense table."""
     verdict = availability.get(change_id, {})
     icon = {
-        "available": "✅", "claimed_by": "⚠️", "in_other_deck": "📦",
+        "available": "✅", "claimed_by": "⚠️", "in_other_deck": "📦", "wrong_location": "📍",
         "not_owned": "🛒", "already_here": "↩️", "no_add": "—",
     }.get(verdict.get("verdict"), "")
     return f"{icon} {verdict.get('text', '')}".strip()
@@ -307,7 +307,8 @@ if planned_df.empty:
 else:
     blocked = sum(
         1 for cid in planned_df["change_id"]
-        if availability.get(int(cid), {}).get("verdict") in ("claimed_by", "not_owned", "in_other_deck")
+        if availability.get(int(cid), {}).get("verdict") in (
+            "claimed_by", "not_owned", "in_other_deck", "wrong_location")
     )
     if blocked:
         st.caption(

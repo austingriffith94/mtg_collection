@@ -267,11 +267,15 @@ def test_a_basic_with_no_free_copy_gets_no_starter_lot(fresh):
     assert _state(c)["lots"] == []
 
 
-def test_choosing_a_source_is_refused_until_phase_two(fresh):
+def test_a_source_that_does_not_exist_yet_is_refused(fresh):
+    """Phase 2 offers storage only; taking from a deck (3) or buying (4)
+    must be refused, not saved and ignored."""
     c = fresh()
     g = _world(c, box=1, listed=1)
     with pytest.raises(ValueError, match="Auto"):
-        writes.sleeve_into_deck(c, g, RING, 1, source="storage")
+        writes.sleeve_into_deck(c, g, RING, 1, source="deck", source_location="Tuvasa")
+    with pytest.raises(ValueError, match="Location"):
+        writes.sleeve_into_deck(c, g, RING, 1, source="storage")   # no Location named
 
 
 # ------------------------------------------------------------------

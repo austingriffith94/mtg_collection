@@ -57,6 +57,13 @@ _SCHEMA_UPGRADES = [
     # feeds another deck sets it to that deck's name, which is what lets a
     # direct transfer move a lot source → target without a stop in the box.
     ("deck_changes", "dest_location", "ALTER TABLE deck_changes ADD COLUMN dest_location TEXT"),
+    # EDIT_FLOW_PLAN.md Phase 2: where an ADD's copy comes from. NULL = Auto
+    # (writes.sleeve_into_deck()'s rule), 'storage' = a chosen storage
+    # location (source_location). 'deck' (Phase 3) and 'buy' (Phase 4) join
+    # later. They sit on deck_changes so a staged idea and the applied
+    # history row a direct edit writes both carry the choice.
+    ("deck_changes", "source", "ALTER TABLE deck_changes ADD COLUMN source TEXT"),
+    ("deck_changes", "source_location", "ALTER TABLE deck_changes ADD COLUMN source_location TEXT"),
 ]
 
 # The values decks.build_state may hold. NULL (absent from this tuple) is
@@ -230,6 +237,8 @@ _SCHEMA_TABLE_UPGRADES = [
                planned_at          TIMESTAMP,
                resolved_at         TIMESTAMP,
                dest_location       TEXT,
+               source              TEXT,
+               source_location     TEXT,
                CHECK(add_scryfall_id IS NOT NULL OR add_name IS NOT NULL
                      OR remove_scryfall_id IS NOT NULL)
            )""",
@@ -877,6 +886,7 @@ def deck_changes_dataframe(conn, deck_id, statuses=("idea", "planned")):
     return pd.read_sql_query(
         f"""SELECT dc.change_id, dc.deck_id, dc.status, dc.quantity, dc.review_flag, dc.notes,
                    dc.created_at, dc.planned_at, dc.resolved_at,
+                   dc.source, dc.source_location, dc.dest_location,
                    dc.add_scryfall_id,    COALESCE(ac.name, dc.add_name)    AS add_card,
                    dc.remove_scryfall_id, COALESCE(rc.name, dc.remove_name) AS remove_card,
                    COALESCE(ac.current_price_usd,
@@ -920,6 +930,7 @@ def open_changes_dataframe(conn, statuses=("planned",), deck_id=None):
         f"""SELECT dc.change_id, dc.deck_id, d.name AS deck_name, dc.status,
                    dc.quantity, dc.review_flag, dc.notes,
                    dc.created_at, dc.planned_at, dc.resolved_at,
+                   dc.source, dc.source_location, dc.dest_location,
                    dc.add_scryfall_id,    COALESCE(ac.name, dc.add_name)    AS add_card,
                    dc.remove_scryfall_id, COALESCE(rc.name, dc.remove_name) AS remove_card,
                    ac.oracle_id,
@@ -953,7 +964,7 @@ def shortlist_dataframe(conn, deck_id):
         f"""SELECT {CARD_COLUMNS}, dc.change_id, dc.status, dc.review_flag,
                    COALESCE(rc.name, dc.remove_name) AS replace_target,
                    dc.remove_scryfall_id AS replace_id, dc.quantity,
-                   dc.notes
+                   dc.notes, dc.source, dc.source_location, dc.dest_location
             FROM deck_changes dc
             JOIN cards c ON c.scryfall_id = dc.add_scryfall_id
             LEFT JOIN cards rc ON rc.scryfall_id = dc.remove_scryfall_id
@@ -1155,7 +1166,8 @@ def card_inventory_status(conn, card_name, deck_name=None, scryfall_id=None):
 # The verdicts a shortlist row can get, worst-to-best, so a table can be
 # sorted by "what needs attention". `no_add` is the degenerate case of a
 # row that removes a card without adding one.
-PLAN_VERDICTS = ("not_owned", "in_other_deck", "claimed_by", "already_here", "available", "no_add")
+PLAN_VERDICTS = ("not_owned", "wrong_location", "in_other_deck", "claimed_by", "already_here",
+                 "available", "no_add")
 
 
 def _change_sort_key(row):
@@ -1237,6 +1249,9 @@ def plan_availability(conn, changes):
       available      every wanted copy was claimed from storage
       claimed_by     short, and an EARLIER row in this queue took copies —
                      the cross-deck conflict this function exists to catch
+      wrong_location the row chose a storage Location (Phase 2) that has no
+                     free copy left, nobody took it, but another Location
+                     does: change the source, or move the copy
       in_other_deck  short, nobody else claimed it, but you own copies
                      sleeved in other decks: unsleeve one, don't buy one
       not_owned      short and you own none — a purchase (applying would
@@ -1244,7 +1259,13 @@ def plan_availability(conn, changes):
 
     A row wanting 2 copies that gets 1 is reported by the blocker for the
     copy it did NOT get (claimed=1, verdict claimed_by / in_other_deck /
-    not_owned), since that shortfall is the actionable half."""
+    not_owned), since that shortfall is the actionable half.
+
+    Phase 2: a row with source='storage' claims only from its
+    `source_location` (a row without the columns, or with source NULL, is
+    Auto, as before). A brewing deck's saved storage choices that it hasn't
+    pulled yet (brewing_claims()) are claimed before any row is walked: the
+    list has already decided them, whereas a shortlist row is only a plan."""
     rows = sorted(_rows_of(changes), key=_change_sort_key)
     deck_names = deck_name_set(conn)
     key_cache = {}
@@ -1275,11 +1296,32 @@ def plan_availability(conn, changes):
         pools[key] = {"lots": lots, "deck_holdings": deck_holdings, "owned": owned, "claims": []}
         return pools[key]
 
+    # A brewing deck's pinned-but-unpulled cards take their copy first.
+    for claim in brewing_claims(conn):
+        stub = {"add_scryfall_id": claim["scryfall_id"], "add_card": claim["card"]}
+        pool = pool_for(_card_key(conn, stub, key_cache), stub)
+        owed = claim["quantity"]
+        for lot in pool["lots"]:
+            if owed <= 0:
+                break
+            if not same_location(lot["location"], claim["location"]):
+                continue
+            take = min(lot["remaining"], owed)
+            lot["remaining"] -= take
+            owed -= take
+            if take > 0 and not any(c["deck_id"] == claim["deck_id"] and c["change_id"] is None
+                                    for c in pool["claims"]):
+                pool["claims"].append({"change_id": None, "deck_id": claim["deck_id"],
+                                       "deck_name": claim["deck_name"], "status": "brewing"})
+
     out = {}
     for row in rows:
         change_id = int(row["change_id"])
         wanted = max(1, int(row.get("quantity") or 1))
         deck_name = row.get("deck_name")
+        # A chosen storage Location (Phase 2); anything else is Auto.
+        pinned = ((row.get("source_location") or "").strip()
+                  if row.get("source") == "storage" else "")
         verdict = {
             "verdict": "no_add", "wanted": wanted, "claimed": 0, "owned_qty": 0,
             "locations": [], "lot_ids": [], "claimed_by": [], "in_other_decks": {},
@@ -1317,6 +1359,8 @@ def plan_availability(conn, changes):
         for lot in pool["lots"]:
             if remaining <= 0:
                 break
+            if pinned and not same_location(lot["location"], pinned):
+                continue
             take = min(lot["remaining"], remaining)
             if take <= 0:
                 continue
@@ -1335,6 +1379,8 @@ def plan_availability(conn, changes):
         if remaining <= 0:
             verdict["verdict"] = "available"
             verdict["text"] = "In storage: " + ", ".join(sorted(set(verdict["locations"])))
+            if pinned:
+                verdict["text"] += " (your pick)"
         else:
             # Earlier claimants only — this row's own claim is excluded.
             earlier = [c for c in pool["claims"] if c["change_id"] != change_id]
@@ -1342,8 +1388,16 @@ def plan_availability(conn, changes):
             got = f" (got {verdict['claimed']} of {wanted})" if verdict["claimed"] else ""
             if earlier:
                 verdict["verdict"] = "claimed_by"
-                who = ", ".join(f"{c['deck_name']} (#{c['change_id']})" for c in earlier)
+                who = ", ".join(
+                    f"{c['deck_name']} (#{c['change_id']})" if c["change_id"] is not None
+                    else f"{c['deck_name']} (brewing)" for c in earlier)
                 verdict["text"] = f"Claimed first by {who}{got}"
+            elif pinned and any(lot["remaining"] > 0 for lot in pool["lots"]):
+                # Free copies exist, just not in the Location this row named.
+                elsewhere = sorted({(lot["location"] or "").strip() or "location unknown"
+                                    for lot in pool["lots"] if lot["remaining"] > 0})
+                verdict["verdict"] = "wrong_location"
+                verdict["text"] = f"None free in {pinned}{got} — free in {', '.join(elsewhere)}"
             elif verdict["in_other_decks"]:
                 verdict["verdict"] = "in_other_deck"
                 who = ", ".join(f"{d} (x{n})" for d, n in verdict["in_other_decks"].items())
@@ -2183,6 +2237,151 @@ def deck_list_quantity(conn, deck_id, scryfall_id):
 
 
 # ------------------------------------------------------------------
+# Where a copy can come from (EDIT_FLOW_PLAN.md Phase 2). One set of reads
+# behind the source picker, the Board payload, writes.sleeve_into_deck()'s
+# Auto rule and the allocator, so what the picker offers, what Auto picks
+# and what actually moves can't drift apart.
+# ------------------------------------------------------------------
+# Where a removed copy goes when nothing says otherwise. writes.py's
+# DEFAULT_LOCATION is the same value (writes can't be imported from here).
+DEFAULT_STORAGE = "Box"
+
+# The `deck_changes.source` values a caller may set (NULL is Auto). 'deck'
+# (Phase 3) and 'buy' (Phase 4) are added here when they exist, so a write
+# that names one now is refused instead of saved and ignored.
+SOURCES = ("storage",)
+
+
+def same_location(a, b):
+    """Two storage Locations are the same place if they match ignoring
+    case and surrounding spaces ("lands box" is "Lands Box"). Deck names
+    are still matched exactly, as everywhere else."""
+    return (a or "").strip().casefold() == (b or "").strip().casefold()
+
+
+def storage_locations(conn):
+    """Every storage Location a copy can be taken from or put away to: the
+    catalog plus "Box" (always offered, whatever the catalog holds), minus
+    deck names — a deck as a source or destination is Phase 3's explicit
+    transfer, not a storage choice. Box first, then A-Z."""
+    found = {r[0] for r in conn.execute("SELECT location FROM location_catalog").fetchall()}
+    found.add(DEFAULT_STORAGE)
+    found -= deck_name_set(conn)
+    return sorted(found, key=lambda loc: (not same_location(loc, DEFAULT_STORAGE), loc.casefold()))
+
+
+def free_lots(conn, scryfall_id, location=None):
+    """Lots of a card (any printing) that are free to take: sleeved in no
+    deck, unlocated ones included, with copies in them. Biggest lot first —
+    the order plan_availability() allocates in and sleeve_into_deck() takes
+    in, so the copy the Workbench promised is the one that moves.
+    `location` narrows it to one storage Location (same_location()).
+    [(collection_id, quantity, location, scryfall_id), ...]"""
+    deck_names = deck_name_set(conn)
+    lots = [lot for lot in card_lots(conn, scryfall_id)
+            if (lot[2] or "").strip() not in deck_names and lot[1] > 0]
+    if location is not None:
+        lots = [lot for lot in lots if same_location(lot[2], location)]
+    return sorted(lots, key=lambda lot: (-lot[1], lot[0]))
+
+
+def card_sources(conn, scryfall_id, deck_id):
+    """The options for where one card could come from, for the source
+    picker and the Board payload. Across every printing (oracle_id), like
+    every other ownership question here. Returns:
+
+      here      copies already sleeved in THIS deck (Auto counts them first)
+      storage   [{"location", "quantity"}, ...] free copies per storage
+                Location, biggest first — what a "from storage" pick can
+                name. Unlocated lots are left out: there's no place to name
+                (they're counted in `unlocated` and Auto still uses them)
+      unlocated free copies with no Location recorded
+      decks     [{"deck", "quantity"}, ...] copies sleeved in other decks —
+                shown now, a choosable source from Phase 3
+      price     the printing's current USD price, or None (Phase 4's Buy)
+      bulk      True for an untracked basic land: nothing is ever moved
+      auto      what Auto would do right now: {"kind": "here" | "storage" |
+                "new" | "bulk", "location": Location or None}. "new" is a
+                starter lot — a copy you don't own yet
+    """
+    deck_names = deck_name_set(conn)
+    deck_row = conn.execute("SELECT name FROM decks WHERE deck_id=?", (deck_id,)).fetchone()
+    deck_name = deck_row[0] if deck_row else None
+    here, others, per_location, unlocated = 0, {}, {}, 0
+    for _cid, qty, loc, _sid in card_lots(conn, scryfall_id):
+        place = (loc or "").strip()
+        if deck_name is not None and place == deck_name:
+            here += qty
+        elif place in deck_names:
+            others[place] = others.get(place, 0) + qty
+        elif qty > 0 and not place:
+            unlocated += qty
+        elif qty > 0:
+            per_location[place] = per_location.get(place, 0) + qty
+    bulk = is_bulk_basic(conn, scryfall_id=scryfall_id)
+    free = free_lots(conn, scryfall_id)
+    if bulk:
+        auto = {"kind": "bulk", "location": None}
+    elif here:
+        auto = {"kind": "here", "location": deck_name}
+    elif free:
+        auto = {"kind": "storage", "location": (free[0][2] or "").strip() or None}
+    else:
+        auto = {"kind": "new", "location": None}
+    price_row = conn.execute(
+        "SELECT current_price_usd FROM cards WHERE scryfall_id=?", (scryfall_id,)
+    ).fetchone()
+    return {
+        "here": here,
+        "storage": [{"location": loc, "quantity": n}
+                    for loc, n in sorted(per_location.items(), key=lambda kv: (-kv[1], kv[0].casefold()))],
+        "unlocated": unlocated,
+        "decks": [{"deck": d, "quantity": n} for d, n in sorted(others.items(), key=lambda kv: kv[0].casefold())],
+        "price": price_row[0] if price_row else None,
+        "bulk": bulk,
+        "auto": auto,
+    }
+
+
+def brewing_claims(conn):
+    """Copies a BREWING deck has promised itself from a chosen storage
+    Location but not pulled yet — what plan_availability() counts as already
+    taken, so a swap planned elsewhere can't promise the same copy.
+
+    Only a saved CHOICE claims anything: a brewing card left on Auto claims
+    nothing (as before Phase 2), because it hasn't picked a copy. The choice
+    is the card's latest applied add row (a direct edit logs one; so does
+    applying an idea). Returns [{"deck_id", "deck_name", "scryfall_id",
+    "card", "quantity", "location"}, ...] with quantity = copies the list
+    runs minus copies already sleeved there."""
+    latest = {}
+    for deck_id, sid, source, location in conn.execute(
+        """SELECT dc.deck_id, dc.add_scryfall_id, dc.source, dc.source_location
+           FROM deck_changes dc JOIN decks d ON d.deck_id = dc.deck_id
+           WHERE d.build_state = 'brewing' AND dc.status = 'applied'
+             AND dc.add_scryfall_id IS NOT NULL
+           ORDER BY dc.change_id"""
+    ).fetchall():
+        latest[(deck_id, sid)] = (source, location)
+    claims = []
+    for deck_id, deck_name, sid, qty, card in conn.execute(
+        """SELECT d.deck_id, d.name, dcd.scryfall_id, dcd.quantity, c.name
+           FROM decks d JOIN deck_cards dcd ON dcd.deck_id = d.deck_id
+           JOIN cards c ON c.scryfall_id = dcd.scryfall_id
+           WHERE d.build_state = 'brewing'"""
+    ).fetchall():
+        source, location = latest.get((deck_id, sid), (None, None))
+        if source != "storage" or not (location or "").strip():
+            continue
+        sleeved = sum(n for _c, n, loc, _s in card_lots(conn, sid) if (loc or "").strip() == deck_name)
+        owed = min(int(qty or 1), deck_list_quantity(conn, deck_id, sid) - sleeved)
+        if owed > 0:
+            claims.append({"deck_id": deck_id, "deck_name": deck_name, "scryfall_id": sid,
+                           "card": card, "quantity": owed, "location": location.strip()})
+    return claims
+
+
+# ------------------------------------------------------------------
 # The move log (EDIT_FLOW_PLAN.md Phase 6; table and column meanings in
 # schema.sql). Written only by writes.py's lot writers.
 # ------------------------------------------------------------------
@@ -2428,23 +2627,26 @@ def card_lookup(conn, name):
 
     history = []
     if oracle_id:
-        for change_id, deck_id, status, resolved_at, add_card, remove_card in conn.execute(
+        for (change_id, deck_id, status, resolved_at, add_card, remove_card,
+             source, source_location, dest) in conn.execute(
             """SELECT dc.change_id, dc.deck_id, dc.status, dc.resolved_at,
                       COALESCE(ac.name, dc.add_name) AS add_card,
-                      COALESCE(rc.name, dc.remove_name) AS remove_card
+                      COALESCE(rc.name, dc.remove_name) AS remove_card,
+                      dc.source, dc.source_location, dc.dest_location
                FROM deck_changes dc
                LEFT JOIN cards ac ON ac.scryfall_id = dc.add_scryfall_id
                LEFT JOIN cards rc ON rc.scryfall_id = dc.remove_scryfall_id
                WHERE dc.status = 'applied'
                  AND (dc.add_scryfall_id IN (SELECT scryfall_id FROM cards WHERE oracle_id = :oid)
                    OR dc.remove_scryfall_id IN (SELECT scryfall_id FROM cards WHERE oracle_id = :oid))
-               ORDER BY dc.resolved_at DESC LIMIT 10""",
+               ORDER BY dc.resolved_at DESC, dc.change_id DESC LIMIT 10""",
             {"oid": oracle_id},
         ).fetchall():
             history.append({
                 "change_id": change_id, "deck_id": deck_id,
                 "deck_name": deck_id_to_name.get(deck_id, "?"), "status": status,
                 "resolved_at": resolved_at, "add_card": add_card, "remove_card": remove_card,
+                "source": source, "source_location": source_location, "dest_location": dest,
             })
 
     demand = len(mainboard_in) + len(shortlisted_in)
@@ -2492,7 +2694,8 @@ def deck_change_history(conn, deck_id):
     Returns a list of dicts of two kinds:
 
       {"kind": "change", "change_id", "status" ('applied'|'dropped'), "date",
-       "add_card", "remove_card", "quantity", "notes"}
+       "add_card", "remove_card", "quantity", "notes", "source", "source_location",
+       "dest_location"}
       {"kind": "games", "games", "wins", "losses", "label"}
 
     A "games" row sits where the deck was played as-is: above the newest
@@ -2511,7 +2714,7 @@ def deck_change_history(conn, deck_id):
                   COALESCE(dc.resolved_at, dc.created_at) AS at,
                   COALESCE(ac.name, dc.add_name)    AS add_card,
                   COALESCE(rc.name, dc.remove_name) AS remove_card,
-                  dc.quantity, dc.notes
+                  dc.quantity, dc.notes, dc.source, dc.source_location, dc.dest_location
            FROM deck_changes dc
            LEFT JOIN cards ac ON ac.scryfall_id = dc.add_scryfall_id
            LEFT JOIN cards rc ON rc.scryfall_id = dc.remove_scryfall_id
@@ -2534,7 +2737,7 @@ def deck_change_history(conn, deck_id):
         timeline.append(games_row(*_games_between(conn, deck_id, newest_applied), "since the latest change"))
 
     prev_applied = newest_applied
-    for change_id, status, at, add_card, remove_card, qty, notes in rows:
+    for change_id, status, at, add_card, remove_card, qty, notes, source, source_location, dest in rows:
         d = day(at)
         if status == "applied":
             if d < prev_applied:
@@ -2545,6 +2748,7 @@ def deck_change_history(conn, deck_id):
         timeline.append({
             "kind": "change", "change_id": change_id, "status": status, "date": d,
             "add_card": add_card, "remove_card": remove_card, "quantity": qty, "notes": notes,
+            "source": source, "source_location": source_location, "dest_location": dest,
         })
     return timeline
 

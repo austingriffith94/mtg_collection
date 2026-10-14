@@ -19,7 +19,7 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 
 - [x] **Phase 0** — Fix what's already out of sync: deck renames and deletes, one finish-an-edit helper, quantity changes in history, the combo staleness warning. *Done 2026-10-13: every database write on every page ends in `card_view.finish_edit()` (or `stash_edit()` from a widget callback); see "As built" at the end of the phase.*
 - [x] **Phase 1** — One write path for every deck edit; physical copies move right away; a pop-up says what moved. *Done 2026-10-13: every deck edit moves copies through `writes.sleeve_into_deck()` / `unsleeve_from_deck()` and returns its moves, `card_view.show_moves()` names them, and Board Undo reverts them; see "As built" at the end of the phase.*
-- [ ] **Phase 2** — Choose where a card comes from (storage location) and where a removed card goes.
+- [x] **Phase 2** — Choose where a card comes from (storage location) and where a removed card goes. *Done 2026-10-13: `deck_changes.source` / `source_location` record where an add comes from, every add and removal takes a `source` / `dest`, `queries.card_sources()` feeds the pickers, and the allocator honors the choice; see "As built" at the end of the phase.*
 - [ ] **Phase 3** — Take a card from another deck, as a linked pair that shows on both decks.
 - [ ] **Phase 4** — Planned buys: a card can be on a deck's list while you wait to buy it.
 - [ ] **Phase 5** — Building new decks from those choices, and one place per job.
@@ -523,6 +523,122 @@ swap planned elsewhere can't promise the same copy.
 Every add lets you pick the storage location (or leave it on Auto), every
 removal lets you pick where the copy goes, and History shows both.
 
+### As built (2026-10-13)
+
+Where the build differs from, or adds to, the spec above:
+
+- **Signatures.** `sleeve_into_deck(..., source=None, source_location=None,
+  force=False, ...)` (the Phase 1 guard that refused any source is gone;
+  `source_location` sits between `source` and `force`). `add_deck_card()`
+  takes `source`, `source_location` and `dest`; `remove_deck_card()` and
+  `bulk_update_deck_cards()` take `dest`; `add_change()` takes `source`,
+  `source_location` and `dest_location`; `execute_swap()` takes `source` /
+  `source_location`. `deck_changes.source`, `source_location` and
+  `dest_location` are also editable through `update_change()` /
+  `bulk_update_changes()`.
+- **Direction matters.** An add's `source` applies only when the list grows
+  and is ignored (not even validated) when it doesn't; a `dest` applies only
+  when it shrinks. `add_deck_card()` drops the half that doesn't apply, so
+  the history row only records what the edit actually did.
+- **One validator per value.** `writes.normalize_source()` returns `(None,
+  None)` for Auto (None, `""` or `"auto"`) and otherwise `("storage",
+  <Location in the catalog's spelling>)`; `normalize_dest()` returns None or a
+  known storage Location. Both refuse a deck name (that's Phase 3's transfer)
+  and `normalize_source()` refuses `'deck'` / `'buy'` (not built), each with a
+  user-facing reason, before anything is written. `queries.SOURCES` lists the
+  sources that exist; Phases 3 and 4 add theirs there.
+- **Stock is checked before the list changes.** A chosen Location that can't
+  supply the copies a change needs raises `ValueError` ("Lands Box has 1 free
+  copy, 2 needed") with nothing written: `add_deck_card()` and
+  `apply_change()` check first (`_check_stock()`), and `sleeve_into_deck()`
+  checks again defensively. Copies already sleeved in the deck count first, as
+  on Auto, and a swap for another printing of the same card needs nothing
+  from the Location. A brewing / dismantled deck's list isn't checked (no copy
+  moves), nor is an untracked bulk basic. A chosen Location never makes a
+  starter lot.
+- **`queries.card_sources()` differs a little from the spec.** It returns
+  `here`, `storage` (Locations with free copies, biggest first, each with a
+  count), `unlocated`, `decks` (returned but not shown in the picker yet; choosable from Phase 3), `price`,
+  `bulk` and `auto` (`kind` is `here` / `storage` / `new` / `bulk`). Free
+  copies with no Location recorded are *not* offered as a pickable source —
+  there's no place to name — but Auto still uses them. The Auto pick and
+  `sleeve_into_deck()` now share `queries.free_lots()`, so the picker, Auto
+  and the allocator can't disagree on order.
+- **Storage Locations are `queries.storage_locations()`**: the catalog plus
+  Box (always), minus deck names, Box first. `same_location()` matches
+  ignoring case and spaces, so "lands box" is "Lands Box"; deck names stay an
+  exact match as everywhere else.
+- **Allocator.** `plan_availability()` reads `source` / `source_location` off
+  the row (`open_changes_dataframe()` and `deck_changes_dataframe()` now
+  select them). A row pinned to a Location claims only from it, and its text
+  ends "(your pick)". A pinned row that is short while another Location still
+  has a free copy gets a **new verdict, `wrong_location`** ("None free in
+  Lands Box — free in Box"; 📍, grouped with `elsewhere` on the Board);
+  otherwise the usual `claimed_by` / `in_other_deck` / `not_owned` apply.
+- **Brewing claims are for saved choices only.** `queries.brewing_claims()`:
+  a brewing deck's list entry whose latest applied add row is a storage pick,
+  and which isn't fully sleeved yet, claims its copy from that Location before
+  any row is walked, and shows to other rows as `claimed_by` "Gisa (brewing)"
+  (its `change_id` is None). A brewing card left on **Auto claims nothing** —
+  as before this phase — because it hasn't chosen a copy; Phase 5 can revisit
+  that when Build it reads the sources. The brewing placeholder move carries
+  `source_location`, so the pop-up reads "will be pulled from Lands Box when
+  you build the deck".
+- **History.** Applied rows from direct edits carry `source` /
+  `source_location` (an add) and `dest_location` (a removal) — only when a
+  choice was made. A staged idea's own row becomes the applied row, so it keeps
+  its choice with no extra write. `deck_change_history()`, Card Lookup's
+  history and the Shortlist History table return the three columns;
+  `formatting.format_change_route()` words them ("from Lands Box", "to
+  Binder"), shown on the Decks page History tab, Card Lookup and the Shortlist
+  tab's History table (a new Route column). `_cascade_deck_name()` also
+  follows `source_location`, but only on open rows with `source='deck'`: a
+  storage Location isn't touched by a deck rename.
+- **UI.** `card_view.render_source_picker()` / `render_dest_picker()`, built
+  from `formatting.source_choices()`: the add bar (the Board's and the
+  Mainboard tab's) lists only Locations holding a free copy, with counts, once
+  the typed card is in the database, and every Location before that; the
+  Shortlist's *Add an idea* form lists every Location (a form can't redraw
+  while typing); the Ideas and Planned tables get a **Comes from** column and
+  the Planned table a **Cut goes to** column; the Mainboard save has **Removed
+  copies go to**. A saved value that's no longer in a dropdown's list is added
+  to it rather than shown as an error.
+- **Board.** Each Shortlist item's payload carries `source`,
+  `source_location`, `source_options` and `auto_label`; the board's data carries
+  `locations` and `copies_move` (false for a brewing/dismantled deck, which
+  hides the "to…" menu items since nothing would move). **Add** and **Apply**
+  open a "taking it from…" menu (Auto first, then each Location with a free
+  copy) when there is a choice, and that click is Apply's confirmation; with
+  only Auto on offer the old flow is unchanged. The card menu gained **−1
+  to…** (only when the card is ×2 or more) and **Remove to…**, each opening a
+  "Put the copy in…" list, Box first. Triggers carry `source` /
+  `source_location` / `dest`; the server re-validates all of it. A menu pick of
+  Auto (`"source": "auto"`) overrides an idea's saved source; no `source` key
+  means "use what the idea saved". `apply` saves the picked source on the
+  row before applying, so History records what was applied. `dest` is also
+  accepted on `to_shortlist`, though the menu doesn't send it. Undo is
+  unchanged: it reverts the recorded moves, which now includes a copy put in
+  a chosen Location.
+- **Not done (deliberately):** a "to…" choice on the Workbench's contention
+  Drop (it still goes to Box); a per-row destination on the Mainboard table
+  (one selectbox for the whole save, as planned); Workbench Reconcile's
+  moves are unchanged.
+- **Tests:** `tests/test_edit_sources.py` (52 tests: the reads, a chosen
+  Location beating a bigger Box lot, refusal-before-writing, direction rules,
+  history rows, staged rows and a dry apply, the allocator including brewing
+  claims, every Board action and Undo, payload, history readers), four smoke
+  tests (add bar from a picked Location, an empty Location refused for a card
+  to be fetched, Mainboard save to a picked Location, a Shortlist tab with
+  saved choices and an unlisted saved value), one updated Phase 1 test. The
+  Board JS was run in headless Edge against a scratch database: the card menu
+  offered "−1 to…" and "Remove to…", "−1 to…" → Lands Box moved one Sol Ring
+  there and logged `dest_location`, the idea's "Add" menu listed `Auto — Box`
+  / `Box — 3 free` / `Lands Box — 1 free` and picking the last moved that copy
+  with `source='storage', source_location='Lands Box'`, a planned row showed
+  its saved "from Binder", and Apply opened its source menu. The schema
+  upgrade was also run on a copy of the real database (columns added, the
+  allocator ran over its 231 open rows with no `wrong_location`).
+
 ---
 
 ## Phase 3 — Take a card from another deck
@@ -685,6 +801,17 @@ the right deck.
   there instead of making a starter lot for it. Buy cards stay on the buy
   list. The dialog shows the full move list from `dry_run=True` as a
   **preview** before anything is written, then you confirm.
+- **Decide whether brewing cards left on Auto should claim a copy** (carried
+  over from Phase 2). Today only a saved storage pick holds a copy against
+  other plans (`queries.brewing_claims()`); an Auto card claims nothing, so
+  another deck's idea can promise the same copy and "Build it" would then
+  find it gone. Build it is the first place Auto gets resolved to a real lot
+  for a brewing deck, so look at it there: either have Auto cards claim the
+  copy Auto would pick (the same `free_lots()` order), or leave them
+  unclaimed and rely on Build it listing anything it can't pull as "to
+  pull". Weigh it against the cost: a 90-card brew would show "claimed by
+  <brew>" on a lot of other decks' ideas, so it may want a quieter badge
+  than `claimed_by`. Settle it with real use of brewing decks first.
 - **Clearing the brewing flag:** only once nothing is left to pull except
   Buy cards. A partial build leaves the deck brewing.
 - Anything that can't be pulled (a copy since taken by another plan, a
@@ -948,6 +1075,8 @@ Where the build differs from, or adds to, the spec above:
    deck go from brewing to built" on the History tab, that needs a small
    deck-event table. `deck_changes` can't hold it, because its CHECK
    requires a card.
+6. **Should a brewing card on Auto claim a copy?** Phase 2 leaves it
+   unclaimed; looked at again in Phase 5 (see there).
 
 ## Out of scope
 

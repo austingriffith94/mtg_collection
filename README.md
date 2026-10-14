@@ -732,6 +732,34 @@ deletes a starter lot the edit made (if it hasn't been touched since).
 Because hand edits now keep the collection in step, the Workbench's
 Reconcile only shows real drift.
 
+### Choosing where a copy comes from, and where it goes
+
+Since [EDIT_FLOW_PLAN.md](EDIT_FLOW_PLAN.md) Phase 2, "Auto" is the default
+rather than the only choice.
+
+- **Comes from.** The add bar (Board and Mainboard tabs), the Shortlist's
+  *Add an idea* form and its Ideas / Planned tables have a **Comes from**
+  picker: **Auto** (the rule above) or a storage Location. Once the typed card
+  is in your database, only Locations that hold a free copy are offered, with
+  counts; the first option says what Auto would do right now. On the Board,
+  an idea's **Add** and a planned swap's **Apply** open a "taking it
+  from…" menu when there's a choice (picking from it also confirms the
+  Apply). An idea saves its choice, shows "from Lands Box" on the Board, and
+  uses it when applied.
+- **Goes to.** The Mainboard save has **Removed copies go to** (default Box),
+  the Planned table has **Cut goes to**, and the Board's card menu has **−1
+  to…** and **Remove to…** (they're left out for a brewing deck, where no copy
+  moves).
+- **A Location that can't supply the copy refuses the edit** with the
+  reason and changes nothing; it never falls back to a starter lot, and a
+  deck isn't a storage Location (taking a card from another deck is a later
+  phase).
+- **History records the choice** ("from Lands Box", "to Binder") on the
+  Decks page History tab, Card Lookup and the Shortlist History table. A
+  Workbench verdict of 📍 means the idea's chosen Location has run out
+  while another still has a copy. A brewing deck remembers its picks without
+  moving anything, and other plans can't promise the copy it picked.
+
 ## Every copy has a history, and collection edits flow back to decks
 
 Since [EDIT_FLOW_PLAN.md](EDIT_FLOW_PLAN.md) Phase 6 the collection side is

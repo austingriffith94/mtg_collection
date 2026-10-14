@@ -16,10 +16,24 @@
 //                   "elsewhere"|"buy"|"neutral",unlinked}] — ideas first,
 //                   then planned; an unlinked row is a typed name (no id/img)
 //                   (deck_board.shortlist_payload); [] hides the column
+//                   Phase 2 adds per row: source ("storage" or null = Auto),
+//                   source_location, source_options [{location, quantity}]
+//                   (storage Locations holding a free copy) and auto_label
+//                   (what Auto would do right now)
+//   locations     storage Locations a removed copy can be put in, Box first
+//   copies_move   false while the deck is brewing/dismantled: edits are list
+//                   only, so the menu doesn't ask where copies go
 //   group_by      saved choice, one of group_options
 //   group_options ["Type","Mana value","Strategy tag","Color"]
 //   type_order    stack order for "Type"
 //   editable      true on the Deck Editor's Board tab only
+//
+// Where copies come from / go (EDIT_FLOW_PLAN.md Phase 2): "Add" and "Apply"
+// on a Shortlist row open a small menu (Auto first, then each Location with a
+// free copy) when there is a choice, and the card menu's "-1 to..." / "Remove
+// to..." ask where the copy is put. The pick rides on the same trigger as
+// extra fields: {source, source_location} / {dest}. Python re-validates all of
+// it; nothing here names a lot.
 //
 // Regrouping and the hover preview are pure browser work (no rerun). Sent
 // back to Python:
@@ -153,6 +167,8 @@ export default function (component) {
   const typeOrder = data.type_order || [];
   const editable = !!data.editable;
   const shortlist = data.shortlist || [];
+  const locations = data.locations || [];
+  const copiesMove = data.copies_move !== false;
   const options = data.group_options || ["Type"];
   let groupBy = options.includes(data.group_by) ? data.group_by : options[0];
 
@@ -287,13 +303,29 @@ export default function (component) {
     input.focus();
   }
 
+  // "Put it where?" for -1 / Remove: Box first (locations is sent that way),
+  // then the other storage Locations. Back returns to the card menu.
+  function showDestMenu(card, node, op, title) {
+    menu.replaceChildren(
+      el("div", "menu-title", title),
+      ...locations.map(loc => menuButton(loc, () => send({ op, id: card.id, dest: loc }))),
+      menuButton("Back", () => openMenu(card, node)),
+    );
+  }
+
   function openMenu(card, node) {
     menuCard = card;
+    // Only worth asking when copies actually move and there is a choice.
+    const askWhere = copiesMove && locations.length > 1;
     menu.replaceChildren(
       el("div", "menu-title", card.name),
       menuButton("+1", () => send({ op: "inc", id: card.id })),
       menuButton(card.qty > 1 ? "−1" : "−1 (removes it)", () => send({ op: "dec", id: card.id })),
+      ...(askWhere && card.qty > 1
+        ? [menuButton("−1 to…", () => showDestMenu(card, node, "dec", "Put the copy in…"))] : []),
       menuButton("Remove", () => send({ op: "remove", id: card.id }), "menu-danger"),
+      ...(askWhere
+        ? [menuButton("Remove to…", () => showDestMenu(card, node, "remove", "Put the copies in…"))] : []),
       menuButton("Move to Shortlist", () => send({ op: "to_shortlist", id: card.id })),
       menuButton("Tags…", () => showTagEditor(card)),
     );
@@ -332,7 +364,11 @@ export default function (component) {
     // A refused edit (stale board, toast shown) may leave `data` unchanged,
     // in which case this function never re-runs to rebuild a fresh board —
     // so don't stay inert forever. Pick mode ends with the attempt either way.
-    setTimeout(() => { root.classList.remove("saving"); if (pick) setPick(null); }, 3000);
+    setTimeout(() => {
+      root.classList.remove("saving");
+      if (pick) setPick(null);
+      if (srcMenu) { srcMenu = null; renderShortlist(); }
+    }, 3000);
   }
 
   // Esc and a click anywhere else close it. Listeners go on `root` (inside
@@ -435,11 +471,47 @@ export default function (component) {
     if (item.status === "planned" && item.replaces) {
       body.appendChild(el("div", "sl-replaces", "→ replaces " + item.replaces));
     }
-    if (editable) body.appendChild(shortlistActions(item));
+    // A saved choice shows where the copy will come from.
+    if (item.source === "storage" && item.source_location) {
+      body.appendChild(el("div", "sl-route", "from " + item.source_location));
+    }
+    if (editable) {
+      body.appendChild(shortlistActions(item));
+      if (srcMenu && srcMenu.change_id === item.change_id) body.appendChild(sourceMenu(item, srcMenu.op));
+    }
     box.appendChild(body);
     if (item.unlinked) box.title = "Name only — linked to a printing when applied";
     box.addEventListener("pointerenter", () => showPreview(previewOf(item)));
     return box;
+  }
+
+  // ---- where the copy comes from ----
+  // Open only for one Shortlist row at a time: {change_id, op}. Choosing an
+  // entry is the confirmation, so Apply's usual second click is skipped.
+  let srcMenu = null;
+
+  function hasSourceChoice(item) {
+    return (item.source_options || []).length > 0;
+  }
+
+  function toggleSourceMenu(item, op) {
+    srcMenu = srcMenu && srcMenu.change_id === item.change_id && srcMenu.op === op
+      ? null : { change_id: item.change_id, op };
+    renderShortlist();
+  }
+
+  function sourceMenu(item, op) {
+    const list = el("div", "sl-sources");
+    list.appendChild(el("div", "menu-title", op === "apply" ? "Apply, taking it from…" : "Add, taking it from…"));
+    const saved = item.source === "storage" ? item.source_location : null;
+    list.appendChild(menuButton(item.auto_label || "Auto",
+      () => commit({ op, change_id: item.change_id, source: "auto" }), saved ? "" : "menu-primary"));
+    for (const o of item.source_options) {
+      list.appendChild(menuButton(o.location + " — " + o.quantity + " free",
+        () => commit({ op, change_id: item.change_id, source: "storage", source_location: o.location }),
+        saved === o.location ? "menu-primary" : ""));
+    }
+    return list;
   }
 
   function shortlistActions(item) {
@@ -449,11 +521,17 @@ export default function (component) {
       row.appendChild(menuButton(picking ? "Cancel" : "Swap in for…", () => setPick(picking ? null : item),
         picking ? "menu-primary" : ""));
       // Straight into the deck with nothing cut (the other ways an idea
-      // leaves the Shortlist are Swap in for… and Drop).
-      row.appendChild(menuButton("Add", () => commit({ op: "add", change_id: item.change_id })));
+      // leaves the Shortlist are Swap in for… and Drop). With a choice of
+      // where to take it from, the click opens that menu instead.
+      row.appendChild(menuButton("Add", () => {
+        if (hasSourceChoice(item)) toggleSourceMenu(item, "add");
+        else commit({ op: "add", change_id: item.change_id });
+      }));
     } else {
       row.appendChild(menuButton("Unpair", () => commit({ op: "unpair", change_id: item.change_id })));
       const apply = menuButton("Apply", () => {
+        // With a choice of source, the menu it opens is the confirmation.
+        if (hasSourceChoice(item)) { toggleSourceMenu(item, "apply"); return; }
         // Two clicks: apply moves collection lots and cannot be undone.
         if (!apply.dataset.armed) {
           apply.dataset.armed = "1";

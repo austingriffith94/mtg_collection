@@ -955,3 +955,153 @@ def test_card_lookup_shows_where_copies_went(smoke_db_path, tmp_path, monkeypatc
     finally:
         st.cache_resource.clear()
         st.cache_data.clear()
+
+
+# ------------------------------------------------------------------
+# EDIT_FLOW_PLAN.md Phase 2: the source / destination pickers on the Deck
+# Editor, end to end through the page.
+# ------------------------------------------------------------------
+LANDS_BOX = ["INSERT OR IGNORE INTO location_catalog (location) VALUES ('Lands Box')"]
+
+
+def test_deck_editor_add_bar_takes_the_copy_from_the_picked_location(smoke_db_path, tmp_path, monkeypatch):
+    # Box holds the bigger lot, so Auto would use it; the pick sends the
+    # smaller Lands Box copy instead, and History keeps the choice.
+    from dashboard_lib import db
+
+    path = _signet_db(smoke_db_path, tmp_path, LANDS_BOX + [
+        "UPDATE collection SET quantity = 3 WHERE scryfall_id = 'arcane-sign-1'",
+        "INSERT INTO collection (scryfall_id, quantity, location) VALUES ('arcane-sign-1', 1, 'Lands Box')",
+    ])
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "4_Deck_Editor.py"), default_timeout=15)
+        at.session_state["current_deck_id"] = 3
+        _forget_deck_board()
+        at.run()
+        at.text_input(key="editor_3_board_add_name").set_value("Arcane Signet")
+        _forget_deck_board()
+        at.run()
+        picker = at.selectbox(key="editor_3_board_add_source")
+        assert picker.options == ["Auto — Box", "Box — 3 free", "Lands Box — 1 free"]
+        picker.select("Lands Box — 1 free")
+        _forget_deck_board()
+        at.button(key="editor_3_board_add_btn").click().run()
+        assert not at.exception
+        assert sorted(_location_of(path, "arcane-sign-1")) == ["Box", "Empty Deck"]
+        bodies = [t.body for t in at.toast]
+        assert "Added 1x Arcane Signet from Lands Box." in bodies
+        assert "Arcane Signet: Lands Box → Empty Deck" in bodies
+        row = sqlite3.connect(path).execute(
+            "SELECT source, source_location FROM deck_changes WHERE deck_id=3").fetchone()
+        assert row == ("storage", "Lands Box")
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_deck_editor_add_bar_refuses_an_empty_location_and_writes_nothing(smoke_db_path, tmp_path, monkeypatch):
+    # A card not in the database yet (it will be fetched from Scryfall on
+    # click) can't show counts, so every Location is on offer; picking one
+    # with no copy is refused with the reason and nothing is written. The
+    # fetch is faked to keep the test offline.
+    from dashboard_lib import card_resolver, db
+
+    path = _signet_db(smoke_db_path, tmp_path, LANDS_BOX)
+    monkeypatch.setattr(db, "DB_PATH", path)
+
+    def fake_fetch(conn, name=None, set_code=None, collector_number=None):
+        conn.execute("INSERT OR IGNORE INTO cards (scryfall_id, name, set_code, collector_number, oracle_id)"
+                     " VALUES ('fresh-1', 'Fresh Card', 'new', '1', 'oracle-fresh')")
+        conn.commit()
+        return "fresh-1", True, None
+
+    monkeypatch.setattr(card_resolver, "resolve_or_fetch_card", fake_fetch)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "4_Deck_Editor.py"), default_timeout=15)
+        at.session_state["current_deck_id"] = 3
+        _forget_deck_board()
+        at.run()
+        at.text_input(key="editor_3_board_add_name").set_value("Fresh Card")
+        _forget_deck_board()
+        at.run()
+        picker = at.selectbox(key="editor_3_board_add_source")
+        assert picker.options == ["Auto", "Box", "Lands Box"]
+        picker.select("Lands Box")
+        _forget_deck_board()
+        at.button(key="editor_3_board_add_btn").click().run()
+        assert not at.exception
+        assert [e.value for e in at.error] == ["Fresh Card: Lands Box has 0 free copies, 1 needed. "
+                                              "Pick another Location, or leave it on Auto."]
+        assert sqlite3.connect(path).execute("SELECT COUNT(*) FROM deck_cards WHERE deck_id=3").fetchone() == (0,)
+        assert sqlite3.connect(path).execute(
+            "SELECT COUNT(*) FROM collection WHERE scryfall_id='fresh-1'").fetchone() == (0,)
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_deck_editor_mainboard_save_puts_removed_copies_where_picked(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = _signet_db(smoke_db_path, tmp_path, LANDS_BOX + [
+        "INSERT INTO deck_cards (deck_id, scryfall_id, quantity) VALUES (3, 'arcane-sign-1', 1)",
+        "UPDATE collection SET location = 'Empty Deck' WHERE scryfall_id = 'arcane-sign-1'",
+    ])
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "4_Deck_Editor.py"), default_timeout=15)
+        at.session_state["current_deck_id"] = 3
+        _forget_deck_board()
+        at.run()
+        at.selectbox(key="editor_3_main_dest").select("Lands Box")
+        at.session_state["editor_3_main_editor"] = {
+            "edited_rows": {0: {"Delete": True}}, "added_rows": [], "deleted_rows": [],
+        }
+        _forget_deck_board()
+        at.button(key="editor_3_main_save").click().run()
+        assert not at.exception
+        assert _location_of(path, "arcane-sign-1") == ["Lands Box"]
+        assert "Arcane Signet: Empty Deck → Lands Box" in [t.body for t in at.toast]
+        assert sqlite3.connect(path).execute(
+            "SELECT dest_location FROM deck_changes WHERE deck_id=3").fetchone() == ("Lands Box",)
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_deck_editor_shortlist_tab_shows_the_saved_choices(smoke_db_path, tmp_path, monkeypatch):
+    # An idea pinned to a Location and a planned swap with its own cut
+    # destination must both render (an unlisted saved value would be an
+    # error in a data_editor SelectboxColumn) and the History tab names routes.
+    from dashboard_lib import db
+
+    path = _signet_db(smoke_db_path, tmp_path, LANDS_BOX + [
+        "INSERT INTO deck_cards (deck_id, scryfall_id, quantity) VALUES (3, 'sol-ring-cmd-1', 1)",
+        "INSERT INTO deck_changes (deck_id, status, add_scryfall_id, add_name, source, source_location)"
+        " VALUES (3, 'idea', 'arcane-sign-1', 'Arcane Signet', 'storage', 'Lands Box')",
+        "INSERT INTO deck_changes (deck_id, status, add_scryfall_id, add_name, remove_scryfall_id, remove_name,"
+        " planned_at, dest_location, source, source_location)"
+        " VALUES (3, 'planned', 'arcane-sign-1', 'Arcane Signet', 'sol-ring-cmd-1', 'Sol Ring',"
+        " CURRENT_TIMESTAMP, 'Gone Missing', 'storage', 'Removed Place')",
+        "INSERT INTO deck_changes (deck_id, status, remove_scryfall_id, remove_name, resolved_at, dest_location)"
+        " VALUES (3, 'applied', 'sol-ring-cmd-1', 'Sol Ring', CURRENT_TIMESTAMP, 'Lands Box')",
+    ])
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "4_Deck_Editor.py"), default_timeout=15)
+        at.session_state["current_deck_id"] = 3
+        _forget_deck_board()
+        at.run()
+        assert not at.exception
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()

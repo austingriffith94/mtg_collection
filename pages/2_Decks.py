@@ -949,6 +949,9 @@ def _render_history(conn, deck_id):
                 line = f"`{h['date']}`  " + "   ".join(parts)
                 if h["quantity"] and h["quantity"] > 1:
                     line += f"  ×{h['quantity']}"
+                route = fmt.format_change_route(h.get("source"), h.get("source_location"), h.get("dest_location"))
+                if route:
+                    line += f"  *({route})*"
                 if h["status"] == "dropped":
                     line = f"~~{line}~~  *(dropped)*"
                 if h["notes"]:

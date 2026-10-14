@@ -153,6 +153,10 @@
 .sl-name, .sl-replaces, .sl-verdict { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sl-name { font-weight: 600; font-size: 13px; }
 .sl-replaces { font-size: 11px; opacity: 0.8; }
+.sl-route { font-size: 11px; opacity: 0.8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Phase 2: the "take it from..." list that opens under a Shortlist row's actions. */
+.sl-sources { display: flex; flex-direction: column; gap: 3px; margin-top: 3px; align-items: stretch; }
+.sl-sources .menu-btn { text-align: left; padding: 1px 7px; font-size: 12px; }
 .sl-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 1px; }
 .sl-actions .menu-btn { padding: 1px 7px; font-size: 12px; }
 /* One line; the full reason is in the tooltip (title). */

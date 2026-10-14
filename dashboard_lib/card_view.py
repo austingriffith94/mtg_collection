@@ -167,7 +167,9 @@ def move_label(move):
     """One move as a sentence for a toast: "Sol Ring: Box → Prosper"."""
     kind = move.get("kind")
     if kind == "brewing" and move.get("direction") == "in":
-        return f"Brewing — {_card_qty(move)} will be pulled when you build the deck."
+        # Phase 2: a chosen Location is remembered with the add.
+        place = f" from {move['source_location']}" if move.get("source_location") else ""
+        return f"Brewing — {_card_qty(move)} will be pulled{place} when you build the deck."
     if kind in ("brewing", "dismantled"):
         return f"{kind.capitalize()} — {_card_qty(move)}: list only, nothing moved."
     return f"{_card_qty(move)}: {move_route(move)}"
@@ -182,6 +184,38 @@ def _moves_dialog_body(moves):
         st.markdown("\n".join(f"- {_card_qty(m)}" for m in group))
     if st.button("OK", key="_moves_dialog_ok", type="primary"):
         st.rerun()
+
+
+# ------------------------------------------------------------------
+# The source / destination pickers (EDIT_FLOW_PLAN.md Phase 2): one widget
+# per question, so the add bar, the Shortlist form and the Mainboard save
+# ask it the same way. They return the choice in the shape writes.py takes
+# — (source, source_location) / dest — with None meaning Auto / Box.
+# ------------------------------------------------------------------
+def render_source_picker(choices, key, container=None, label="Comes from"):
+    """`choices` is formatting.source_choices(): Auto first, then storage
+    Locations. Returns (source, source_location); (None, None) is Auto."""
+    container = container or st
+    labels = [c[0] for c in choices]
+    picked = container.selectbox(
+        label, labels, key=key,
+        help="Auto uses a copy already in this deck, then the biggest free lot in storage, "
+             "then makes a new copy record. Pick a Location to take it from there instead.",
+    )
+    _label, source, location = choices[labels.index(picked)] if picked in labels else choices[0]
+    return source, location
+
+
+def render_dest_picker(locations, key, container=None, label="Removed copies go to"):
+    """Where copies a save puts away go. `locations` is queries.
+    storage_locations() (Box first). Returns the Location, or None for the
+    default (Box) so History stays quiet about the usual case."""
+    container = container or st
+    picked = container.selectbox(
+        label, locations, key=key,
+        help="Only matters when this save takes copies out of the deck.",
+    )
+    return None if picked == locations[0] else picked
 
 
 def show_moves(moves):

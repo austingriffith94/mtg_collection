@@ -473,6 +473,7 @@ MOVE_REASON_LABELS = {
     "deck_edit": "deck edit", "apply": "planned change applied", "reconcile": "reconcile",
     "dismantle": "dismantle", "collection_edit": "collection edit", "import": "order import",
     "prune": "pruned", "deck_delete": "deck deleted", "purchase": "purchase",
+    "build": "built the deck",
 }
 
 
@@ -487,7 +488,11 @@ def format_collection_move(move):
     qty = move.get("quantity")
     count = f"×{qty} " if qty else ""
     when = (move.get("moved_at") or "").split(" ")[0]
-    route = f"{place(move.get('from_location'), 'new copy record')} → {place(move.get('to_location'), 'deleted')}"
+    # Phase 7: a basic land's step has no lot; its empty side is the supply.
+    supply = "basic land supply"
+    route = (f"{place(move.get('from_location'), supply)} → {place(move.get('to_location'), supply)}"
+             if move.get("bulk") else
+             f"{place(move.get('from_location'), 'new copy record')} → {place(move.get('to_location'), 'deleted')}")
     reason = MOVE_REASON_LABELS.get(move.get("reason"), move.get("reason") or "")
     return f"{when}  {count}{route} ({reason})"
 
@@ -589,7 +594,7 @@ def auto_source_label(sources):
     auto = (sources or {}).get("auto") or {}
     kind = auto.get("kind")
     if kind == "bulk":
-        return "Auto — bulk basic, nothing moves"
+        return "Basic land — nothing moves"
     if kind == "here":
         return "Auto — already sleeved here"
     if kind == "storage":
@@ -639,8 +644,12 @@ def source_choices(sources, locations, decks=()):
     (Phase 3) each other deck whose list runs it; with no card yet (the add
     bar before a name is typed, the Shortlist form) every storage Location
     in `locations` and every deck name in `decks` is, and the write itself
-    says if one can't supply it. Buy (Phase 4) is always the last choice."""
+    says if one can't supply it. Buy (Phase 4) is always the last choice —
+    except for a basic land (Phase 7), which gets only the one "nothing
+    moves" entry: there's no choice to make."""
     choices = [(auto_source_label(sources), None, None)]
+    if sources is not None and sources.get("bulk"):
+        return choices   # Phase 7: a basic land has nowhere to come from
     if sources is None:
         choices += [(loc, "storage", loc) for loc in locations]
         choices += [(deck_source_label(d), "deck", d) for d in decks]

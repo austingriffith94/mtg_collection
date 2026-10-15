@@ -709,6 +709,43 @@ def test_deck_editor_add_bar_moves_the_box_copy_and_says_so(smoke_db_path, tmp_p
         st.cache_data.clear()
 
 
+def test_deck_editor_add_bar_skips_the_picker_for_a_basic_land(smoke_db_path, tmp_path, monkeypatch):
+    # EDIT_FLOW_PLAN.md Phase 7: a typed basic land shows no "Comes from", and
+    # adding it leaves its tracked lot in Box alone.
+    from dashboard_lib import db
+
+    path = _signet_db(smoke_db_path, tmp_path, [
+        "INSERT INTO cards (scryfall_id, name, set_code, collector_number, oracle_id, type_line, cmc,"
+        " is_basic_land) VALUES ('swamp-1', 'Swamp', 'cmd', '3', 'oracle-swamp', 'Basic Land — Swamp', 0, 1)",
+        "INSERT INTO collection (scryfall_id, quantity, location) VALUES ('swamp-1', 10, 'Box')",
+    ])
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "4_Deck_Editor.py"), default_timeout=15)
+        at.session_state["current_deck_id"] = 3
+        _forget_deck_board()
+        at.run()
+        assert any(sb.key == "editor_3_board_add_source" for sb in at.selectbox)
+        at.text_input(key="editor_3_board_add_name").set_value("Swamp")
+        _forget_deck_board()
+        at.run()
+        assert not any(sb.key == "editor_3_board_add_source" for sb in at.selectbox)
+        assert "Basic land — no collection copy needed; nothing moves." in [c.value for c in at.caption]
+        at.number_input(key="editor_3_board_add_qty").set_value(4)
+        _forget_deck_board()
+        at.button(key="editor_3_board_add_btn").click().run()
+        assert not at.exception
+        assert _location_of(path, "swamp-1") == ["Box"]
+        assert sqlite3.connect(path).execute(
+            "SELECT quantity FROM deck_cards WHERE deck_id=3 AND scryfall_id='swamp-1'").fetchone() == (4,)
+        assert "Swamp ×4: basic land — not tracked in the collection" in [t.body for t in at.toast]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
 def test_deck_editor_mainboard_save_lists_every_move_in_a_dialog(smoke_db_path, tmp_path, monkeypatch):
     # Three sleeved cards deleted in one save: three moves, so a dialog
     # grouped by from → to rather than a pile of toasts.
@@ -749,32 +786,96 @@ def test_deck_editor_mainboard_save_lists_every_move_in_a_dialog(smoke_db_path, 
         st.cache_data.clear()
 
 
-def test_mark_deck_built_says_what_is_still_to_pull(smoke_db_path, tmp_path, monkeypatch):
-    # Deck 2 is brewing and its only copy of Sol Ring is in deck 1's sleeves,
-    # so one card is still to pull; clearing the flag says so.
+def _brewing_deck_2_db(smoke_db_path, tmp_path, monkeypatch, extra=()):
     from dashboard_lib import db
 
     path = str(tmp_path / "mtg_collection.db")
     shutil.copy(smoke_db_path, path)
     conn = sqlite3.connect(path)
     conn.execute("UPDATE decks SET build_state = 'brewing' WHERE deck_id = 2")
+    for sql in extra:
+        conn.execute(sql)
     conn.commit()
     conn.close()
     monkeypatch.setattr(db, "DB_PATH", path)
     st.cache_resource.clear()
     st.cache_data.clear()
+    return path
+
+
+def test_build_it_dialog_can_mark_built_and_says_what_is_still_to_pull(smoke_db_path, tmp_path, monkeypatch):
+    # Deck 2 is brewing and its only copy of Sol Ring is in deck 1's sleeves
+    # with no take planned, so one card can't be pulled. "I'll sleeve them
+    # myself" (inside the Build it dialog) still clears the flag, and says so.
+    path = _brewing_deck_2_db(smoke_db_path, tmp_path, monkeypatch)
     note = "1 card(s) are still to pull. They'll stay on Reconcile until you sleeve them."
     try:
         at = AppTest.from_file(os.path.join(PAGES_DIR, "2_Decks.py"), default_timeout=15)
         at.session_state["current_deck_id"] = 2
         at.run()
         assert not at.exception
-        assert note in [c.value for c in at.caption]
-        at.button(key="deck_2_mark_built").click().run()
+        assert not any(b.key == "deck_2_mark_built" for b in at.button)
+        at.button(key="deck_2_build_it").click().run()
+        assert not at.exception
+        assert any("can't be pulled" in w.value for w in at.warning)
+        at.button(key="deck_2_build_dialog_manual").click().run()
         assert not at.exception
         assert sqlite3.connect(path).execute(
             "SELECT build_state FROM decks WHERE deck_id=2").fetchone() == (None,)
         assert [t.body for t in at.toast] == ["Marked as built.", note]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_build_plan_groups_by_chosen_source_and_build_it_moves_the_copy(smoke_db_path, tmp_path, monkeypatch):
+    # Deck 2 (brewing) picked Sol Ring from Lands Box, and a free copy is
+    # there: the Build Plan shows the group with its own button, the dialog
+    # previews the move, and confirming sleeves the copy and clears the flag.
+    path = _brewing_deck_2_db(smoke_db_path, tmp_path, monkeypatch, extra=[
+        "INSERT INTO location_catalog (location) VALUES ('Lands Box')",
+        "UPDATE collection SET location = 'Lands Box' WHERE scryfall_id = 'sol-ring-cmd-1'",
+        "INSERT INTO deck_changes (deck_id, status, add_scryfall_id, add_name, quantity, source,"
+        " source_location, resolved_at) VALUES (2, 'applied', 'sol-ring-cmd-1', 'Sol Ring', 1, 'storage',"
+        " 'Lands Box', CURRENT_TIMESTAMP)",
+    ])
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "2_Decks.py"), default_timeout=15)
+        at.session_state["current_deck_id"] = 2
+        at.run()
+        assert not at.exception
+        assert any(e.label.startswith("Pull from storage — Lands Box") for e in at.expander)
+        assert any(b.key == "deck_2_pull_group_0" for b in at.button)
+        at.button(key="deck_2_build_it").click().run()
+        assert not at.exception
+        assert "**Lands Box → Second Deck**" in [m.value for m in at.markdown]
+        at.button(key="deck_2_build_dialog_confirm").click().run()
+        assert not at.exception
+        assert _location_of(path, "sol-ring-cmd-1") == ["Second Deck"]
+        assert sqlite3.connect(path).execute(
+            "SELECT build_state FROM decks WHERE deck_id=2").fetchone() == (None,)
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_board_shows_build_it_for_a_brewing_deck_and_builds(smoke_db_path, tmp_path, monkeypatch):
+    # The Deck Editor's Board carries the same Build it as the Decks page.
+    path = _brewing_deck_2_db(smoke_db_path, tmp_path, monkeypatch, extra=[
+        "UPDATE collection SET location = 'Box' WHERE scryfall_id = 'sol-ring-cmd-1'",
+    ])
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "4_Deck_Editor.py"), default_timeout=15)
+        at.session_state["current_deck_id"] = 2
+        _forget_deck_board()
+        at.run()
+        assert not at.exception
+        at.button(key="editor_2_board_build_it").click().run()
+        assert not at.exception
+        _forget_deck_board()
+        at.button(key="deck_2_build_dialog_confirm").click().run()
+        assert not at.exception
+        assert _location_of(path, "sol-ring-cmd-1") == ["Second Deck"]
     finally:
         st.cache_resource.clear()
         st.cache_data.clear()

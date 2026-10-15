@@ -22,9 +22,9 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] **Phase 2** — Choose where a card comes from (storage location) and where a removed card goes. *Done 2026-10-13: `deck_changes.source` / `source_location` record where an add comes from, every add and removal takes a `source` / `dest`, `queries.card_sources()` feeds the pickers, and the allocator honors the choice; see "As built" at the end of the phase.*
 - [x] **Phase 3** — Take a card from another deck, as a linked pair that shows on both decks. *Done 2026-10-13: `deck_changes.linked_change_id` pairs the donor's removal with the receiver's add, `writes.transfer_between_decks()` takes a card right away and `add_linked_take()` stages one, either half applies or drops both, and the allocator, Workbench, Board and Card Lookup all show the promise; see "As built" at the end of the phase.*
 - [x] **Phase 4** — Planned buys: a card can be on a deck's list while you wait to buy it. *Done 2026-10-14: `source='buy'` puts a card on a list with no lot, `queries.buy_list()` has four reasons, **Bought** and the order-import offer sleeve the copy in, and the Board marks it "buying"; see "As built" at the end of the phase.*
-- [ ] **Phase 5** — Building new decks from those choices, and one place per job.
+- [x] **Phase 5** — Building new decks from those choices, and one place per job. *Done 2026-10-14: `writes.build_deck()` makes a brew's moves in one batch (dry run on a database copy), the Build Plan shows sources by group with **Pull this group**, **Build it** replaces "Mark deck as built" on the Decks page and the Board, and the Advisor can stage ideas; see "As built" at the end of the phase.*
 - [x] **Phase 6** — Collection-side edits tracked and flowing back: a move log for every copy, and Collection page / order import edits that touch a deck offer to update its list. *Done 2026-10-13, ahead of Phases 2–5 (it only needed Phase 1): every lot writer logs to `collection_moves`, Card Lookup shows it, and `card_view.show_deck_sync()` asks whether a deck's list should follow; see "As built" at the end of the phase.*
-- [ ] **Phase 7** — Basic lands are generic: no collection copy needed, never pulled from or returned to storage, but every add and removal is still tracked. Final phase; depends only on Phase 1 (best done after Phase 6 so the move log can record them).
+- [x] **Phase 7** — Basic lands are generic: no collection copy needed, never pulled from or returned to storage, but every add and removal is still tracked. *Done 2026-10-14: `queries.is_basic_land()` is the one rule, a basic's add or cut returns one `bulk` move that touches no lot and is logged with `collection_moves.bulk = 1`, and no picker, buy list, Reconcile or allocator treats one as a copy; see "As built" at the end of the phase.*
 
 **Decided (2026-10-13):** a direct edit (Board, add bar, Mainboard table)
 moves the physical copy **right away**, the same way applying a planned
@@ -1080,6 +1080,75 @@ the grouped sources and the per-group buttons for a brewing deck.
 A new deck can go from empty to built with every card's source chosen,
 the Build Plan reflects those choices, and each kind of edit has one home.
 
+### As built (2026-10-14)
+
+Where the build differs from, or adds to, the spec above:
+
+- **`writes.build_deck(conn, deck_id, oracle_ids=None, dry_run=False)`**
+  returns `{deck_id, deck_name, moves, pulled, buying, to_pull, dry_run,
+  cleared}`. **The dry run is the real code on a throwaway in-memory copy of
+  the database** (`conn.backup()`), so the preview can't disagree with the
+  build — a test compares the two. `pulled` / `buying` / `to_pull` rows each
+  carry `oracle_id` (the key `deck_sourcing_plan()` uses), which is what a
+  group's **Pull this group** button passes back as `oracle_ids`.
+- **Order and sources.** Donors first: each open take whose receiver is this
+  brew (the lopsided pair) goes through `apply_change()` on the donor's half,
+  after a check that the donor isn't itself brewing and has the copy recorded
+  as sleeved (else it's reported with the Reconcile fix, and the donor is
+  untouched). Then each list entry not yet sleeved: `buy` → listed under
+  `buying`; `storage` → `sleeve_into_deck(source="storage", force=True)`,
+  all-or-nothing, a dry Location is reported; `deck` with no open take left →
+  reported, never silently falling back to Auto; Auto / no saved choice →
+  the free lots, **never a starter lot** (a deliberate difference from a
+  direct edit: build records copies you own, not copies you wish you did).
+  The saved choice is the card's latest applied add row
+  (`queries.deck_saved_sources()`). Basics are skipped. Moves are logged
+  with the new reason `build` ("built the deck").
+- **The flag clears when nothing is left** (`_left_to_build()`: no open take
+  into this deck, no non-Buy non-basic card short of its sleeves), not only
+  on a "full" build — so the last **Pull this group** finishes the job, and a
+  build with something unpullable leaves the deck brewing. Only a brewing
+  deck can be built; a dismantled or normal deck raises.
+- **UI.** `card_view.show_build_dialog()` / `build_result_message()` are the
+  shared dialog (preview grouped by from → to, buy list, every "can't be
+  pulled" with why, whether the flag will clear, **Build it** / **Cancel** /
+  **I'll sleeve them myself**), opened with the usual dialog flag. The Decks
+  page Build Plan has a "Chosen sources" section above the existing bucket
+  view (which still describes where Auto would look): a group per storage
+  Location (`Pull from storage — Lands Box`) and per donor deck, each with a
+  **Pull this group** button; the Deck Editor's Board shows a "Brewing"
+  banner with **Build it** while the deck is brewing. A group is by the
+  location a card's moves came from, so a card split across two Locations
+  sits in a combined group and its button pulls the whole card.
+- **View only.** The Decks page Cards tab's board now gets `conn` /
+  `deck_id` / `leaving`, so it shows the "buying" and "→ Prosper" badges
+  (the read-only JS already hides the buttons). Card Lookup and History
+  already showed routes (Phases 2–3).
+- **Advisor.** A verified **add** suggestion has **Add to Shortlist**
+  (`writes.add_advisor_idea()`): an idea with `notes = "Advisor: <skill>"`,
+  the suggested cut filled in as Replaces when it's on the deck's list. It
+  refuses a card not in the database, already in the deck or already on the
+  shortlist, and writes no list or collection change. A **cut** suggestion
+  has no button of its own: it shows up as the Replaces of the add it goes
+  with.
+- **Not done (deliberately):** trimming the Shortlist tab and retiring the
+  Mainboard tab. Both still hold workflows people use (planned swaps with
+  apply, bulk table saves) and the Board JS isn't something I can see in a
+  real browser from here, so removing the older surface first would be
+  removing what works for what's unchecked. The docstring now says which
+  surface is for what; trim once the Board has had real use. The Board's
+  Build it is a Streamlit banner above it, not a menu inside the JS. No
+  headless-Edge check this phase.
+- **Tests:** `tests/test_edit_build.py` (13: a picked Location beating a
+  bigger Box lot, Auto never making a starter lot, the donor copy moving
+  with no starter lot, a donor with no sleeved copy reported, dry run ==
+  real run and writes nothing, selections, flag clearing with Buy
+  outstanding, a Location that ran dry, refusals, the move-log reason, and
+  three for the Advisor idea), three smoke tests (the dialog's mark-built
+  path and its to-pull note, the Build Plan group + a confirmed build, the
+  Board banner building). The old "Mark deck as built" smoke test became the
+  first of those. 646 pass.
+
 ---
 
 ## Phase 6 — Collection-side edits, tracked and flowing back
@@ -1352,6 +1421,70 @@ only; deck-sync offers skip it.
 Adding or removing a basic land never needs a card in the collection and
 never moves one, and every such edit still appears in the deck's history,
 the pop-up and the move log.
+
+### As built (2026-10-14)
+
+Where the build differs from, or adds to, the spec above:
+
+- **`queries.is_basic_land(conn, name=None, scryfall_id=None)`** reads
+  `cards.is_basic_land` for a printing, falling back to any card of the same
+  oracle_id / name for a typed reference. `is_bulk_basic()` (the NULL-quantity
+  test) is gone: every caller asks the new rule, so the allocator, buy list,
+  `card_sources()`, `deck_sync_offers()`, `awaiting_buys()`, Build it and the
+  stock checks all agree. Reconcile, contention and the sourcing plan already
+  filtered on `is_basic_land`.
+- **The bulk move** is `writes._bulk_move()`: `{kind: "bulk", direction,
+  scryfall_id, from, to}` with the deck on one side and None ("basic land
+  supply") on the other. It replaces the old `from="bulk", to="bulk"`
+  sentinel strings. `sleeve_into_deck()` checks for a basic first, before
+  the source is even validated or the build state read (`quantity` capped at
+  the list); `unsleeve_from_deck()` takes `quantity` as what the list just
+  lost (every caller passes it). Both log one `collection_moves` row with
+  `bulk = 1`, `collection_id` NULL, and the causing `change_id`. The
+  starter-lot fallback no longer needs its own basic check.
+- **Schema:** `collection_moves.bulk INTEGER DEFAULT 0`, via
+  `_SCHEMA_UPGRADES` and in `schema.sql`. `collection_moves_for_card()`
+  returns it, and `formatting.format_collection_move()` reads a bulk row's
+  None side as "basic land supply".
+- **Ignored, not refused:** `normalize_source()` / `normalize_dest()` take
+  `scryfall_id=` and return Auto / None for a basic, whatever was sent (Buy,
+  another deck, a Location that doesn't exist). `add_deck_card()`,
+  `remove_deck_card()` and `add_change()` pass the card; `bulk_update_deck_cards()`
+  still validates its one `dest` up front (it's a real choice for the other
+  cards), then each basic drops it. So a basic's history row never carries a
+  source or destination.
+- **Pickers:** `card_sources()` returns no storage or deck options for a
+  basic (`bulk: True`), `formatting.source_choices()` then offers only
+  "Basic land — nothing moves", the add bar shows a caption instead of the
+  picker once a basic is typed, and the Board's Shortlist row gets
+  `can_buy: false` with no options, so Add / Apply commit straight away. Each
+  board card carries `basic`, and the card menu drops "−1 to…" / "Remove to…"
+  for one.
+- **Undo:** `revert_moves()` logs the opposite bulk step for each bulk move
+  (the caller has already reversed the list).
+- **Wording:** the pop-up reads "Swamp ×2: basic land — not tracked in the
+  collection"; the allocator "Basic land — always available";
+  `record_purchase()` refuses one with "Basic lands are generic — there's no
+  copy to buy or record."
+- **Changed expectations:** a tracked basic is no longer limited by its lot
+  (`test_a_basic_with_tracked_quantities_is_still_limited` became
+  `test_a_basic_is_always_available_even_with_tracked_quantities`), a cut
+  basic now returns its bulk move instead of `[]`, and Bought's refusal
+  message changed.
+- **Tests:** `tests/test_edit_basics.py` (44: eleven entry points × three
+  collection states, a swap with a basic side, brewing / dismantled decks,
+  Undo, ignored sources, pickers, Bought, buy list / contention / Reconcile
+  / Build it, deck-sync, Card Lookup, the pop-up and the board payload) and
+  one smoke test (the add bar's picker giving way to a caption for a typed
+  Swamp, whose tracked Box lot stays put). 691 pass. **Board JS checked in
+  headless Edge** against a scratch copy of the real database (Raktres): the
+  Swamp card menu offered no "to…" while a non-basic's had "Remove to…"; −1
+  on Swamp took the list 9 → 8 with both Swamp lots untouched, logged one
+  bulk row and toasted "Swamp: basic land — not tracked in the collection";
+  a Plains idea's Add committed with no source menu and logged "basic land
+  supply → Raktres". The Phase 4 and 5 board changes rode along in that run
+  (the menus open and commit), though their own flows weren't clicked
+  through again.
 
 ---
 

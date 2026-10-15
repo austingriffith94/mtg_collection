@@ -265,7 +265,7 @@ def test_a_part_purchase_leaves_a_buy_idea_marked(c):
 def test_bought_refuses_a_dismantled_deck_a_basic_and_zero(c):
     writes.set_build_state(c, _deck(c, "Gisa"), "dismantled")
     writes.add_collection_lot(c, SWAMP, quantity=None, location="Basics box")
-    for deck, card, qty, match in (("Gisa", RING, 1, "dismantled"), ("Prosper", SWAMP, 1, "untracked"),
+    for deck, card, qty, match in (("Gisa", RING, 1, "dismantled"), ("Prosper", SWAMP, 1, "generic"),
                                    ("Prosper", RING, 0, "at least 1")):
         with pytest.raises(ValueError, match=match):
             writes.record_purchase(c, _deck(c, deck), card, qty)

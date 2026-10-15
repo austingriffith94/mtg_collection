@@ -155,6 +155,8 @@ def board_payload(cards_df, deck_meta, owned_qty, cut_for=None, leaving=None, bu
             "price": float(price) if pd.notna(price) else None,
             "cut_for": list(cut_for.get(row["scryfall_id"], [])),
             "leaving": list(leaving.get(row["scryfall_id"], [])),
+            # Phase 7: a basic's copies never move, so its menu asks no "to…".
+            "basic": is_basic,
             "flags": {
                 "game_changer": bool(row.get("is_game_changer")) if pd.notna(row.get("is_game_changer")) else False,
                 "reserved": bool(row.get("is_reserved")) if pd.notna(row.get("is_reserved")) else False,
@@ -223,8 +225,9 @@ def _source_fields(row, sources):
         "deck_options": [{"deck": o["deck"], "label": fmt.deck_choice_label(o)}
                          for o in (sources or {}).get("decks", []) if o.get("listed")],
         "auto_label": fmt.auto_source_label(sources),
-        # Phase 4: Buy is always on offer (no Location, no lookup needed).
-        "can_buy": True,
+        # Phase 4: Buy is always on offer (no Location, no lookup needed) —
+        # except for a basic land (Phase 7), which has no source to choose.
+        "can_buy": not (sources or {}).get("bulk"),
     }
 
 

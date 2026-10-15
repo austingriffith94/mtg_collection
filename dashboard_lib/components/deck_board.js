@@ -29,7 +29,9 @@
 //                   carries leaving:[deck names] for its "→ Prosper" badge
 //   locations     storage Locations a removed copy can be put in, Box first
 //   copies_move   false while the deck is brewing/dismantled: edits are list
-//                   only, so the menu doesn't ask where copies go
+//                   only, so the menu doesn't ask where copies go. A card
+//                   with basic:true (Phase 7) never asks either, and a
+//                   Shortlist row for one has can_buy:false and no options
 //   group_by      saved choice, one of group_options
 //   group_options ["Type","Mana value","Strategy tag","Color"]
 //   type_order    stack order for "Type"
@@ -328,8 +330,9 @@ export default function (component) {
 
   function openMenu(card, node) {
     menuCard = card;
-    // Only worth asking when copies actually move and there is a choice.
-    const askWhere = copiesMove && locations.length > 1;
+    // Only worth asking when copies actually move and there is a choice. A
+    // basic land's never do (EDIT_FLOW_PLAN.md Phase 7).
+    const askWhere = copiesMove && locations.length > 1 && !card.basic;
     menu.replaceChildren(
       el("div", "menu-title", card.name),
       menuButton("+1", () => send({ op: "inc", id: card.id })),

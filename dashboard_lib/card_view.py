@@ -154,7 +154,7 @@ def move_route(move):
     if kind == "delete":
         return f"{move['from']} → copy record removed"
     if kind == "bulk":
-        return "bulk — not tracked"
+        return "basic land — not tracked in the collection"
     if kind == "brewing":
         return ("Brewing — pulled when you build the deck" if move.get("direction") == "in"
                 else "Brewing — list only, the copy stays put")
@@ -235,6 +235,74 @@ def show_moves(moves):
         # dialogs on every run: the scripts/_test_*_offline.py harnesses
         # import this module under a Streamlit stub with no st.dialog.
         st.dialog("Copies moved", width="large")(_moves_dialog_body)(moves)
+
+
+# ------------------------------------------------------------------
+# "Build it" (EDIT_FLOW_PLAN.md Phase 5): the preview dialog for a brewing
+# deck, shared by the Decks page's Build Plan and the Deck Editor's Board,
+# so both ask the same question and finish the same way.
+# ------------------------------------------------------------------
+def build_dialog_flag(deck_id):
+    return f"deck_{deck_id}_build_dialog"
+
+
+def build_result_message(result):
+    """finish_edit() result for a writes.build_deck() outcome."""
+    pulled = sum(p["quantity"] for p in result["pulled"])
+    lines = [f"Pulled {pulled} card(s) into {result['deck_name']}." if pulled
+             else f"Nothing to pull into {result['deck_name']}."]
+    if result["cleared"]:
+        lines.append("Built — the brewing flag is cleared.")
+    warnings = [f"{r['card']} ×{r['quantity']} still to pull: {r['reason']}" for r in result["to_pull"]]
+    return {"message": lines, "moves": result["moves"], "warnings": warnings}
+
+
+def _build_dialog_body(deck_id, deck_name):
+    from . import db, writes   # local: loaders imports this module
+
+    conn = db.get_connection()
+    plan = writes.build_deck(conn, deck_id, dry_run=True)
+    flag = build_dialog_flag(deck_id)
+    groups = {}
+    for move in plan["moves"]:
+        groups.setdefault(move_route(move), []).append(move)
+    if groups:
+        st.markdown(f"**These moves will be made for {deck_name}:**")
+    for route, moves in groups.items():
+        st.markdown(f"**{route}**")
+        st.markdown("\n".join(f"- {_card_qty(m)}" for m in moves))
+    if not groups:
+        st.info("No copies would move.")
+    if plan["buying"]:
+        st.markdown(f"**Staying on the buy list:** {', '.join(b['card'] for b in plan['buying'])}")
+    for r in plan["to_pull"]:
+        st.warning(f"{r['card']} ×{r['quantity']} can't be pulled: {r['reason']}")
+    st.caption("This clears the brewing flag." if plan["cleared"] else
+               "The deck stays brewing — some cards are still to pull.")
+    confirm, cancel = st.columns(2)
+    if confirm.button("Build it", key=f"{flag}_confirm", type="primary"):
+        close_dialog(flag)
+        finish_edit(build_result_message(writes.build_deck(conn, deck_id)))
+    if cancel.button("Cancel", key=f"{flag}_cancel"):
+        close_dialog(flag)
+        st.rerun()
+    # Marking it built without pulling stays available, as a secondary choice.
+    left = sum(r["quantity"] for r in plan["to_pull"]) + sum(
+        m["quantity"] for m in plan["moves"] if m["kind"] in ("move", "new"))
+    if st.button("I'll sleeve them myself", key=f"{flag}_manual",
+                 help="Clears the brewing flag without moving anything. Reconcile's \"to pull\" "
+                      "keeps listing the cards until they're sleeved."):
+        close_dialog(flag)
+        writes.set_build_state(conn, deck_id, None)
+        finish_edit({"message": "Marked as built.",
+                     "warnings": [f"{left} card(s) are still to pull. They'll stay on Reconcile "
+                                  "until you sleeve them."] if left else []})
+
+
+def show_build_dialog(deck_id, deck_name):
+    """Declared when shown, like show_moves(), so the offline harnesses that
+    stub Streamlit without st.dialog can still import this module."""
+    st.dialog("🔨 Build it", width="large")(_build_dialog_body)(deck_id, deck_name)
 
 
 def show_pending_feedback():

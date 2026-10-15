@@ -75,7 +75,7 @@ CREATE INDEX idx_collection_location ON collection(location);
 --           pruned, or shrunk)
 --   ''    = the copy exists but had no Location recorded
 -- reason: deck_edit, apply, reconcile, dismantle, collection_edit,
---         import, prune, deck_delete.
+--         import, prune, deck_delete, purchase, build.
 -- ------------------------------------------------------------
 CREATE TABLE collection_moves (
     move_id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,7 +87,10 @@ CREATE TABLE collection_moves (
     to_location     TEXT,
     reason          TEXT NOT NULL,
     change_id       INTEGER,           -- the deck_changes row behind it, when there is one
-    moved_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    moved_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    bulk            INTEGER DEFAULT 0  -- 1 = a basic land joining/leaving a deck's list
+                                       -- (EDIT_FLOW_PLAN.md Phase 7): no lot, and the
+                                       -- NULL side is the basic land supply
 );
 
 -- Master list of "standard" (non-deck) storage locations offered in the

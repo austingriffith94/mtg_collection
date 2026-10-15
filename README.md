@@ -722,8 +722,13 @@ Shortlist tab or the Workbench, and the Workbench's contention "Drop".
   back to "Box". A deck that was never fully sleeved keeps what it still
   needs, and swapping one printing for another of the same card moves
   nothing.
-- **Basic lands** held as untracked bulk never move, and a basic never gets
-  a starter lot.
+- **Basic lands are generic.** Plains, Island, Swamp, Mountain, Forest,
+  Wastes and their Snow-Covered versions need no collection copy, and adding
+  or cutting one never pulls a copy from storage or puts one back, even if
+  you track a lot of Swamps (it just stays where it is). There's no "Comes
+  from" or "to…" choice for one, it's never "not owned", short, to buy or to
+  pull, and the edit still shows in the deck's History and in Card Lookup's
+  move log ("basic land supply → Prosper").
 - **Brewing decks** change their list only — nothing is pulled out of the
   decks you're playing while you plan a new one. **Dismantled decks** never
   pull a copy back in, but a copy still physically in the deck does come
@@ -849,7 +854,7 @@ tracked too, so the answer to *"where did my Blood Crypt go?"* is on one page.
   Workbench's Reconcile shows the gap as before). Nothing moves a second
   time — the lot was already moved by your save. Closing the dialog without
   answering is the same as "just the collection". A save that touches no
-  deck shows no dialog, and untracked bulk basics never ask.
+  deck shows no dialog, and basic lands never ask.
 
 ## Deck lifecycle: brewing and dismantling
 
@@ -921,10 +926,18 @@ it: different document, different ordering, different job. Unlike the deck
 sheet it flows across as many pages as it needs — clipping an 85-card list
 would defeat the entire purpose.
 
-**✅ Mark deck as built** clears the brewing flag. Since a brewing deck's
-edits move no copies (see "Deck edits move the copies"), it first says how
-many cards are still to pull — they stay on the Workbench's Reconcile
-until you sleeve them.
+**🔨 Build it** (here, and on the Deck Editor's Board while brewing) makes
+every move a brewing deck has been waiting on, after a preview of each one:
+a card another deck promised moves from that deck first, then each listed
+card is pulled from the source it chose (a storage Location, or Auto — the
+biggest free lot). Buy cards stay on the buy list; a card that can't be
+pulled (not owned, a Location that ran dry, a donor with no copy recorded)
+is listed with the reason and left to pull. Auto never makes a new copy
+record here. Each source group has its own **Pull this group** button; a
+partial build leaves the deck brewing, and the flag clears once nothing is
+left to pull but Buy cards. **I'll sleeve them myself** (in the Build it
+dialog) clears the flag without moving anything — Reconcile keeps listing
+the cards until they're sleeved.
 
 ### Dismantle (Deck Editor → Deck Info, beside Delete)
 

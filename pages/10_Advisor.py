@@ -14,7 +14,10 @@ Chat mode: free-form conversation; the model calls read-only tools
 it mentions is checked against the database afterwards (chat.py, guard.py).
 Gated off for any provider that doesn't declare `capabilities.tools`.
 
-Read-only throughout: nothing on this page writes to the collection.
+Adds Shortlist ideas only (EDIT_FLOW_PLAN.md Phase 5): a verified "add" suggestion has an
+"Add to Shortlist" button that stages an idea (note "Advisor: <skill>", the suggested cut
+filled in as Replaces). Nothing here touches a deck's list or the collection; the idea is
+planned and applied on the Board / Shortlist like any other.
 """
 import sys
 import os
@@ -23,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
 
-from dashboard_lib import db, loaders
+from dashboard_lib import db, loaders, writes
 from dashboard_lib import card_view as cv, nav
 from dashboard_lib.advisor import analysis, chat
 from dashboard_lib.advisor.context import build_deck_context
@@ -38,7 +41,7 @@ def make_provider(choice):
     return AnthropicProvider(model=ANTHROPIC_MODELS[choice])
 
 
-def show_analysis_item(i):
+def show_analysis_item(i, conn=None, deck_id=None, skill=None, key=None):
     d = i.data
     if i.kind == "cut":
         st.markdown(f"**Cut {d.get('card')}** — {d.get('reason')}")
@@ -47,6 +50,18 @@ def show_analysis_item(i):
     st.caption(f"“{d.get('evidence_quote')}” · roles: {', '.join(d.get('roles') or []) or 'none'}")
     for v in i.violations:
         st.warning(v)
+    # Only a verified add can become an idea; a cut has nothing to add (it
+    # shows up as the "Replaces" of the add it goes with).
+    if i.verified and i.kind != "cut" and conn is not None and st.button(
+        "Add to Shortlist", key=f"advisor_add_{key}",
+        help="Stages it as an idea on this deck's Shortlist. Nothing in the deck or collection changes.",
+    ):
+        try:
+            writes.add_advisor_idea(conn, int(deck_id), d.get("card"), d.get("replaces"), skill)
+        except ValueError as exc:
+            st.error(str(exc))
+        else:
+            cv.finish_edit({"message": f"Added {d.get('card')} to the Shortlist."})
 
 
 def run_analysis_tab(conn, decks, provider):
@@ -101,8 +116,8 @@ def run_analysis_tab(conn, decks, provider):
     )
     if res.retried:
         st.caption("One retry was needed.")
-    for i in verified:
-        show_analysis_item(i)
+    for n, i in enumerate(verified):
+        show_analysis_item(i, conn, deck_id, skill, n)
     if not verified:
         st.write("No verified suggestions.")
     if unverified:

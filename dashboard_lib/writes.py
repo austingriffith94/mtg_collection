@@ -823,8 +823,9 @@ def add_deck_card(conn, deck_id, scryfall_id, quantity=1, with_moves=True, note=
     ("deck", "Gisa") (Phase 3) takes the increase out of Gisa: its list gives
     the card up too, through transfer_between_decks(), which this hands the
     increase to — see there for what it checks and writes."""
-    source, source_location = normalize_source(conn, source, source_location, deck_id=deck_id)
-    dest = normalize_dest(conn, dest)
+    source, source_location = normalize_source(conn, source, source_location, deck_id=deck_id,
+                                               scryfall_id=scryfall_id)
+    dest = normalize_dest(conn, dest, scryfall_id=scryfall_id)
     existing = _deck_card_quantity(conn, deck_id, scryfall_id)
     growing = existing is None or quantity > existing
     if not growing:
@@ -880,7 +881,7 @@ def remove_deck_card(conn, deck_id, scryfall_id, with_moves=True, note=None, des
     away (to `dest`, a storage Location — DEFAULT_LOCATION when None; the
     choice goes on the history row). Returns the moves made; `with_moves`
     and `note` as for add_deck_card()."""
-    dest = normalize_dest(conn, dest)
+    dest = normalize_dest(conn, dest, scryfall_id=scryfall_id)
     existing = _deck_card_quantity(conn, deck_id, scryfall_id)
     _delete_deck_card(conn, deck_id, scryfall_id)
     if existing is None:
@@ -934,7 +935,10 @@ def bulk_update_deck_cards(conn, deck_id, updates, with_moves=True, dest=None):
 #                    new         a starter lot made at `to` (a "new copy
 #                                record"; from is None)
 #                    delete      a starter lot deleted again by Undo
-#                    bulk        an untracked basic land — nothing moved
+#                    bulk        a basic land (Phase 7) — no lot is ever
+#                                touched; from/to are the deck and None
+#                                ("basic land supply"), `direction` in/out,
+#                                and the step is still in the move log
 #                    brewing     the deck is brewing (rule 4) — list only;
 #                                `direction` says whether copies would have
 #                                come in or gone out
@@ -954,7 +958,7 @@ STARTER_LOT_SOURCE = "Auto-added (deck edit)"
 # value (a typo from the browser, a deck name, a source that doesn't exist
 # yet) is refused with a reason before a list or a lot is touched.
 # ------------------------------------------------------------------
-def normalize_source(conn, source, source_location, deck_id=None):
+def normalize_source(conn, source, source_location, deck_id=None, scryfall_id=None):
     """(source, source_location) as stored: (None, None) for Auto (None, "",
     "auto", or a Location with no source), ("storage", <Location in the
     catalog's spelling>), or (Phase 3) ("deck", <another deck's exact name>).
@@ -963,7 +967,13 @@ def normalize_source(conn, source, source_location, deck_id=None):
     ValueError for a source that doesn't exist, a pick
     with no Location / deck, a deck name given as a storage Location, an
     unknown deck, or — with `deck_id`, the deck receiving the card — a deck
-    taking a card from itself."""
+    taking a card from itself.
+
+    With `scryfall_id` naming a basic land (Phase 7) any value is IGNORED
+    rather than refused — a basic has nowhere to come from — so a bulk save
+    across mixed cards doesn't fail on its basics."""
+    if scryfall_id and q.is_basic_land(conn, scryfall_id=scryfall_id):
+        return None, None
     if source in (None, "", "auto"):
         return None, None
     if source not in q.SOURCES:
@@ -991,12 +1001,15 @@ def normalize_source(conn, source, source_location, deck_id=None):
                             if q.same_location(known, place)), place)
 
 
-def normalize_dest(conn, dest):
+def normalize_dest(conn, dest, scryfall_id=None):
     """A removal's destination as stored: None for the default, else a known
     storage Location in the catalog's spelling. ValueError for a deck name
     (a copy goes to another deck only as a take, which that deck asks for —
     Phase 3 — so both lists change together) or a Location nobody has set
-    up, so a typo can't strand a copy somewhere that isn't on any list."""
+    up, so a typo can't strand a copy somewhere that isn't on any list.
+    Ignored (None) for a basic land, like normalize_source()."""
+    if scryfall_id and q.is_basic_land(conn, scryfall_id=scryfall_id):
+        return None
     place = (dest or "").strip()
     if not place:
         return None
@@ -1014,9 +1027,9 @@ def _check_stock(conn, deck_id, scryfall_id, list_after, location):
     can't supply the copies a list change needs: `list_after` is how many
     the list will run, minus copies already sleeved here, must come from
     `location`. Nothing to check for a brewing / dismantled deck (list
-    only) or an untracked bulk basic (never moved)."""
+    only) or a basic land (Phase 7: never moved)."""
     _name, state = _deck_name_and_state(conn, deck_id)
-    if state in q.BUILD_STATES or q.is_bulk_basic(conn, scryfall_id=scryfall_id):
+    if state in q.BUILD_STATES or q.is_basic_land(conn, scryfall_id=scryfall_id):
         return
     deck_name = _name
     here = sum(qty for _, qty, loc, _ in q.card_lots(conn, scryfall_id) if (loc or "").strip() == deck_name)
@@ -1039,16 +1052,24 @@ def _move(card, quantity, kind, collection_id=None, frm=None, to=None, **extra):
             "from": frm, "to": to, "kind": kind, **extra}
 
 
+def _bulk_move(conn, deck_name, scryfall_id, card, count, direction, reason="deck_edit",
+               change_id=None):
+    """A basic land joining (`direction` "in") or leaving ("out") a deck's
+    list (EDIT_FLOW_PLAN.md Phase 7). Basics are generic: no lot is touched,
+    even when you track one. The step is still logged in collection_moves
+    with bulk=1 and no collection_id — "basic land supply → Prosper" — so Card
+    Lookup shows every basic added or removed. Returns the `bulk` move."""
+    frm, to = (None, deck_name) if direction == "in" else (deck_name, None)
+    _log_collection_move(conn, None, scryfall_id, count, frm, to, reason, change_id, bulk=True)
+    conn.commit()
+    return _move(card, count, "bulk", frm=frm, to=to, direction=direction, scryfall_id=scryfall_id)
+
+
 def _deck_name_and_state(conn, deck_id):
     row = conn.execute("SELECT name, build_state FROM decks WHERE deck_id=?", (deck_id,)).fetchone()
     if row is None:
         raise ValueError("Deck not found.")
     return row[0], row[1]
-
-
-def _is_basic_land(conn, scryfall_id):
-    row = conn.execute("SELECT is_basic_land FROM cards WHERE scryfall_id=?", (scryfall_id,)).fetchone()
-    return bool(row and row[0])
 
 
 def sleeve_into_deck(conn, deck_id, scryfall_id, quantity, source=None, source_location=None,
@@ -1087,16 +1108,23 @@ def sleeve_into_deck(conn, deck_id, scryfall_id, quantity, source=None, source_l
 
     A brewing or dismantled deck (rule 4) changes its list only: no lot is
     touched and one placeholder move comes back instead, unless `force`
-    (Phase 5's "Build it", the only caller that sets it). An untracked
-    basic land is never moved either; a basic with no free copy gets no
-    starter lot — nobody records a Swamp per deck.
+    (Phase 5's "Build it", the only caller that sets it).
+
+    A basic land (Phase 7) is checked first, before the source is even
+    read: `quantity` copies join the list from the "basic land supply" —
+    one logged `bulk` move, no lot pulled, split or made, whatever the
+    collection holds and whatever the deck's build state.
 
     `reason` / `change_id` go on the move log's rows for the lots touched
     (Phase 6): "deck_edit" for a hand edit, "apply" from apply_change(),
     with the deck_changes row that caused it."""
-    source, source_location = normalize_source(conn, source, source_location)
     deck_name, state = _deck_name_and_state(conn, deck_id)
     card = _card_name(conn, scryfall_id) or scryfall_id
+    if q.is_basic_land(conn, scryfall_id=scryfall_id):
+        count = min(int(quantity), q.deck_list_quantity(conn, deck_id, scryfall_id))
+        return ([_bulk_move(conn, deck_name, scryfall_id, card, count, "in", reason, change_id)]
+                if count > 0 else [])
+    source, source_location = normalize_source(conn, source, source_location)
     here = sum(qty for _, qty, loc, _ in q.card_lots(conn, scryfall_id) if (loc or "").strip() == deck_name)
     need = min(int(quantity), q.deck_list_quantity(conn, deck_id, scryfall_id) - here)
     if need <= 0:
@@ -1104,18 +1132,13 @@ def sleeve_into_deck(conn, deck_id, scryfall_id, quantity, source=None, source_l
     if source == "buy":
         # A planned purchase (Phase 4): the list has it, no lot exists yet and
         # none is made — the copy is sleeved when it's bought (record_purchase),
-        # whatever the deck's build state. A basic land is never bought.
-        if q.is_bulk_basic(conn, scryfall_id=scryfall_id):
-            return [_move(card, need, "bulk", frm="bulk", to="bulk")]
+        # whatever the deck's build state.
         return [_move(card, need, "buy", frm=None, to=None, direction="in")]
     if state in q.BUILD_STATES and not force:
         # The chosen Location rides along so "will be pulled from Lands Box"
         # can say so, and so Build it (Phase 5) has it on the move.
         return [_move(card, need, state, frm=state, to=state, direction="in",
                       source_location=source_location)]
-    if q.is_bulk_basic(conn, scryfall_id=scryfall_id):
-        return [_move(card, need, "bulk", frm="bulk", to="bulk")]
-
     if source == "deck":
         free = _spare_in_deck(conn, source_location, scryfall_id)
         if sum(lot[1] for lot in free) < need:
@@ -1141,15 +1164,12 @@ def sleeve_into_deck(conn, deck_id, scryfall_id, quantity, source=None, source_l
         moves.append(_move(card, take, "move", moved_id, location, deck_name))
         need -= take
     if need > 0:   # only reachable on Auto: a chosen Location or deck is checked above
-        if _is_basic_land(conn, scryfall_id):
-            moves.append(_move(card, need, "bulk", frm="bulk", to="bulk"))
-        else:
-            lot_id = add_collection_lot(
-                conn, scryfall_id, quantity=need, foil=False, location=deck_name,
-                date_acquired=datetime.date.today().isoformat(), price_paid=None,
-                source=STARTER_LOT_SOURCE, reason=reason, change_id=change_id,
-            )
-            moves.append(_move(card, need, "new", lot_id, None, deck_name))
+        lot_id = add_collection_lot(
+            conn, scryfall_id, quantity=need, foil=False, location=deck_name,
+            date_acquired=datetime.date.today().isoformat(), price_paid=None,
+            source=STARTER_LOT_SOURCE, reason=reason, change_id=change_id,
+        )
+        moves.append(_move(card, need, "new", lot_id, None, deck_name))
     return moves
 
 
@@ -1172,10 +1192,18 @@ def unsleeve_from_deck(conn, deck_id, scryfall_id, quantity=None, dest=None, for
     taking it apart moves out — and the Deck Editor marks a deck dismantled
     when the dismantle is staged, before its removals are applied.
 
+    A basic land (Phase 7) leaves for the "basic land supply": `quantity`
+    copies (every caller passes what the list just lost), one logged `bulk`
+    move, no lot put away — a tracked lot of Swamps stays where it is.
+
     `reason` / `change_id` as for sleeve_into_deck()."""
     deck_name, state = _deck_name_and_state(conn, deck_id)
     dest = dest or DEFAULT_LOCATION
     card = _card_name(conn, scryfall_id) or scryfall_id
+    if q.is_basic_land(conn, scryfall_id=scryfall_id):
+        count = int(quantity or 0)
+        return ([_bulk_move(conn, deck_name, scryfall_id, card, count, "out", reason, change_id)]
+                if count > 0 else [])
     here = [lot for lot in q.card_lots(conn, scryfall_id) if (lot[2] or "").strip() == deck_name]
     surplus = sum(lot[1] for lot in here) - q.deck_list_quantity(conn, deck_id, scryfall_id)
     count = surplus if quantity is None else min(int(quantity), surplus)
@@ -1183,8 +1211,6 @@ def unsleeve_from_deck(conn, deck_id, scryfall_id, quantity=None, dest=None, for
         return []
     if state == "brewing" and not force:
         return [_move(card, count, state, frm=state, to=state, direction="out")]
-    if q.is_bulk_basic(conn, scryfall_id=scryfall_id):
-        return [_move(card, count, "bulk", frm="bulk", to="bulk")]
 
     here.sort(key=lambda lot: (lot[3] != scryfall_id, lot[0]))
     moves = []
@@ -1227,12 +1253,20 @@ def revert_moves(conn, moves):
     A lot that move_lot() split stays as two lots after the undo — same
     printing, same location, harmless, so no merge logic.
 
+    A basic land's `bulk` move (Phase 7) has no lot to put back: the caller
+    already reversed the list, so this logs the opposite bulk step.
+
     Returns (moves, skipped): the moves made by the undo itself (for the
     pop-up), and one line per move that couldn't be undone because the lot
     has moved or changed since."""
     done, skipped = [], []
     for m in reversed(list(moves or [])):
         kind = m.get("kind")
+        if kind == "bulk" and m.get("scryfall_id") and m.get("direction") in ("in", "out"):
+            deck_name = m["to"] if m["direction"] == "in" else m["from"]
+            done.append(_bulk_move(conn, deck_name, m["scryfall_id"], m["card"], m["quantity"],
+                                   "out" if m["direction"] == "in" else "in"))
+            continue
         if kind not in ("move", "new"):
             continue
         row = conn.execute(
@@ -1380,8 +1414,9 @@ def add_change(conn, deck_id, *, add_scryfall_id=None, add_name=None,
     source="deck" (Phase 3) is a take from another deck, written as a
     linked pair by add_linked_take(); its change_id (the receiving row's)
     is returned the same way."""
-    source, source_location = normalize_source(conn, source, source_location, deck_id=deck_id)
-    dest_location = normalize_dest(conn, dest_location)
+    source, source_location = normalize_source(conn, source, source_location, deck_id=deck_id,
+                                               scryfall_id=add_scryfall_id)
+    dest_location = normalize_dest(conn, dest_location, scryfall_id=remove_scryfall_id)
     if status not in OPEN_CHANGE_STATUSES:
         raise ValueError("A new change starts as an idea or a planned swap.")
     if not (add_scryfall_id or add_name or remove_scryfall_id):
@@ -1412,6 +1447,47 @@ def add_change(conn, deck_id, *, add_scryfall_id=None, add_name=None,
     )
     conn.commit()
     return cur.lastrowid
+
+
+def _printing_by_name(conn, name, owned_first=True):
+    """(scryfall_id, name) of the database's printing of a card by name,
+    matching the front face of an MDFC ("Front // Back"); a printing you own
+    comes first. None when nothing matches."""
+    name = (name or "").strip()
+    if not name:
+        return None
+    rows = conn.execute(
+        """SELECT c.scryfall_id, c.name,
+                  EXISTS (SELECT 1 FROM collection col WHERE col.scryfall_id = c.scryfall_id) AS owned
+           FROM cards c WHERE c.name = ? COLLATE NOCASE OR c.name LIKE ? COLLATE NOCASE
+           ORDER BY owned DESC, c.scryfall_id LIMIT 1""", (name, f"{name} // %")).fetchall()
+    return (rows[0][0], rows[0][1]) if rows else None
+
+
+def add_advisor_idea(conn, deck_id, card, replaces=None, skill=None):
+    """Stage an Advisor suggestion as a Shortlist idea (EDIT_FLOW_PLAN.md
+    Phase 5): `card` is the add, `replaces` (when it names a card on the
+    deck's list) fills in the idea's "Replaces", and the note says which
+    skill suggested it. The Advisor never touches the deck's list or the
+    collection — an idea only becomes a change when you plan and apply it.
+    Returns the change_id. Raises ValueError, writing nothing, when the card
+    isn't in the database, is already on the deck, or is already on its
+    shortlist."""
+    found = _printing_by_name(conn, card)
+    if found is None:
+        raise ValueError(f"{card} isn't in the card database.")
+    add_sid, add_name = found
+    if q.deck_list_quantity(conn, deck_id, add_sid) > 0:
+        raise ValueError(f"{add_name} is already in this deck.")
+    remove_sid = remove_name = None
+    if (replaces or "").strip():
+        on_list = _printing_by_name(conn, replaces)
+        if on_list and q.deck_list_printing(conn, deck_id, on_list[0]) is not None:
+            remove_sid = q.deck_list_printing(conn, deck_id, on_list[0])[0]
+            remove_name = _card_name(conn, remove_sid)
+    return add_change(conn, deck_id, add_scryfall_id=add_sid, add_name=add_name,
+                      remove_scryfall_id=remove_sid, remove_name=remove_name,
+                      notes=f"Advisor: {skill}" if skill else "Advisor")
 
 
 def _log_applied_change(conn, deck_id, add_scryfall_id=None, remove_scryfall_id=None, quantity=1,
@@ -2000,9 +2076,9 @@ def _check_deck_stock(conn, deck_id, scryfall_id, list_after, donor_name, donor_
     gives only what its list stops running once `donor_removing` copies come
     off it, so a deck whose copy was never recorded as sleeved there can't
     give one — say so, and how to fix it. Nothing to check for a brewing /
-    dismantled receiver (list only) or an untracked bulk basic."""
+    dismantled receiver (list only) or a basic land (never moved)."""
     deck_name, state = _deck_name_and_state(conn, deck_id)
-    if state in q.BUILD_STATES or q.is_bulk_basic(conn, scryfall_id=scryfall_id):
+    if state in q.BUILD_STATES or q.is_basic_land(conn, scryfall_id=scryfall_id):
         return
     need = list_after - _sleeved_in(conn, deck_name, scryfall_id)
     if need <= 0:
@@ -2318,7 +2394,7 @@ COLLECTION_FIELDS = ["quantity", "foil", "location", "date_acquired", "price_pai
 # rename_deck() logs nothing — a rename relabels, no copy moved.
 # ------------------------------------------------------------------
 MOVE_REASONS = ("deck_edit", "apply", "reconcile", "dismantle", "collection_edit",
-                "import", "prune", "deck_delete", "purchase")
+                "import", "prune", "deck_delete", "purchase", "build")
 
 
 def _loc(value):
@@ -2326,9 +2402,12 @@ def _loc(value):
     return (value or "").strip()
 
 
-def _log_collection_move(conn, collection_id, scryfall_id, quantity, frm, to, reason, change_id=None):
+def _log_collection_move(conn, collection_id, scryfall_id, quantity, frm, to, reason, change_id=None,
+                         bulk=False):
     """One row in collection_moves. No commit: the caller's own commit
-    carries it. No-op when nothing moved (same place both sides)."""
+    carries it. No-op when nothing moved (same place both sides). `bulk`
+    (Phase 7) marks a basic land's step, which has no lot: its None side is
+    the "basic land supply", not "new copy record" / "deleted"."""
     if frm == to:
         return
     if reason not in MOVE_REASONS:
@@ -2336,10 +2415,10 @@ def _log_collection_move(conn, collection_id, scryfall_id, quantity, frm, to, re
     conn.execute(
         """INSERT INTO collection_moves
                (collection_id, scryfall_id, card_name, quantity, from_location, to_location,
-                reason, change_id)
-           VALUES (?,?,?,?,?,?,?,?)""",
+                reason, change_id, bulk)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
         (collection_id, scryfall_id, _card_name(conn, scryfall_id), quantity, frm, to,
-         reason, change_id),
+         reason, change_id, 1 if bulk else 0),
     )
 
 
@@ -2741,12 +2820,12 @@ def record_purchase(conn, deck_id, scryfall_id, quantity=1, price_paid=None, cha
     purchase covers fewer copies than it wants.
 
     Refused, writing nothing, for a dismantled deck (its cards are already
-    gone) and an untracked basic land (nobody buys one per deck)."""
+    gone) and a basic land (Phase 7: generic, nobody buys one per deck)."""
     deck_name, state = _deck_name_and_state(conn, deck_id)
     if state == "dismantled":
         raise ValueError(f"{deck_name} is dismantled — nothing to sleeve a purchase into.")
-    if q.is_bulk_basic(conn, scryfall_id=scryfall_id):
-        raise ValueError("Basic lands are untracked — there's no copy to record.")
+    if q.is_basic_land(conn, scryfall_id=scryfall_id):
+        raise ValueError("Basic lands are generic — there's no copy to buy or record.")
     quantity = int(quantity)
     if quantity < 1:
         raise ValueError("Bought quantity must be at least 1.")
@@ -2890,6 +2969,175 @@ def set_build_state(conn, deck_id, state):
     conn.commit()
     logger.info("Deck %r (deck_id=%d) build_state -> %r", row[0], deck_id, state)
     return row[0]
+
+
+
+# ------------------------------------------------------------------
+# Build it (EDIT_FLOW_PLAN.md Phase 5). A brewing deck's edits changed its
+# list only; this makes every move it has been waiting on, in one batch:
+#
+#   1. each lopsided take on another deck (Phase 3: the brew's add is
+#      applied, the donor's removal still planned) is applied through the
+#      normal apply_change(), so the copy moves donor -> brew
+#   2. each listed card still not sleeved here is pulled from the source its
+#      last add chose: a storage Location, or Auto (free copies, biggest lot
+#      first). Donors go first so step 2 finds the transferred copy already
+#      sleeved here instead of making a starter lot for it
+#   3. Buy cards stay on the buy list; anything that can't be pulled is
+#      listed, never skipped quietly
+#
+# Auto here NEVER makes a starter lot (unlike a direct edit): a card you
+# own no free copy of is reported as "to pull", not recorded as owned.
+# ------------------------------------------------------------------
+def _card_key(conn, scryfall_id):
+    """The oracle-or-lowercased-name key deck_sourcing_plan() groups by."""
+    row = conn.execute("SELECT COALESCE(oracle_id, 'name:' || LOWER(name)) FROM cards WHERE scryfall_id=?",
+                       (scryfall_id,)).fetchone()
+    return row[0] if row else scryfall_id
+
+
+def _build_run(conn, deck_id, oracle_ids):
+    """build_deck()'s work against `conn` (the real database, or the
+    throwaway copy a dry run uses). Returns the result dict minus the flags
+    build_deck() adds."""
+    deck_name, state = _deck_name_and_state(conn, deck_id)
+    if state == "dismantled":
+        raise ValueError(f"{deck_name} is dismantled — there is nothing to build.")
+    if state != "brewing":
+        raise ValueError(f"{deck_name} isn't brewing — its edits already moved their copies.")
+    wanted = set(oracle_ids) if oracle_ids is not None else None
+    moves, pulled, buying, to_pull = [], [], [], []
+    failed_donors = {}   # card key -> why its donor couldn't hand the copy over
+
+    def selected(sid):
+        return wanted is None or _card_key(conn, sid) in wanted
+
+    # 1. Donors first.
+    for take in q.open_takes(conn):
+        if (take["receiver_deck_id"] != deck_id or take["receiver_status"] != "applied"
+                or take["donor_status"] != "planned" or not selected(take["scryfall_id"])):
+            continue
+        donor, card, qty = take["donor_deck_name"], take["card"], int(take["quantity"] or 1)
+        key = _card_key(conn, take["scryfall_id"])
+        try:
+            if _deck_name_and_state(conn, take["donor_deck_id"])[1] == "brewing":
+                raise ValueError(f"{donor} is itself brewing, so it has no copy of {card} to hand over yet.")
+            listed = q.deck_list_quantity(conn, take["donor_deck_id"], take["scryfall_id"])
+            sleeved = _sleeved_in(conn, donor, take["scryfall_id"])
+            if sleeved - (listed - qty) < qty:
+                raise ValueError(
+                    f"{donor} has no copy of {card} to hand over — its list runs ×{listed} and only "
+                    f"{sleeved} {'is' if sleeved == 1 else 'are'} recorded as sleeved there. Mark it "
+                    f"sleeved in {donor} (Workbench → Reconcile) first.")
+            outcome = apply_change(conn, take["donor_change_id"])
+        except ValueError as exc:
+            failed_donors[key] = str(exc)
+            continue
+        moves += outcome["moves"]
+        pulled.append({"card": card, "quantity": qty, "source": f"deck: {donor}", "from": donor,
+                       "oracle_id": key})
+
+    # 2. Everything else the list still waits on.
+    saved = q.deck_saved_sources(conn, deck_id)
+    for sid, entry_qty, card in conn.execute(
+        """SELECT dc.scryfall_id, dc.quantity, c.name FROM deck_cards dc
+           JOIN cards c ON c.scryfall_id = dc.scryfall_id
+           WHERE dc.deck_id=? ORDER BY c.name""", (deck_id,)
+    ).fetchall():
+        if not selected(sid) or q.is_basic_land(conn, scryfall_id=sid):
+            continue
+        entry_qty = int(entry_qty or 1)
+        needed = min(entry_qty, q.deck_list_quantity(conn, deck_id, sid) - _sleeved_in(conn, deck_name, sid))
+        if needed <= 0:
+            continue
+        source, location = saved.get(sid, (None, None))
+        key = _card_key(conn, sid)
+        if source == "buy":
+            buying.append({"card": card, "quantity": needed, "oracle_id": key})
+            continue
+        if source == "deck":
+            to_pull.append({"card": card, "quantity": needed, "source": f"deck: {location}", "oracle_id": key,
+                            "reason": failed_donors.get(key) or
+                            f"The take from {location} isn't open any more. Re-plan it, or pick another source."})
+            continue
+        label = f"storage: {location}" if source == "storage" else "storage"
+        try:
+            if source == "storage":
+                made = sleeve_into_deck(conn, deck_id, sid, entry_qty, source="storage",
+                                        source_location=location, force=True, reason="build")
+            else:
+                free = sum(lot[1] for lot in q.free_lots(conn, sid))
+                made = (sleeve_into_deck(conn, deck_id, sid, min(entry_qty, free), force=True, reason="build")
+                        if free else [])
+        except ValueError as exc:
+            to_pull.append({"card": card, "quantity": needed, "source": label, "oracle_id": key,
+                            "reason": str(exc)})
+            continue
+        got = sum(m["quantity"] for m in made if m["kind"] in ("move", "new"))
+        moves += made
+        if got:
+            pulled.append({"card": card, "quantity": got, "source": label, "oracle_id": key,
+                           "from": ", ".join(sorted({m["from"] or "no location" for m in made}))})
+        if got < needed:
+            owned = sum(lot[1] or 1 for lot in q.card_lots(conn, sid))
+            to_pull.append({"card": card, "quantity": needed - got, "source": "auto", "oracle_id": key,
+                            "reason": "Not owned." if not owned else
+                            "No free copy — every owned copy is sleeved in another deck."})
+    return {"deck_id": deck_id, "deck_name": deck_name, "moves": moves, "pulled": pulled,
+            "buying": buying, "to_pull": to_pull}
+
+
+def build_deck(conn, deck_id, oracle_ids=None, dry_run=False):
+    """"Build it": make the moves a brewing deck has been waiting on (see
+    the block comment above). `oracle_ids` limits it to those cards (a
+    storage Location's or donor deck's group on the Build Plan), by the key
+    deck_sourcing_plan() calls "oracle_id".
+
+    `dry_run=True` writes nothing: the same code runs against a throwaway
+    in-memory copy of the database, so the preview lists exactly the moves
+    the real run will make.
+
+    Returns {"deck_id", "deck_name", "moves", "pulled", "buying", "to_pull",
+    "dry_run", "cleared"}. `to_pull` rows say why a card couldn't be pulled
+    ({"card", "quantity", "source", "reason"}); `buying` cards stay on the
+    buy list. The brewing flag is cleared (`cleared`; with dry_run, "would
+    clear") once nothing is left to pull except Buy cards — so a partial
+    build leaves the deck brewing, and a selection that happens to finish
+    the job clears it. Raises ValueError for a deck that isn't brewing."""
+    if dry_run:
+        copy = sqlite3.connect(":memory:")
+        try:
+            conn.backup(copy)
+            copy.row_factory = conn.row_factory
+            result = _build_run(copy, deck_id, oracle_ids)
+            result["cleared"] = not _left_to_build(copy, deck_id)
+        finally:
+            copy.close()
+        result["dry_run"] = True
+        return result
+    result = _build_run(conn, deck_id, oracle_ids)
+    result["dry_run"] = False
+    result["cleared"] = not _left_to_build(conn, deck_id)
+    if result["cleared"]:
+        set_build_state(conn, deck_id, None)
+    logger.info("Built deck_id=%d: %d move(s), %d to pull, %d buying%s", deck_id, len(result["moves"]),
+                len(result["to_pull"]), len(result["buying"]), ", flag cleared" if result["cleared"] else "")
+    return result
+
+
+def _left_to_build(conn, deck_id):
+    """True while a brewing deck still has an open take on another deck or a
+    non-Buy, non-basic card not sleeved here — what keeps it brewing."""
+    deck_name = _deck_name_and_state(conn, deck_id)[0]
+    if any(t["receiver_deck_id"] == deck_id for t in q.open_takes(conn)):
+        return True
+    saved = q.deck_saved_sources(conn, deck_id)
+    for (sid,) in conn.execute("SELECT scryfall_id FROM deck_cards WHERE deck_id=?", (deck_id,)).fetchall():
+        if saved.get(sid, (None, None))[0] == "buy" or q.is_basic_land(conn, scryfall_id=sid):
+            continue
+        if q.deck_list_quantity(conn, deck_id, sid) - _sleeved_in(conn, deck_name, sid) > 0:
+            return True
+    return False
 
 
 def stage_dismantle(conn, deck_id, target_deck_id=None, transfer_oracle_ids=None,

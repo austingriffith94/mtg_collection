@@ -255,7 +255,9 @@ def test_bulk_basics_never_move(fresh):
     writes.add_collection_lot(c, SWAMP, quantity=None, location="Basics box")
     moves = writes.add_deck_card(c, g, SWAMP, 30)
     assert [(m["kind"], m["quantity"]) for m in moves] == [("bulk", 30)]
-    assert writes.remove_deck_card(c, g, SWAMP) == []   # nothing of it was ever sleeved here
+    # Phase 7: the cut is recorded as a bulk step out, still with no lot moved.
+    assert [(m["kind"], m["quantity"], m["direction"]) for m in writes.remove_deck_card(c, g, SWAMP)] == [
+        ("bulk", 30, "out")]
     assert _state(c)["lots"] == [(SWAMP, "Basics box", None, "")]
 
 

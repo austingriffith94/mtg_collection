@@ -614,13 +614,19 @@ def test_a_bulk_basic_does_not_starve_a_non_basic_with_a_null_lot(conn, add_card
     assert out[second]["verdict"] == "claimed_by"
 
 
-def test_a_basic_with_tracked_quantities_is_still_limited(conn, add_card):
+def test_a_basic_is_always_available_even_with_tracked_quantities(conn, add_card):
+    """EDIT_FLOW_PLAN.md Phase 7: a basic is generic. A tracked lot of one
+    no longer limits it (it used to: a basic was only unlimited when held as
+    untracked bulk), and one owned nowhere at all is never "not owned"."""
     sid = _basic(conn, add_card)
     _lot(conn, sid, location="Lands Box", quantity=1)
     first = _change(conn, _deck(conn, "A"), add_scryfall_id=sid, planned_at="2026-01-01 00:00:00")
     second = _change(conn, _deck(conn, "B"), add_scryfall_id=sid, planned_at="2026-01-02 00:00:00")
+    unowned = _basic(conn, add_card, name="Wastes")
+    third = _change(conn, _deck(conn, "C"), add_scryfall_id=unowned, planned_at="2026-01-03 00:00:00")
 
     out = q.plan_availability(conn, _queue(conn))
 
-    assert out[first]["verdict"] == "available"
-    assert out[second]["verdict"] == "claimed_by"
+    assert [out[i]["verdict"] for i in (first, second, third)] == ["available"] * 3
+    assert out[third]["text"] == "Basic land — always available"
+    assert q.plan_conflicts(conn, _queue(conn), out) == []

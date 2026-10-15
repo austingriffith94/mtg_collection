@@ -62,6 +62,16 @@ the Mainboard, Shortlist, or both at once.
 Proxy flags are intentionally NOT shown here yet — per the project state
 doc, the Proxy convention in Location hasn't been confirmed with the user.
 
+EDIT_FLOW_PLAN.md Phase 5: the Overview tab's Build Plan reads the sources a
+brewing deck's cards chose — one group per storage Location and per donor
+deck, each with its own "Pull this group" button, then Buy cards (they stay
+on the buy list) and anything that can't be pulled, with why. "🔨 Build it"
+replaces "Mark deck as built": it opens a preview of every move
+(writes.build_deck(dry_run=True)) and confirms. "I'll sleeve them myself" in
+that dialog is the only way left to clear the flag without moving anything.
+The Cards tab is view only, and its board shows the "buying" and
+"→ Prosper" badges.
+
 Phase 2 additions: an optional custom cover-image thumbnail next to the
 deck header (set via the Deck Editor's Deck Info tab), and Top 10 Most
 Expensive / Top 10 Saltiest card lists alongside the existing Game
@@ -475,6 +485,9 @@ def _render_overview(conn, deck_id, meta, deck_name, color_identity_raw):
                         hide_index=True, width="stretch",
                     )
 
+            if _brewing:
+                _render_build_groups(conn, deck_id)
+
             st.divider()
             _sheet_col, _state_col = st.columns([2, 1])
 
@@ -496,31 +509,66 @@ def _render_overview(conn, deck_id, meta, deck_name, color_identity_raw):
                      "boxes collects everything. Open it in a browser and print.",
             )
             if _brewing:
-                # EDIT_FLOW_PLAN.md Phase 1: a brewing deck's edits moved no
-                # copies, so clearing the flag must say what's still unpulled
-                # rather than quietly leave it. Until Phase 5's "Build it",
-                # Reconcile's "to pull" is where those cards get sleeved.
-                _unpulled = _sourcing["needed"] - _sourcing["located"]
-                _unpulled_note = (
-                    f"{_unpulled} card(s) are still to pull. They'll stay on Reconcile until "
-                    "you sleeve them." if _unpulled else ""
+                # EDIT_FLOW_PLAN.md Phase 5: "Build it" replaces "Mark deck as
+                # built". The cards a brewing deck's edits left unpulled are
+                # pulled from the sources they chose, after a preview.
+                _state_col.button(
+                    "🔨 Build it", key=f"deck_{deck_id}_build_it", type="primary",
+                    on_click=cv.open_dialog, args=(f"deck_{deck_id}_build_dialog",),
+                    help="Pulls every card this brew is waiting on from the source it chose, "
+                         "after showing you exactly what will move.",
                 )
-                if _unpulled_note:
-                    _state_col.caption(_unpulled_note)
-                if _state_col.button(
-                    "✅ Mark deck as built", key=f"deck_{deck_id}_mark_built",
-                    help="Clears the brewing flag. Completion stays derived from where the "
-                         "cards are, so this doesn't claim the deck is 100% sleeved.",
-                ):
-                    writes.set_build_state(conn, deck_id, None)
-                    cv.finish_edit({"message": "Marked as built.",
-                                    "warnings": [_unpulled_note] if _unpulled_note else []})
+                if cv.dialog_is_open(f"deck_{deck_id}_build_dialog"):
+                    cv.show_build_dialog(deck_id, deck_name)
             elif _state_col.button(
                 "🔨 Mark as brewing", key=f"deck_{deck_id}_mark_brewing",
                 help="For a deck whose list exists but whose cards are still elsewhere.",
             ):
                 writes.set_build_state(conn, deck_id, "brewing")
                 cv.finish_edit({"message": "Marked as brewing."})
+
+
+def _render_build_groups(conn, deck_id):
+    """What "Build it" would pull, by the source each card chose: one group per
+    storage Location and per donor deck, each with its own "Pull this group"
+    button, then Buy cards (they stay on the buy list) and anything that can't
+    be pulled, with why. Read from a dry run, so it always matches the real
+    build."""
+    try:
+        plan = writes.build_deck(conn, deck_id, dry_run=True)
+    except ValueError:
+        return
+    st.markdown("#### Chosen sources")
+    groups = {}
+    for entry in plan["pulled"]:
+        label = (f"Take from {entry['from']}" if entry["source"].startswith("deck:")
+                 else f"Pull from storage — {entry['from']}")
+        groups.setdefault(label, []).append(entry)
+    for n, (label, entries) in enumerate(sorted(groups.items())):
+        copies = sum(e["quantity"] for e in entries)
+        with st.expander(f"{label} — {copies}"):
+            st.dataframe(
+                pd.DataFrame([{"Card": e["card"], "Copies": e["quantity"]} for e in entries]),
+                hide_index=True, width="stretch",
+            )
+            if st.button(f"Pull this group ({copies})", key=f"deck_{deck_id}_pull_group_{n}"):
+                cv.finish_edit(cv.build_result_message(
+                    writes.build_deck(conn, deck_id, oracle_ids=[e["oracle_id"] for e in entries])))
+    if plan["buying"]:
+        with st.expander(f"🛒 Buy — {sum(b['quantity'] for b in plan['buying'])} (stay on the buy list)"):
+            st.dataframe(
+                pd.DataFrame([{"Card": b["card"], "Copies": b["quantity"]} for b in plan["buying"]]),
+                hide_index=True, width="stretch",
+            )
+    if plan["to_pull"]:
+        with st.expander(f"⚠️ Can't be pulled yet — {sum(r['quantity'] for r in plan['to_pull'])}", expanded=True):
+            st.dataframe(
+                pd.DataFrame([{"Card": r["card"], "Copies": r["quantity"], "Why": r["reason"]}
+                              for r in plan["to_pull"]]),
+                hide_index=True, width="stretch",
+            )
+    if not (groups or plan["buying"] or plan["to_pull"]):
+        st.caption("Nothing is waiting to be pulled.")
 
 
 def _render_mana_curve(conn, deck_id):
@@ -893,6 +941,10 @@ def _render_cards(conn, deck_id):
                     df, loaders.load_deck_meta(conn, deck_id),
                     loaders.load_owned_card_quantities(conn),
                     key=f"deck_{deck_id}_stacks",
+                    # View only (Phase 5): conn/deck_id feed the "buying" badge,
+                    # leaving the "→ Prosper" one — nothing here can edit.
+                    conn=conn, deck_id=deck_id,
+                    leaving=deck_board.load_board_leaving(conn, deck_id),
                 )
 
         cv.render_browser(

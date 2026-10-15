@@ -69,6 +69,11 @@ _SCHEMA_UPGRADES = [
     # each naming the other). NULL = not part of a pair, which is every row
     # written before this phase (old dismantle pairs aren't backfilled).
     ("deck_changes", "linked_change_id", "ALTER TABLE deck_changes ADD COLUMN linked_change_id INTEGER"),
+    # EDIT_FLOW_PLAN.md Phase 7: 1 = a basic land joining or leaving a deck's
+    # list. It has no lot (collection_id NULL), and its None side means "basic
+    # land supply" rather than "new copy record" / "deleted". Every earlier
+    # row is a real lot's step, so the default 0 is right for them.
+    ("collection_moves", "bulk", "ALTER TABLE collection_moves ADD COLUMN bulk INTEGER DEFAULT 0"),
 ]
 
 # The values decks.build_state may hold. NULL (absent from this tuple) is
@@ -1079,26 +1084,33 @@ def _lots_for_card(conn, name=None, scryfall_id=None):
     ).fetchall()
 
 
-def is_bulk_basic(conn, name=None, scryfall_id=None):
-    """True for a basic land you hold as untracked bulk: some lot of it has
-    a NULL quantity (schema.sql: "NULL = untracked/bulk quantity (e.g. basic
-    lands)"). Such a card has no meaningful copy count, so the allocator
-    treats it as unlimited rather than as the single copy a NULL lot counts
-    as for everything else — otherwise three decks each wanting a Mountain
-    would show as a conflict over one. A basic whose lots are all tracked
-    still has a real count and is allocated normally."""
+def is_basic_land(conn, name=None, scryfall_id=None):
+    """True for a basic land (Plains … Wastes, Snow-Covered included) —
+    cards.is_basic_land, matched across printings like every ownership
+    question (a printing's oracle_id, or a bare name for a typed reference).
+
+    EDIT_FLOW_PLAN.md Phase 7: the ONE place that decides a card is generic.
+    A basic needs no collection copy, is never pulled from or put back in
+    storage (even when a lot of it is tracked), is never short, not owned,
+    contended, to buy or to pull — but every add and removal is still in
+    the deck's history and the move log. Every check that used to ask "is
+    this an untracked bulk basic" (a NULL-quantity lot) asks this instead,
+    so the same edit no longer behaves two ways depending on what's in the
+    collection."""
+    if scryfall_id:
+        row = conn.execute("SELECT is_basic_land FROM cards WHERE scryfall_id = ?", (scryfall_id,)).fetchone()
+        if row is not None:
+            return bool(row[0])
     oracle_ids = oracle_ids_for_card(conn, name=name, scryfall_id=scryfall_id)
     if oracle_ids:
         marks = ",".join("?" for _ in oracle_ids)
-        where, params = f"c.oracle_id IN ({marks})", tuple(oracle_ids)
+        where, params = f"oracle_id IN ({marks})", tuple(oracle_ids)
     elif (name or "").strip():
-        where, params = "c.name = ? COLLATE NOCASE", (name.strip(),)
+        where, params = "name = ? COLLATE NOCASE", (name.strip(),)
     else:
         return False
     return conn.execute(
-        f"""SELECT 1 FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
-            WHERE c.is_basic_land = 1 AND col.quantity IS NULL AND {where} LIMIT 1""",
-        params,
+        f"SELECT 1 FROM cards WHERE is_basic_land = 1 AND {where} LIMIT 1", params
     ).fetchone() is not None
 
 
@@ -1396,12 +1408,12 @@ def plan_availability(conn, changes):
             out[change_id] = verdict
             continue
 
-        if is_bulk_basic(conn, name=row.get("add_card") or row.get("add_name"),
+        if is_basic_land(conn, name=row.get("add_card") or row.get("add_name"),
                          scryfall_id=row.get("add_scryfall_id")):
             verdict["verdict"] = "available"
             verdict["bulk"] = True
             verdict["claimed"] = wanted
-            verdict["text"] = "Bulk basic land — untracked quantity"
+            verdict["text"] = "Basic land — always available"
             out[change_id] = verdict
             continue
 
@@ -2412,11 +2424,18 @@ def card_sources(conn, scryfall_id, deck_id):
                 (quantity >= listed), since the move helpers take only what
                 a list no longer needs
       price     the printing's current USD price, or None (Phase 4's Buy)
-      bulk      True for an untracked basic land: nothing is ever moved
+      bulk      True for a basic land (Phase 7): nothing is ever moved, so
+                there is nothing to choose — `storage` and `decks` are empty
       auto      what Auto would do right now: {"kind": "here" | "storage" |
                 "new" | "bulk", "location": Location or None}. "new" is a
                 starter lot — a copy you don't own yet
     """
+    if is_basic_land(conn, scryfall_id=scryfall_id):
+        price_row = conn.execute(
+            "SELECT current_price_usd FROM cards WHERE scryfall_id=?", (scryfall_id,)).fetchone()
+        return {"here": 0, "storage": [], "unlocated": 0, "decks": [],
+                "price": price_row[0] if price_row else None, "bulk": True,
+                "auto": {"kind": "bulk", "location": None}}
     deck_names = deck_name_set(conn)
     deck_row = conn.execute("SELECT name FROM decks WHERE deck_id=?", (deck_id,)).fetchone()
     deck_name = deck_row[0] if deck_row else None
@@ -2431,11 +2450,8 @@ def card_sources(conn, scryfall_id, deck_id):
             unlocated += qty
         elif qty > 0:
             per_location[place] = per_location.get(place, 0) + qty
-    bulk = is_bulk_basic(conn, scryfall_id=scryfall_id)
     free = free_lots(conn, scryfall_id)
-    if bulk:
-        auto = {"kind": "bulk", "location": None}
-    elif here:
+    if here:
         auto = {"kind": "here", "location": deck_name}
     elif free:
         auto = {"kind": "storage", "location": (free[0][2] or "").strip() or None}
@@ -2467,9 +2483,21 @@ def card_sources(conn, scryfall_id, deck_id):
         "decks": [{"deck": d, "quantity": others.get(d, 0), "listed": listed.get(d, 0)}
                   for d in sorted(set(others) | set(listed), key=str.casefold)],
         "price": price_row[0] if price_row else None,
-        "bulk": bulk,
+        "bulk": False,
         "auto": auto,
     }
+
+
+def deck_saved_sources(conn, deck_id):
+    """{scryfall_id: (source, source_location)} for one deck: what each card's
+    LATEST applied add row chose (a direct edit logs one; so does applying an
+    idea). A card never added through a row is absent — i.e. Auto. What
+    brewing_claims() and writes.build_deck() both read."""
+    return {sid: (source, location) for sid, source, location in conn.execute(
+        """SELECT add_scryfall_id, source, source_location FROM deck_changes
+           WHERE deck_id = ? AND status = 'applied' AND add_scryfall_id IS NOT NULL
+           ORDER BY change_id""", (deck_id,)
+    ).fetchall()}
 
 
 def brewing_claims(conn):
@@ -2633,16 +2661,17 @@ def collection_moves_for_card(conn, name, limit=25):
     """The move log for one card by name (newest first), across printings
     and including lots since deleted — card_name is copied at write time.
     Each row: {move_id, collection_id, quantity, from_location,
-    to_location, reason, change_id, moved_at}."""
+    to_location, reason, change_id, moved_at, bulk}; `bulk` (Phase 7) is a
+    basic land's list step, whose None side is the basic land supply."""
     rows = conn.execute(
         """SELECT move_id, collection_id, quantity, from_location, to_location,
-                  reason, change_id, moved_at
+                  reason, change_id, moved_at, COALESCE(bulk, 0)
            FROM collection_moves WHERE card_name = ? COLLATE NOCASE
            ORDER BY move_id DESC LIMIT ?""",
         ((name or "").strip(), int(limit)),
     ).fetchall()
     keys = ("move_id", "collection_id", "quantity", "from_location", "to_location",
-            "reason", "change_id", "moved_at")
+            "reason", "change_id", "moved_at", "bulk")
     return [dict(zip(keys, r)) for r in rows]
 
 
@@ -2676,7 +2705,8 @@ def deck_sync_offers(conn, since_move_id):
       add     copies now sleeved in the deck that its list doesn't run
       remove  the list runs more than is now sleeved, after copies left
 
-    Untracked bulk basics are skipped (nobody lists a Swamp per lot).
+    Basic lands are skipped (Phase 7: generic, so a lot of Swamps moving
+    says nothing about a deck's list — and their own bulk steps land here too).
     Returns [{deck_id, deck_name, scryfall_id, card, action, quantity,
     list_quantity, new_quantity}] — plain data, so it can wait in session
     state for the dialog. writes.sync_deck_lists() applies them."""
@@ -2695,7 +2725,7 @@ def deck_sync_offers(conn, since_move_id):
 
     offers = []
     for (deck_name, card), (sid, delta) in net.items():
-        if delta == 0 or not sid or is_bulk_basic(conn, scryfall_id=sid):
+        if delta == 0 or not sid or is_basic_land(conn, scryfall_id=sid):
             continue
         deck_id = decks[deck_name]
         sleeved = sum(qty for _cid, qty, loc, _s in card_lots(conn, sid) if (loc or "").strip() == deck_name)
@@ -2749,7 +2779,7 @@ def awaiting_buys(conn, deck_id=None):
     ).fetchall():
         if latest.get((d_id, sid)) != "buy" or (deck_id is not None and d_id != deck_id):
             continue
-        if is_bulk_basic(conn, scryfall_id=sid):
+        if is_basic_land(conn, scryfall_id=sid):
             continue
         sleeved = sum(n for _c, n, loc, _s in card_lots(conn, sid) if (loc or "").strip() == deck_name)
         owed = min(int(qty or 1), deck_list_quantity(conn, d_id, sid) - sleeved)
@@ -2832,8 +2862,8 @@ def buy_list(conn, contention=None):
            ORDER BY dc.change_id"""
     ).fetchall():
         name = resolved_name or add_name
-        if not name:
-            continue
+        if not name or is_basic_land(conn, name=name, scryfall_id=add_sid):
+            continue   # Phase 7: a basic is never bought
         chosen = source == "buy"
         if not chosen:
             owned = sum(q or 0 for _cid, q, _loc in _lots_for_card(conn, name=name, scryfall_id=add_sid))

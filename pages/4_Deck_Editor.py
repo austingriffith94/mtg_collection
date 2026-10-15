@@ -39,6 +39,20 @@ Phase 4: "Comes from" ends with Buy. A Buy add puts the card on the list
 with no collection copy (no phantom lot); it shows on the Workbench buy
 list until a copy is sleeved here, and the Board marks it "buying".
 
+Phase 5: while a deck is brewing the Board shows a "🔨 Build it" banner (the
+same preview dialog as the Decks page's Build Plan), because a brew's edits
+change its list only. Where each job lives: the Board edits one deck (adds,
+sources, swaps, removals); the Workbench is the cross-deck view (conflicts,
+linked pairs, buys, reconcile); the Mainboard tab is for changing many
+quantities at once; the Shortlist tab keeps its tables for bulk notes,
+review flags, quantities and sources, plus History. The Decks page and Card
+Lookup only view.
+
+Phase 7: basic lands are generic. Adding or cutting one never pulls a copy
+from storage or puts one back (even a tracked lot of Swamps stays put), so the
+add bar shows no "Comes from" for one and the Board's "to…" menus leave it
+out; the edit is still in History and the move log.
+
 Card Tags (bulk-editing any tag_type across a deck's mainboard) lives
 here too, moved from the earlier standalone Tag Editor page. Deck-level
 tags were removed entirely — use description/tutors instead.
@@ -207,10 +221,16 @@ def _render_add_card_form(deck_id, key_prefix, on_added=None):
     # Phase 3: other decks too — every one before a card is typed, then the
     # ones whose list runs it.
     other_decks = [n for n in decks_df["name"] if n != loaders.load_deck_meta(conn, deck_id).get("name")]
-    source, source_location = cv.render_source_picker(
-        fmt.source_choices(q.card_sources(conn, typed_sid, deck_id) if typed_sid else None,
-                           q.storage_locations(conn), other_decks),
-        key=f"{key_prefix}_add_source", container=ac5)
+    if typed_sid and q.is_basic_land(conn, scryfall_id=typed_sid):
+        # Phase 7: a basic land is generic — no copy comes from anywhere, so
+        # there is no question to ask.
+        ac5.caption("Basic land — no collection copy needed; nothing moves.")
+        source, source_location = None, None
+    else:
+        source, source_location = cv.render_source_picker(
+            fmt.source_choices(q.card_sources(conn, typed_sid, deck_id) if typed_sid else None,
+                               q.storage_locations(conn), other_decks),
+            key=f"{key_prefix}_add_source", container=ac5)
     confirm_key = f"{key_prefix}_add_take_confirm"
 
     def _do_add(pending):
@@ -264,6 +284,16 @@ def _board_fragment(deck_id):
     # see the edit. `key` stays the prefix for this tab's own widgets.
     board_key = key + "_stacks"
     deck_board.rerun_if_edited(board_key)
+
+    # Phase 5: a brewing deck's edits moved no copies; Build it makes them.
+    _meta = loaders.load_deck_meta(conn, deck_id)
+    if _meta.get("build_state") == "brewing":
+        _msg, _btn = st.columns([4, 1])
+        _msg.info("🔨 Brewing — the list is yours to shape; copies move when you build the deck.")
+        _btn.button("🔨 Build it", key=f"{key}_build_it", type="primary",
+                    on_click=cv.open_dialog, args=(cv.build_dialog_flag(deck_id),))
+        if cv.dialog_is_open(cv.build_dialog_flag(deck_id)):
+            cv.show_build_dialog(deck_id, _meta.get("name") or "this deck")
 
     _render_add_card_form(deck_id, key, on_added=lambda: deck_board.clear_board_undo(board_key))
 

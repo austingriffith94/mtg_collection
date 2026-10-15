@@ -55,9 +55,16 @@ plus pytest (`pip install -r requirements-dev.txt`):
   express it (add bar write, each Board op, the Mainboard table save, `apply_change()`'s three shapes),
   each on a fresh database, asserting they leave the same list and collection. Then the rules one at a
   time: a Box copy before a starter lot, never another deck's copy, splitting a lot, −1 on an
-  under-sleeved deck, printing swaps, bulk basics, Undo putting each copy back (and deleting a starter
+  under-sleeved deck, printing swaps, basic lands, Undo putting each copy back (and deleting a starter
   lot), brewing / dismantled decks, and lot-only `move_copies()`. The page side (add bar toast, Mainboard
-  save dialog, "Mark deck as built" count, Reconcile "Sleeved here", Board Undo) is in `test_pages_smoke.py`.
+  save dialog, the Build it dialog (mark-built count, a build moving a copy), Reconcile "Sleeved here", Board Undo) is in `test_pages_smoke.py`.
+- `test_edit_basics.py` — EDIT_FLOW_PLAN.md Phase 7: a basic land through every entry point in three collection
+  states (no lot, tracked in Box, tracked in another deck) — list changes, collection untouched, one `bulk` move,
+  a history row and one `bulk=1` move-log row with its `change_id`; Undo, ignored sources, and that the buy list,
+  contention, Reconcile, Build it and deck-sync never list one.
+- `test_edit_build.py` — EDIT_FLOW_PLAN.md Phase 5: `writes.build_deck()` (dry run == real run, storage / Auto /
+  donor sources, donor first, selections, flag clearing, "to pull" reporting) and the Advisor's
+  `add_advisor_idea()`.
 - `test_edit_sources.py` — EDIT_FLOW_PLAN.md Phase 2: picking the storage Location an add comes from
   and where a removal goes — the reads, refusal before writing, history rows, staged rows, the
   allocator's pinned rows and brewing claims, and the Board's source / dest actions.

@@ -160,6 +160,8 @@ def move_route(move):
                 else "Brewing — list only, the copy stays put")
     if kind == "dismantled":
         return "Dismantled — list only, nothing moved"
+    if kind == "buy":
+        return "to buy — no copy yet"
     return f"{_where(move['from'])} → {_where(move['to'])}"
 
 
@@ -170,6 +172,8 @@ def move_label(move):
         # Phase 2: a chosen Location is remembered with the add.
         place = f" from {move['source_location']}" if move.get("source_location") else ""
         return f"Brewing — {_card_qty(move)} will be pulled{place} when you build the deck."
+    if kind == "buy":
+        return f"On the list — {_card_qty(move)} still to buy (see the Workbench buy list)."
     if kind in ("brewing", "dismantled"):
         return f"{kind.capitalize()} — {_card_qty(move)}: list only, nothing moved."
     return f"{_card_qty(move)}: {move_route(move)}"
@@ -194,13 +198,15 @@ def _moves_dialog_body(moves):
 # ------------------------------------------------------------------
 def render_source_picker(choices, key, container=None, label="Comes from"):
     """`choices` is formatting.source_choices(): Auto first, then storage
-    Locations. Returns (source, source_location); (None, None) is Auto."""
+    Locations, other decks and Buy. Returns (source, source_location);
+    (None, None) is Auto, ("buy", None) a planned purchase."""
     container = container or st
     labels = [c[0] for c in choices]
     picked = container.selectbox(
         label, labels, key=key,
         help="Auto uses a copy already in this deck, then the biggest free lot in storage, "
-             "then makes a new copy record. Pick a Location to take it from there instead.",
+             "then makes a new copy record. Pick a Location to take it from there instead, "
+             "or Buy to put it on the list now and record the purchase later (no copy is made).",
     )
     _label, source, location = choices[labels.index(picked)] if picked in labels else choices[0]
     return source, location

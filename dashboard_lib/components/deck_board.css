@@ -100,6 +100,7 @@
 }
 .b-gc { background: #b8860b; }
 .b-no { background: #7a1f1f; }
+.b-buy { background: #1f4f7a; }
 
 /* Narrow screens: preview drops below the stacks. */
 /* Narrow screens: the rail goes ABOVE the stacks with the preview first (as
@@ -165,6 +166,7 @@
 .sl-v-available { background: rgba(46, 160, 67, 0.2); border-color: #2ea043; }
 .sl-v-elsewhere { background: rgba(210, 153, 34, 0.2); border-color: #d29922; }
 .sl-v-buy { background: rgba(218, 54, 51, 0.2); border-color: #da3633; }
+.sl-v-buying { background: rgba(56, 139, 253, 0.2); border-color: #388bfd; }
 .sl-v-neutral { background: transparent; border-color: var(--st-border-color, #444); opacity: 0.8; }
 
 .pick-banner {

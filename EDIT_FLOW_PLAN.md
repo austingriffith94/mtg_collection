@@ -21,9 +21,10 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] **Phase 1** — One write path for every deck edit; physical copies move right away; a pop-up says what moved. *Done 2026-10-13: every deck edit moves copies through `writes.sleeve_into_deck()` / `unsleeve_from_deck()` and returns its moves, `card_view.show_moves()` names them, and Board Undo reverts them; see "As built" at the end of the phase.*
 - [x] **Phase 2** — Choose where a card comes from (storage location) and where a removed card goes. *Done 2026-10-13: `deck_changes.source` / `source_location` record where an add comes from, every add and removal takes a `source` / `dest`, `queries.card_sources()` feeds the pickers, and the allocator honors the choice; see "As built" at the end of the phase.*
 - [x] **Phase 3** — Take a card from another deck, as a linked pair that shows on both decks. *Done 2026-10-13: `deck_changes.linked_change_id` pairs the donor's removal with the receiver's add, `writes.transfer_between_decks()` takes a card right away and `add_linked_take()` stages one, either half applies or drops both, and the allocator, Workbench, Board and Card Lookup all show the promise; see "As built" at the end of the phase.*
-- [ ] **Phase 4** — Planned buys: a card can be on a deck's list while you wait to buy it.
+- [x] **Phase 4** — Planned buys: a card can be on a deck's list while you wait to buy it. *Done 2026-10-14: `source='buy'` puts a card on a list with no lot, `queries.buy_list()` has four reasons, **Bought** and the order-import offer sleeve the copy in, and the Board marks it "buying"; see "As built" at the end of the phase.*
 - [ ] **Phase 5** — Building new decks from those choices, and one place per job.
 - [x] **Phase 6** — Collection-side edits tracked and flowing back: a move log for every copy, and Collection page / order import edits that touch a deck offer to update its list. *Done 2026-10-13, ahead of Phases 2–5 (it only needed Phase 1): every lot writer logs to `collection_moves`, Card Lookup shows it, and `card_view.show_deck_sync()` asks whether a deck's list should follow; see "As built" at the end of the phase.*
+- [ ] **Phase 7** — Basic lands are generic: no collection copy needed, never pulled from or returned to storage, but every add and removal is still tracked. Final phase; depends only on Phase 1 (best done after Phase 6 so the move log can record them).
 
 **Decided (2026-10-13):** a direct edit (Board, add bar, Mainboard table)
 moves the physical copy **right away**, the same way applying a planned
@@ -918,6 +919,82 @@ You can add a card you mean to buy, see it on the buy list, and record
 the purchase — by hand or by importing the order — and have it land in
 the right deck.
 
+### As built (2026-10-14)
+
+Where the build differs from, or adds to, the spec above:
+
+- **No schema change.** `source` is free text; `queries.SOURCES` is now
+  `("storage", "deck", "buy")`. `normalize_source()` returns `("buy", None)`
+  and drops any Location passed with it; an unknown source is refused with
+  "isn't a choice" (the two Phase 1/2 tests that used `'buy'` as the unknown
+  source now use `'teleport'`).
+- **A Buy add is a move of kind `buy`** (`PLACEHOLDER_MOVE_KINDS`, so Undo
+  skips it): `sleeve_into_deck(source="buy")` returns one for the copies still
+  to be bought and makes or moves nothing, on **any** build state (a brewing
+  deck says buy, not "will be pulled"). Copies already sleeved here count
+  first, so buying what's already there buys nothing; a bump buys only the
+  difference; an untracked basic returns its usual `bulk` move. The pop-up
+  reads *"On the list — Sol Ring still to buy (see the Workbench buy list)."*
+  `add_deck_card()` and `_prepare_apply()` run the stock check for a storage
+  pick only.
+- **Allocator: a new verdict, `buying`** ("Buying (your pick) — you own N").
+  It claims no copy, is skipped by `plan_conflicts()`, and is checked before
+  `already_here`, so "buy a second" on a deck that already has one sleeved
+  works. It sits between `claimed_by` and `already_here` in `PLAN_VERDICTS`;
+  the Workbench and Deck Editor tables show 💳, the Board's Shortlist uses a
+  blue `sl-v-buying` badge (its own color, not the "buy it" red).
+- **`queries.buy_list()` is one row per card** under the most specific
+  reason (`BUY_REASONS`: awaiting > chosen > contention > idea) and each row
+  gains `targets` (`deck_id`, `deck_name`, `scryfall_id`, `quantity`, `kind`,
+  `change_id`) for **Bought**. A card's quantity adds up distinct wants (one
+  per open row, one per deck-list entry) so a row seen under two reasons
+  isn't counted twice; a contention shortfall can overlap those, so it only
+  raises the total when larger. Awaiting is `queries.awaiting_buys()`: the
+  card's latest applied add row on a non-dismantled deck is `buy` and the list
+  runs more copies than the deck's sleeves hold. A **planned** row marked Buy
+  counts as chosen; an open row *not* marked Buy still needs zero owned copies
+  to count as an idea. The Workbench buy table's "Why" and the text export
+  name all four.
+- **Bought** is `writes.record_purchase(conn, deck_id, scryfall_id, quantity,
+  price_paid=None, change_id=None, collection_id=None)`: a new lot in the
+  deck's sleeves (`source = PURCHASE_LOT_SOURCE`, `price_paid` per copy as an
+  order import records it) or, with `collection_id`, that many copies of an
+  existing lot moved in. The move log's reason is the new `purchase`. A Buy
+  idea / planned row whose copies are fully bought goes back to Auto (a
+  part purchase leaves it marked); an applied Buy add needs nothing — once a
+  copy is sleeved it stops being awaiting by itself. Refused for a dismantled
+  deck and an untracked basic. **Not every row gets a button:** idea / chosen
+  / awaiting rows do (an idea's copy sits sleeved in its deck until the idea
+  is applied); a contention shortfall belongs to no one deck, so it has none
+  — mark one of its ideas Buy.
+- **Order import**: `order_import.import_rows()` results now carry each new
+  lot's `collection_id`; `queries.buy_matches(conn, lots)` offers each lot to
+  the `chosen` / `awaiting` targets of the same card (oracle_id), skipping the
+  deck the lot already sits in. Every wanting deck is offered, but only those
+  the lot can cover in order are ticked (`default`). `writes.sleeve_purchases()`
+  applies the ticked ones in order and checks each lot is still where it was
+  offered, so two decks ticked for one copy can't both get it (the second is
+  reported). The Collection Editor shows the offers inline after the import
+  rerun (not a dialog: Streamlit allows one per run and the deck-list question
+  may already be using it), "Leave them in the collection" dismisses them.
+- **Board**: `flags.buying` (from `queries.deck_buying()`) adds a 🛒 badge on
+  the card and turns `not_owned` off for it; a Shortlist row's payload gets
+  `can_buy`, and "to buy" shows in its route line. **Add** and **Apply** now
+  always open the source menu (Buy is always on offer, so there's always a
+  choice); a pick of Buy rides the trigger as `"source": "buy"`.
+- **Pickers**: `formatting.source_choices()` ends with `BUY_SOURCE_LABEL`
+  ("🛒 Buy"), which is also the data_editor cell for it; History reads "to buy".
+- **Not done (deliberately):** Phase 5's reading of Buy cards in the Build
+  Plan (they simply stay unpulled for now); a Buy choice on the Mainboard
+  table (it only sets quantities — use the add bar).
+- **Tests:** `tests/test_edit_buys.py` (29: Buy adds on every build state,
+  allocator and conflicts, the four reasons and the one-row rule, quantities,
+  Bought, order-import matching incl. two decks / one copy, Board payload and
+  actions), three smoke tests (add bar with Buy, Workbench **Bought**,
+  Collection Editor offer), and three updated expectations (the pickers now
+  end with Buy). 631 pass. The Board JS parses, but it was **not** clicked in
+  headless Edge this phase.
+
 ---
 
 ## Phase 5 — Building new decks, and one place per job
@@ -939,17 +1016,16 @@ the right deck.
   there instead of making a starter lot for it. Buy cards stay on the buy
   list. The dialog shows the full move list from `dry_run=True` as a
   **preview** before anything is written, then you confirm.
-- **Decide whether brewing cards left on Auto should claim a copy** (carried
-  over from Phase 2). Today only a saved storage pick holds a copy against
-  other plans (`queries.brewing_claims()`); an Auto card claims nothing, so
-  another deck's idea can promise the same copy and "Build it" would then
-  find it gone. Build it is the first place Auto gets resolved to a real lot
-  for a brewing deck, so look at it there: either have Auto cards claim the
-  copy Auto would pick (the same `free_lots()` order), or leave them
-  unclaimed and rely on Build it listing anything it can't pull as "to
-  pull". Weigh it against the cost: a 90-card brew would show "claimed by
-  <brew>" on a lot of other decks' ideas, so it may want a quieter badge
-  than `claimed_by`. Settle it with real use of brewing decks first.
+- **Decided (2026-10-14): a brewing card left on Auto claims no copy.**
+  Only an explicit choice claims one (a saved storage pick, a take, Buy), as
+  in Phases 2–4. A brew is speculative: a 90-card brew would claim most of
+  your free cards and bury other decks' ideas in "claimed by <brew>" badges.
+  "Build it" is where Auto gets resolved to real lots, and its
+  `dry_run=True` preview lists anything it can't pull (a copy since taken by
+  another plan) as "to pull" before anything is written. To hold a specific
+  copy for a brew, pick a Location. If real use shows a conflict at build
+  time is too late, add a quiet, non-allocating note on the brewing deck's
+  Board ("3 cards may be needed by other plans") rather than a claim.
 - **Clearing the brewing flag:** only once nothing is left to pull except
   Buy cards. A partial build leaves the deck brewing.
 - Anything that can't be pulled (a copy since taken by another plan, a
@@ -1188,6 +1264,94 @@ Where the build differs from, or adds to, the spec above:
   `_test_prompt_pass12_offline.py` and `_test_spellbook_offline.py` already
   fail at the last commit, before any of this work (a `streamlit` import clash,
   and two checks that grep page source for text older refactors changed).
+
+---
+
+## Phase 7 — Basic lands are generic, but still tracked
+
+Added 2026-10-13 as a final edit request. A basic land (Plains, Island,
+Swamp, Mountain, Forest, Wastes, and the Snow-Covered versions) is not a
+specific card. You don't own "a" Swamp in the sense that matters, and no
+particular printing has to exist anywhere in the collection. But adding or
+removing one still changes the deck, so it must still show up in the
+tracking, and the app must not treat it as a copy that needs to come from
+somewhere or go somewhere.
+
+### Where it stands today
+
+Phase 1 already half-handles this. `_is_basic_land()` makes an untracked
+basic with no free copy return a `bulk` move instead of making a starter
+lot, and the Board skips moving a NULL-quantity basic. What's missing:
+
+- A basic is only generic when no tracked lot of it exists. If a lot of
+  Swamps does exist (one imported from an order, say), +1 pulls from it and
+  −1 puts one back in Box, so the same edit behaves two ways depending on
+  what's in the collection.
+- Nothing says "basic" to the user. The allocator, the Board's ownership
+  badge, the buy list and the contention table all have their own way of
+  deciding whether a land counts as "not owned" or "short".
+- A bulk move is shown in the pop-up but isn't written to Phase 6's move
+  log, so Card Lookup has no record of a basic coming or going.
+
+### Behavior
+
+- **One rule, one helper.** `queries.is_basic_land(conn, scryfall_id)`
+  (reading `cards.is_basic_land`, which already exists) is the only
+  place that decides this. Every spot that today checks ownership or
+  stock asks it first, instead of each writing its own test.
+- **Adds and removals never touch a lot.** `sleeve_into_deck()` and
+  `unsleeve_from_deck()` return one `bulk` move for a basic and stop,
+  **even when a tracked lot of that basic exists**. Nothing is pulled from
+  storage, nothing is split, no starter lot is made, nothing is put back
+  in Box on a cut. Lots of basics you do track simply sit where they are,
+  unaffected by deck edits.
+- **Still recorded.** The deck's history gets its applied row as for any
+  card (so "Swamp ×4 → ×6" and "cut 2 Forest" read in History), including
+  quantity changes (Phase 0). The pop-up names the move as *"Swamp ×2:
+  basic land — not tracked in the collection"*. The move is **also logged**
+  in Phase 6's `collection_moves`, so Card Lookup's "Where copies went"
+  shows every basic added or removed. There's no lot to point at, so the
+  row has `collection_id` NULL and a new additive column `bulk INTEGER
+  DEFAULT 0` set to 1 (NULL locations already mean "new / deleted", so a
+  flag is needed to tell this apart). An add reads "basic land supply →
+  Prosper", a cut "Prosper → basic land supply"; `reason` is the usual
+  `deck_edit` / `apply`, with the causing `change_id`. Existing rows keep
+  `bulk = 0`.
+- **Source and destination pickers are skipped** for a basic. No
+  "Comes from" / "Removed copies go to" choice is offered, since neither
+  has a meaning, and `normalize_source()` / `normalize_dest()` ignore a
+  value sent for one (rather than refusing it, so a bulk save across mixed
+  cards doesn't fail on its basics).
+- **Never "not owned", never "short", never "to pull".** The allocator
+  gives a basic its own verdict text ("Basic land — always available") and
+  a basic never creates a contention row, a buy-list row (Phase 4), a
+  Reconcile "to pull" / "to put away" line, or a "not owned" badge on the
+  Board. Reconcile compares a deck's non-basic cards to its sleeves only.
+- **Brewing and dismantled decks** need nothing extra: a basic already
+  returns a `bulk` move, never the brewing placeholder, since there'd be
+  nothing to pull later. "Build it" (Phase 5) skips basics.
+- **Collection-side edits:** deck-sync offers (Phase 6) skip basics, as
+  they already skip untracked bulk basics; a lot of Swamps moved into or
+  out of a deck's Location doesn't ask about the list.
+- **Undo** has no lot to put back for a basic's move, so it reverses the
+  list change and logs the opposite `bulk` row.
+
+### Tests
+
+For every entry point (add bar, each Board op, Mainboard save, apply of
+all three change shapes), a basic land with no lot, with a tracked lot in
+Box, and with a tracked lot sleeved in another deck: all three leave
+`collection` untouched, return one `bulk` move, write the deck's
+history row, and log one `bulk=1` move row (add and cut directions, with
+the `change_id`; Undo logs its own reverse row). A pickers-skipped smoke test; the allocator, contention,
+buy-list and Reconcile never list a basic; Undo on a basic reverts the list
+only; deck-sync offers skip it.
+
+### Done when
+
+Adding or removing a basic land never needs a card in the collection and
+never moves one, and every such edit still appears in the deck's history,
+the pop-up and the move log.
 
 ---
 

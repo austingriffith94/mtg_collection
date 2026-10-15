@@ -22,6 +22,11 @@ EDIT_FLOW_PLAN.md Phase 6: an import or add whose Location is a deck's name
 sleeves the copies there already, so it asks whether that deck's list
 should gain the card (card_view.show_deck_sync). Imports are logged as
 "import" in the move log, a hand add as "collection_edit".
+
+Phase 4: after an import, lots of a card a deck is waiting to buy (on its list
+from a Buy add, or an open Shortlist row marked Buy) are offered a "Sleeve
+into Prosper" per match, ticked by default (queries.buy_matches). Lots with
+no match import as they always did.
 """
 import sys
 import os
@@ -36,6 +41,9 @@ import streamlit as st
 from dashboard_lib import db, loaders, writes, card_resolver, formatting as fmt, queries as q
 from dashboard_lib import card_view as cv, order_import, nav
 
+
+# Where the order import's buy-list matches wait for an answer (session state).
+BUY_OFFERS_KEY = "editor_order_buy_offers"
 
 cv.setup_page("Collection Editor · MTG Dashboard", "📥")
 
@@ -251,6 +259,15 @@ if order_file is not None:
             failed = [r for r in results if r["status"] == "error"]
             skipped = [r for r in results if r["status"] == "skipped"]
 
+            # Phase 4: copies a deck is waiting to buy. The offers wait in
+            # session state (rendered after the rerun, below).
+            buy_offers = q.buy_matches(conn, [
+                {"collection_id": r["collection_id"], "scryfall_id": r["row"]["scryfall_id"],
+                 "quantity": r["row"]["quantity"], "location": order_location.strip() or None}
+                for r in added])
+            if buy_offers:
+                st.session_state[BUY_OFFERS_KEY] = buy_offers
+
             note = f" ({len(fetched)} fetched fresh from Scryfall)" if fetched else ""
             lines = [f"Imported {len(added)} card(s){note}."]
             if skipped:
@@ -266,6 +283,26 @@ if order_file is not None:
                 "collection": True, "reference": True,
                 "deck_sync": q.deck_sync_offers(conn, move_mark),
             })
+
+# ---------------- Sleeve imported copies into decks waiting on a buy ----------------
+_buy_offers = st.session_state.get(BUY_OFFERS_KEY)
+if _buy_offers:
+    st.subheader("🛒 These copies were on a deck's buy list")
+    st.caption("Tick the decks that should get a copy. Nothing moves until you press the button; "
+               "closing this leaves the copies in the collection as imported.")
+    ticked = []
+    for i, offer in enumerate(_buy_offers):
+        if st.checkbox(f"Sleeve {offer['card']} ×{offer['quantity']} into {offer['deck_name']}",
+                       value=offer["default"], key=f"editor_buy_offer_{i}"):
+            ticked.append(offer)
+    go_col, skip_col = st.columns(2)
+    if go_col.button("Sleeve the ticked copies", key="editor_buy_offer_go", type="primary", disabled=not ticked):
+        lines, moves = writes.sleeve_purchases(conn, ticked)
+        st.session_state.pop(BUY_OFFERS_KEY, None)
+        cv.finish_edit({"message": lines, "moves": moves})
+    if skip_col.button("Leave them in the collection", key="editor_buy_offer_skip"):
+        st.session_state.pop(BUY_OFFERS_KEY, None)
+        st.rerun()
 
 st.divider()
 st.markdown(

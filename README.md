@@ -395,9 +395,13 @@ jump to the same deck's other views.
     row needed at all — still surfaces. "Drop from deck N" removes it from
     that deck's real mainboard on the spot (logged to history like any
     hand edit, via the existing `writes.remove_deck_card`).
-  - **Buy list** (Phase 3) — every open idea with zero owned copies,
-    grouped across decks so wanting one card on three shortlists prices it
-    once, plus one row per Contention shortfall. Exportable as plain text.
+  - **Buy list** (Phase 3, Phase 4) — one row per card, grouped across
+    decks so wanting one card on three shortlists prices it once, under the
+    most specific of four reasons: on a deck's list from a **Buy** add with
+    no copy sleeved yet (*awaiting*), a Shortlist row marked **Buy**
+    (*chosen*), a Contention shortfall, or an open idea with zero owned
+    copies. Each row's deck gets a **Bought** button (see *Planned buys*
+    below). Exportable as plain text.
   - **Reconcile** (Phase 4) — unlocated lots (editable, bulk-assignable,
     priciest first) and each deck's list-vs-physical diff in both
     directions: *to pull* (in the mainboard, no lot located to the deck) and
@@ -759,6 +763,27 @@ rather than the only choice.
   Workbench verdict of 📍 means the idea's chosen Location has run out
   while another still has a copy. A brewing deck remembers its picks without
   moving anything, and other plans can't promise the copy it picked.
+
+### Planned buys
+
+Since [EDIT_FLOW_PLAN.md](EDIT_FLOW_PLAN.md) Phase 4, the last **Comes from**
+choice is **🛒 Buy**: the card goes on the deck's list (or an idea / planned
+row) now, and **no collection copy is made or moved**. It's allowed even when
+you own copies elsewhere — keep Gisa's, buy a second.
+
+- **Workbench → Buy list** shows it until a copy is sleeved in that deck.
+  **Bought** (per deck, with an optional price paid each) makes the lot
+  straight in that deck's sleeves. A Buy idea goes back to Auto when bought
+  in full, so applying it later finds the copy already there.
+- **Collection Editor → order import**: after an import, copies of a card a
+  deck is waiting on are offered *"Sleeve Sol Ring ×1 into Prosper"*, ticked
+  by default for the first deck wanting it (two decks wanting one copy are
+  both offered; only the first is ticked). Nothing moves until you press the
+  button; other lots import as always.
+- **Board**: a card on the list from a Buy add with no copy yet carries a 🛒
+  *buying* badge (not the ✗ "Not owned" one — that means no decision made),
+  and a Shortlist row marked Buy reads 💳 *buying*. It claims no copy, so it
+  never blocks another deck's plan. Add / Apply open a menu with Buy last.
 
 ### Taking a card from another deck
 

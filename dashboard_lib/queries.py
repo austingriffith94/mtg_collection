@@ -59,8 +59,8 @@ _SCHEMA_UPGRADES = [
     ("deck_changes", "dest_location", "ALTER TABLE deck_changes ADD COLUMN dest_location TEXT"),
     # EDIT_FLOW_PLAN.md Phase 2: where an ADD's copy comes from. NULL = Auto
     # (writes.sleeve_into_deck()'s rule), 'storage' = a chosen storage
-    # location (source_location). 'deck' (Phase 3) and 'buy' (Phase 4) join
-    # later. They sit on deck_changes so a staged idea and the applied
+    # location (source_location), 'deck' (Phase 3) another deck, 'buy'
+    # (Phase 4) a planned purchase with no location. They sit on deck_changes so a staged idea and the applied
     # history row a direct edit writes both carry the choice.
     ("deck_changes", "source", "ALTER TABLE deck_changes ADD COLUMN source TEXT"),
     ("deck_changes", "source_location", "ALTER TABLE deck_changes ADD COLUMN source_location TEXT"),
@@ -1179,7 +1179,7 @@ def card_inventory_status(conn, card_name, deck_name=None, scryfall_id=None):
 # The verdicts a shortlist row can get, worst-to-best, so a table can be
 # sorted by "what needs attention". `no_add` is the degenerate case of a
 # row that removes a card without adding one.
-PLAN_VERDICTS = ("not_owned", "wrong_location", "in_other_deck", "claimed_by", "already_here",
+PLAN_VERDICTS = ("not_owned", "wrong_location", "in_other_deck", "claimed_by", "buying", "already_here",
                  "available", "no_add")
 
 
@@ -1269,6 +1269,9 @@ def plan_availability(conn, changes):
                      sleeved in other decks: unsleeve one, don't buy one
       not_owned      short and you own none — a purchase (applying would
                      create a starter lot). Phase 3's buy list reads this
+      buying         the row chose Buy (Phase 4): a decided purchase, owned
+                     copies elsewhere or not. It claims nothing, so it never
+                     competes with another row for a copy
 
     A row wanting 2 copies that gets 1 is reported by the blocker for the
     copy it did NOT get (claimed=1, verdict claimed_by / in_other_deck /
@@ -1287,7 +1290,11 @@ def plan_availability(conn, changes):
     `available` ("From Gisa"), `claimed_by` when an earlier take got the
     copy, or why the donor can't give it. An Auto row short of storage whose
     only other copies are all promised this way is `claimed_by` the takers
-    rather than `in_other_deck` — unsleeving one would break the promise."""
+    rather than `in_other_deck` — unsleeving one would break the promise.
+
+    Phase 4: a row with source='buy' is `buying` and claims no copy at all —
+    even one already sleeved in its own deck ("keep Gisa's, buy a second"),
+    which is the one case `already_here` would otherwise swallow."""
     rows = sorted(_rows_of(changes), key=_change_sort_key)
     deck_names = deck_name_set(conn)
     key_cache = {}
@@ -1383,7 +1390,7 @@ def plan_availability(conn, changes):
             d: n for d, n in sorted(pool["deck_holdings"].items()) if d != deck_name
         }
 
-        if in_this_deck:
+        if in_this_deck and row.get("source") != "buy":
             verdict["verdict"] = "already_here"
             verdict["text"] = f"Already sleeved in {deck_name} (x{in_this_deck})"
             out[change_id] = verdict
@@ -1395,6 +1402,14 @@ def plan_availability(conn, changes):
             verdict["bulk"] = True
             verdict["claimed"] = wanted
             verdict["text"] = "Bulk basic land — untracked quantity"
+            out[change_id] = verdict
+            continue
+
+        if row.get("source") == "buy":
+            # A decided purchase (Phase 4): nothing to allocate.
+            verdict["verdict"] = "buying"
+            owned = pool["owned"]
+            verdict["text"] = f"Buying (your pick) — you own {owned}" if owned else "Buying (your pick) — none owned"
             out[change_id] = verdict
             continue
 
@@ -1526,7 +1541,7 @@ def plan_conflicts(conn, changes, availability=None):
         change_id = int(row["change_id"])
         verdict = availability.get(change_id, {})
         # An already_here row isn't competing — it claims nothing.
-        if verdict.get("verdict") in ("no_add", "already_here") or verdict.get("bulk"):
+        if verdict.get("verdict") in ("no_add", "already_here", "buying") or verdict.get("bulk"):
             continue
         key = _card_key(conn, row, key_cache)
         if key is None:
@@ -2340,10 +2355,9 @@ def deck_list_quantity(conn, deck_id, scryfall_id):
 DEFAULT_STORAGE = "Box"
 
 # The `deck_changes.source` values a caller may set (NULL is Auto): a storage
-# Location (Phase 2) or another deck (Phase 3, source_location = its name).
-# 'buy' (Phase 4) is added here when it exists, so a write that names it now
-# is refused instead of saved and ignored.
-SOURCES = ("storage", "deck")
+# Location (Phase 2), another deck (Phase 3, source_location = its name) or a
+# planned purchase (Phase 4, no source_location: nothing to take it from yet).
+SOURCES = ("storage", "deck", "buy")
 
 
 def same_location(a, b):
@@ -2706,71 +2720,205 @@ def deck_sync_offers(conn, since_move_id):
     return sorted(offers, key=lambda o: (o["deck_name"].casefold(), o["card"].casefold()))
 
 
-def buy_list(conn, contention=None):
-    """The cross-deck shopping list: every open **idea** (not yet staged —
-    a planned swap that's not owned buys a starter lot automatically on
-    apply, it isn't a decision pending here) whose card has ZERO owned
-    copies, grouped across decks so wanting the same card on three
-    shortlists prices it once, not three times. Plus one row per
-    contention_table() shortfall — "you already decided you want this
-    twice" buys, priced at the shortfall quantity.
+BUY_REASONS = ("awaiting", "chosen", "contention", "idea")   # most specific first
 
-    `contention` reuses an existing contention_table() result instead of
-    recomputing it. Returns {"rows": [...], "total": float}, where each row
-    is {card, quantity, price, subtotal, decks, reason} and `reason` is
-    "idea" or "contention"."""
+
+def awaiting_buys(conn, deck_id=None):
+    """Cards on a deck's list from a Buy add that no copy is sleeved for yet
+    (EDIT_FLOW_PLAN.md Phase 4's `awaiting`). A card is one when its latest
+    applied add row on the deck is source='buy' (a direct add logs one; so
+    does applying an idea) and the list runs more copies than the deck's
+    sleeves hold. A dismantled deck and an untracked basic land never are.
+    `deck_id` narrows it to one deck. Each: {deck_id, deck_name, scryfall_id,
+    card, quantity (copies still to buy), price}."""
+    latest = {}
+    for d_id, sid, source in conn.execute(
+        """SELECT dc.deck_id, dc.add_scryfall_id, dc.source
+           FROM deck_changes dc JOIN decks d ON d.deck_id = dc.deck_id
+           WHERE dc.status = 'applied' AND dc.add_scryfall_id IS NOT NULL
+             AND COALESCE(d.build_state, '') != 'dismantled'
+           ORDER BY dc.change_id"""
+    ).fetchall():
+        latest[(d_id, sid)] = source
+    out = []
+    for d_id, deck_name, sid, qty, card, price in conn.execute(
+        """SELECT d.deck_id, d.name, dcd.scryfall_id, dcd.quantity, c.name, c.current_price_usd
+           FROM decks d JOIN deck_cards dcd ON dcd.deck_id = d.deck_id
+           JOIN cards c ON c.scryfall_id = dcd.scryfall_id
+           WHERE COALESCE(d.build_state, '') != 'dismantled'"""
+    ).fetchall():
+        if latest.get((d_id, sid)) != "buy" or (deck_id is not None and d_id != deck_id):
+            continue
+        if is_bulk_basic(conn, scryfall_id=sid):
+            continue
+        sleeved = sum(n for _c, n, loc, _s in card_lots(conn, sid) if (loc or "").strip() == deck_name)
+        owed = min(int(qty or 1), deck_list_quantity(conn, d_id, sid) - sleeved)
+        if owed > 0:
+            out.append({"deck_id": d_id, "deck_name": deck_name, "scryfall_id": sid, "card": card,
+                        "quantity": owed, "price": price})
+    return out
+
+
+def deck_buying(conn, deck_id):
+    """{scryfall_id: copies still to buy} for the Board's "buying" badge."""
+    return {b["scryfall_id"]: b["quantity"] for b in awaiting_buys(conn, deck_id=deck_id)}
+
+
+def _price_for(conn, oracle_id, name):
+    """The cheapest known printing's price: by oracle_id, else by name."""
+    if oracle_id:
+        row = conn.execute("SELECT MIN(current_price_usd) FROM cards WHERE oracle_id = ?", (oracle_id,)).fetchone()
+    else:
+        row = conn.execute("SELECT MIN(current_price_usd) FROM cards WHERE name = ? COLLATE NOCASE", (name,)).fetchone()
+    return row[0] if row else None
+
+
+def _oracle_key(conn, scryfall_id):
+    row = conn.execute("SELECT oracle_id FROM cards WHERE scryfall_id = ?", (scryfall_id,)).fetchone()
+    return (row[0] if row and row[0] else None) or f"sid:{scryfall_id}"
+
+
+def buy_list(conn, contention=None):
+    """The cross-deck shopping list, one row per card, grouped across decks
+    so wanting the same card on three decks prices it once. A card can have
+    several reasons to be here; it gets ONE row, under the most specific
+    (BUY_REASONS order):
+
+      awaiting    on a deck's list from a Buy add, still no copy sleeved there
+      chosen      an open idea or planned change marked Buy (Phase 4), even
+                  when you own copies elsewhere — "keep Gisa's, buy a second"
+      contention  a mainboard / shortlist shortfall from contention_table()
+      idea        an open idea (not yet staged — a planned swap that's not
+                  owned buys a starter lot automatically on apply) whose card
+                  you own ZERO copies of
+
+    `contention` reuses an existing contention_table() result. Returns
+    {"rows": [...], "total": float}; each row is {card, quantity, price,
+    subtotal, decks, reason, targets}.
+
+    `quantity` adds up the distinct wants (one per open row, one per deck
+    list entry) so the same row seen under two reasons isn't counted twice;
+    a contention shortfall can overlap those, so it only raises the total
+    when it is the larger figure. `targets` is what "Bought" can act on:
+    [{deck_id, deck_name, scryfall_id, quantity, kind: awaiting | chosen |
+    idea, change_id (None for awaiting)}] — a contention shortfall belongs to
+    no one deck, so it adds none."""
     if contention is None:
         contention = contention_table(conn)
 
     groups = {}
-    for deck_name, add_sid, add_name, qty, add_oracle_id, resolved_name, price in conn.execute(
-        """SELECT d.name, dc.add_scryfall_id, dc.add_name, dc.quantity, ac.oracle_id,
-                  ac.name,
+
+    def group(key, name, price):
+        g = groups.setdefault(key, {
+            "card": name, "price": price, "wants": {}, "reasons": set(), "decks": set(),
+            "targets": [], "shortfall": 0, "oracle_id": None})
+        if g["price"] is None:
+            g["price"] = price
+        return g
+
+    for (change_id, source, deck_id, deck_name, add_sid, add_name, qty, add_oracle_id,
+         resolved_name, price) in conn.execute(
+        """SELECT dc.change_id, dc.source, d.deck_id, d.name, dc.add_scryfall_id, dc.add_name,
+                  dc.quantity, ac.oracle_id, ac.name,
                   COALESCE(ac.current_price_usd,
                            (SELECT MIN(p.current_price_usd) FROM cards p
                             WHERE p.name = dc.add_name COLLATE NOCASE))
            FROM deck_changes dc
            JOIN decks d ON d.deck_id = dc.deck_id
            LEFT JOIN cards ac ON ac.scryfall_id = dc.add_scryfall_id
-           WHERE dc.status = 'idea'
-             AND (dc.add_scryfall_id IS NOT NULL OR dc.add_name IS NOT NULL)"""
+           WHERE dc.status IN ('idea', 'planned')
+             AND (dc.status = 'idea' OR dc.source = 'buy')
+             AND (dc.add_scryfall_id IS NOT NULL OR dc.add_name IS NOT NULL)
+           ORDER BY dc.change_id"""
     ).fetchall():
         name = resolved_name or add_name
         if not name:
             continue
-        owned = sum(q or 0 for _cid, q, _loc in _lots_for_card(conn, name=name, scryfall_id=add_sid))
-        if owned > 0:
-            continue
-        key = add_oracle_id or f"name:{name.casefold()}"
-        g = groups.setdefault(key, {"card": name, "price": price, "quantity": 0, "decks": set()})
-        g["quantity"] += max(1, int(qty or 1))
+        chosen = source == "buy"
+        if not chosen:
+            owned = sum(q or 0 for _cid, q, _loc in _lots_for_card(conn, name=name, scryfall_id=add_sid))
+            if owned > 0:
+                continue
+        want = max(1, int(qty or 1))
+        g = group(add_oracle_id or f"name:{name.casefold()}", name, price)
+        g["oracle_id"] = add_oracle_id
+        g["wants"][("change", change_id)] = want
+        g["reasons"].add("chosen" if chosen else "idea")
         g["decks"].add(deck_name)
-        if g["price"] is None:
-            g["price"] = price
+        sid = add_sid or (conn.execute(
+            "SELECT scryfall_id FROM cards WHERE name = ? COLLATE NOCASE ORDER BY current_price_usd LIMIT 1",
+            (name,)).fetchone() or [None])[0]
+        if sid:
+            g["targets"].append({"deck_id": deck_id, "deck_name": deck_name, "scryfall_id": sid,
+                                 "quantity": want, "kind": "chosen" if chosen else "idea",
+                                 "change_id": change_id})
+
+    for b in awaiting_buys(conn):
+        key = _oracle_key(conn, b["scryfall_id"])
+        g = group(key, b["card"], b["price"])
+        g["oracle_id"] = None if key.startswith("sid:") else key
+        g["wants"][("list", b["deck_id"], b["scryfall_id"])] = b["quantity"]
+        g["reasons"].add("awaiting")
+        g["decks"].add(b["deck_name"])
+        g["targets"].append({"deck_id": b["deck_id"], "deck_name": b["deck_name"],
+                             "scryfall_id": b["scryfall_id"], "quantity": b["quantity"],
+                             "kind": "awaiting", "change_id": None})
+
+    for c in contention:
+        g = group(c["oracle_id"], c["card"], _price_for(conn, c["oracle_id"], c["card"]))
+        g["oracle_id"] = c["oracle_id"]
+        g["shortfall"] = c["shortfall"]
+        g["reasons"].add("contention")
+        g["decks"].update(c["mainboard_decks"] + c["shortlist_decks"])
 
     rows, total = [], 0.0
     for g in sorted(groups.values(), key=lambda g: g["card"].casefold()):
-        subtotal = (g["price"] or 0) * g["quantity"]
+        quantity = max(sum(g["wants"].values()), g["shortfall"])
+        price = g["price"] if g["price"] is not None else _price_for(conn, g["oracle_id"], g["card"])
+        subtotal = (price or 0) * quantity
         total += subtotal
         rows.append({
-            "card": g["card"], "quantity": g["quantity"], "price": g["price"],
-            "subtotal": subtotal, "decks": sorted(g["decks"]), "reason": "idea",
+            "card": g["card"], "quantity": quantity, "price": price, "subtotal": subtotal,
+            "decks": sorted(g["decks"]), "targets": g["targets"],
+            "reason": next(r for r in BUY_REASONS if r in g["reasons"]),
         })
-
-    for c in contention:
-        price_row = conn.execute(
-            "SELECT MIN(current_price_usd) FROM cards WHERE oracle_id = ?", (c["oracle_id"],)
-        ).fetchone()
-        price = price_row[0] if price_row else None
-        subtotal = (price or 0) * c["shortfall"]
-        total += subtotal
-        rows.append({
-            "card": c["card"], "quantity": c["shortfall"], "price": price,
-            "subtotal": subtotal, "decks": c["mainboard_decks"] + c["shortlist_decks"],
-            "reason": "contention",
-        })
-
     return {"rows": rows, "total": total}
+
+
+def buy_matches(conn, lots):
+    """Which purchases newly arrived lots could fill (Phase 4's order-import
+    offer). `lots` = [{collection_id, scryfall_id, quantity, location}, ...].
+    A lot matches a `chosen` / `awaiting` target of the same card (oracle_id)
+    on a deck other than the one it already sits in. Each lot's copies are
+    handed to its matching targets oldest first; a target the lot can't
+    cover still gets an offer, with `default` False, so you can choose which
+    of two decks wanting one copy gets it. Returns [{collection_id, card,
+    from_location, quantity (offered), lot_quantity, deck_id, deck_name, scryfall_id,
+    change_id, kind, default}]."""
+    by_key = {}
+    for row in buy_list(conn, contention=[])["rows"]:
+        for t in row["targets"]:
+            if t["kind"] in ("chosen", "awaiting"):
+                by_key.setdefault(_oracle_key(conn, t["scryfall_id"]), []).append((row["card"], t))
+    offers = []
+    for lot in lots:
+        sid = lot.get("scryfall_id")
+        if not sid or not lot.get("quantity"):
+            continue
+        left = int(lot["quantity"])
+        for card, t in by_key.get(_oracle_key(conn, sid), []):
+            if (lot.get("location") or "").strip() == t["deck_name"]:
+                continue   # imported straight into that deck: already sleeved
+            give = min(left, t["quantity"])
+            offers.append({
+                "collection_id": lot["collection_id"], "card": card,
+                "from_location": (lot.get("location") or "").strip(),   # where the lot sat when offered
+                "quantity": min(int(lot["quantity"]), t["quantity"]), "lot_quantity": int(lot["quantity"]),
+                "deck_id": t["deck_id"], "deck_name": t["deck_name"], "scryfall_id": t["scryfall_id"],
+                "change_id": t["change_id"], "kind": t["kind"], "default": give > 0,
+            })
+            left -= give
+    return offers
 
 
 def card_lookup(conn, name):

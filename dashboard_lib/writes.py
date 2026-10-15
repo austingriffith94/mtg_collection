@@ -816,6 +816,10 @@ def add_deck_card(conn, deck_id, scryfall_id, quantity=1, with_moves=True, note=
     away (default Box), logged the same way. Each applies only in its own
     direction and is ignored in the other.
 
+    ("buy", None) (Phase 4) puts the increase on the list with NO copy moved
+    or made — no phantom lot — and the history row says `buy`, which is what
+    puts the card on the Workbench buy list until a copy is sleeved there.
+
     ("deck", "Gisa") (Phase 3) takes the increase out of Gisa: its list gives
     the card up too, through transfer_between_decks(), which this hands the
     increase to — see there for what it checks and writes."""
@@ -830,7 +834,7 @@ def add_deck_card(conn, deck_id, scryfall_id, quantity=1, with_moves=True, note=
     if source == "deck":
         return transfer_between_decks(conn, _deck_id_by_name(conn, source_location), deck_id,
                                       scryfall_id, quantity - (existing or 0), note=note)["moves"]
-    if source and with_moves:
+    if source == "storage" and with_moves:
         _check_stock(conn, deck_id, scryfall_id,
                      q.deck_list_quantity(conn, deck_id, scryfall_id) - (existing or 0) + quantity,
                      source_location)
@@ -935,6 +939,8 @@ def bulk_update_deck_cards(conn, deck_id, updates, with_moves=True, dest=None):
 #                                `direction` says whether copies would have
 #                                come in or gone out
 #                    dismantled  likewise for a dismantled deck (in only)
+#                    buy         a planned purchase (Phase 4): the list has
+#                                the card, no lot exists to move or make
 #
 # `kind` rather than a sentinel in from/to, because "Bulk" or "Brewing"
 # could be someone's real storage box name.
@@ -952,7 +958,9 @@ def normalize_source(conn, source, source_location, deck_id=None):
     """(source, source_location) as stored: (None, None) for Auto (None, "",
     "auto", or a Location with no source), ("storage", <Location in the
     catalog's spelling>), or (Phase 3) ("deck", <another deck's exact name>).
-    ValueError for a source that doesn't exist yet ('buy' is Phase 4), a pick
+    (Phase 4) ("buy", None): a planned purchase, which has no Location — any
+    `source_location` passed with it is dropped.
+    ValueError for a source that doesn't exist, a pick
     with no Location / deck, a deck name given as a storage Location, an
     unknown deck, or — with `deck_id`, the deck receiving the card — a deck
     taking a card from itself."""
@@ -960,9 +968,11 @@ def normalize_source(conn, source, source_location, deck_id=None):
         return None, None
     if source not in q.SOURCES:
         raise ValueError(
-            f"Taking a card from {source!r} isn't available yet — leave it on Auto, or pick a storage "
-            "Location or another deck."
+            f"Taking a card from {source!r} isn't a choice — leave it on Auto, or pick a storage "
+            "Location, another deck or Buy."
         )
+    if source == "buy":
+        return "buy", None
     place = (source_location or "").strip()
     if source == "deck":
         if not place:
@@ -1021,7 +1031,7 @@ def _check_stock(conn, deck_id, scryfall_id, list_after, location):
             "Pick another Location, or leave it on Auto."
         )
 # Kinds that record a decision but touch no lot; revert_moves() skips them.
-PLACEHOLDER_MOVE_KINDS = ("bulk", "brewing", "dismantled")
+PLACEHOLDER_MOVE_KINDS = ("bulk", "brewing", "dismantled", "buy")
 
 
 def _move(card, quantity, kind, collection_id=None, frm=None, to=None, **extra):
@@ -1065,6 +1075,9 @@ def sleeve_into_deck(conn, deck_id, scryfall_id, quantity, source=None, source_l
     anything — if it can't supply them. Copies already sleeved here still
     count first. A starter lot is never made for a chosen Location.
 
+    `source="buy"` (Phase 4) moves and makes nothing: it returns one `buy`
+    move for the copies still to be bought, the same on any deck.
+
     `source="deck"` (Phase 3) takes copies sleeved in the deck named by
     `source_location` — only those its list no longer runs, so call it after
     that deck's list has given the card up (transfer_between_decks() and a
@@ -1088,6 +1101,13 @@ def sleeve_into_deck(conn, deck_id, scryfall_id, quantity, source=None, source_l
     need = min(int(quantity), q.deck_list_quantity(conn, deck_id, scryfall_id) - here)
     if need <= 0:
         return []
+    if source == "buy":
+        # A planned purchase (Phase 4): the list has it, no lot exists yet and
+        # none is made — the copy is sleeved when it's bought (record_purchase),
+        # whatever the deck's build state. A basic land is never bought.
+        if q.is_bulk_basic(conn, scryfall_id=scryfall_id):
+            return [_move(card, need, "bulk", frm="bulk", to="bulk")]
+        return [_move(card, need, "buy", frm=None, to=None, direction="in")]
     if state in q.BUILD_STATES and not force:
         # The chosen Location rides along so "will be pulled from Lands Box"
         # can say so, and so Build it (Phase 5) has it on the move.
@@ -1783,7 +1803,7 @@ def _prepare_apply(conn, row, add_scryfall_id=None, donor_removing=0):
             list_after -= _deck_card_quantity(conn, deck_id, remove_sid) or 0
         if source == "deck":
             _check_deck_stock(conn, deck_id, add_sid, list_after, source_location, donor_removing)
-        else:
+        elif source == "storage":
             _check_stock(conn, deck_id, add_sid, list_after, source_location)
     return ctx
 
@@ -2298,7 +2318,7 @@ COLLECTION_FIELDS = ["quantity", "foil", "location", "date_acquired", "price_pai
 # rename_deck() logs nothing — a rename relabels, no copy moved.
 # ------------------------------------------------------------------
 MOVE_REASONS = ("deck_edit", "apply", "reconcile", "dismantle", "collection_edit",
-                "import", "prune", "deck_delete")
+                "import", "prune", "deck_delete", "purchase")
 
 
 def _loc(value):
@@ -2696,6 +2716,89 @@ def sync_deck_lists(conn, offers):
         else:
             moves += add_deck_card(conn, offer["deck_id"], sid, new_qty, note=SYNC_NOTE)
             lines.append(f"{offer['deck_name']}: {offer['card']} down to ×{new_qty} on the list.")
+    return lines, moves
+
+
+# ------------------------------------------------------------------
+# Planned buys (EDIT_FLOW_PLAN.md Phase 4). A Buy add puts a card on a list
+# with no lot behind it; these two close the loop when the copy turns up.
+# ------------------------------------------------------------------
+PURCHASE_LOT_SOURCE = "Purchase (buy list)"
+
+
+def record_purchase(conn, deck_id, scryfall_id, quantity=1, price_paid=None, change_id=None,
+                    collection_id=None):
+    """A bought copy lands in a deck's sleeves. With `collection_id` (a lot
+    that arrived by order import) that many copies move into the deck;
+    without, a new lot is made there at `price_paid` per copy (the unit
+    price, as an order import records it). Returns the moves.
+
+    `change_id` is the open Shortlist row the purchase answers: a row marked
+    Buy goes back to Auto once its copies are bought, so applying it later
+    finds them already sleeved here instead of waiting for a copy that now
+    exists. (An applied Buy add needs nothing: once a copy is sleeved the
+    card stops being `awaiting` by itself.) The row is left alone when the
+    purchase covers fewer copies than it wants.
+
+    Refused, writing nothing, for a dismantled deck (its cards are already
+    gone) and an untracked basic land (nobody buys one per deck)."""
+    deck_name, state = _deck_name_and_state(conn, deck_id)
+    if state == "dismantled":
+        raise ValueError(f"{deck_name} is dismantled — nothing to sleeve a purchase into.")
+    if q.is_bulk_basic(conn, scryfall_id=scryfall_id):
+        raise ValueError("Basic lands are untracked — there's no copy to record.")
+    quantity = int(quantity)
+    if quantity < 1:
+        raise ValueError("Bought quantity must be at least 1.")
+    if collection_id is not None:
+        moves = move_copies(conn, collection_id, deck_name, quantity=quantity, reason="purchase")
+    else:
+        card = _card_name(conn, scryfall_id) or scryfall_id
+        lot_id = add_collection_lot(
+            conn, scryfall_id, quantity=quantity, foil=False, location=deck_name,
+            date_acquired=datetime.date.today().isoformat(), price_paid=price_paid,
+            source=PURCHASE_LOT_SOURCE, reason="purchase", change_id=change_id,
+        )
+        moves = [_move(card, quantity, "new", lot_id, None, deck_name)]
+    if change_id is not None:
+        row = get_change(conn, change_id)
+        if (row and row["status"] in OPEN_CHANGE_STATUSES and row["source"] == "buy"
+                and quantity >= (row["quantity"] or 1)):
+            conn.execute("UPDATE deck_changes SET source=NULL, source_location=NULL WHERE change_id=?",
+                         (change_id,))
+            conn.commit()
+    return moves
+
+
+def sleeve_purchases(conn, offers):
+    """Apply the ticked offers of queries.buy_matches() (the order-import
+    "Sleeve into Prosper"): each moves copies of an imported lot into the
+    deck wanting them. Offers are taken in order and capped by what the lot
+    still holds, so two decks ticked for one copy can't both get it — the
+    later one is reported, not applied. Returns (lines, moves)."""
+    lines, moves = [], []
+    for offer in offers:
+        lot = conn.execute("SELECT quantity, location FROM collection WHERE collection_id=?",
+                           (offer["collection_id"],)).fetchone()
+        if lot is None or lot[0] is None:
+            lines.append(f"{offer['deck_name']}: {offer['card']} — that lot is gone, skipped.")
+            continue
+        if (lot[1] or "").strip() != offer.get("from_location", (lot[1] or "").strip()):
+            # An earlier ticked offer already sleeved this lot somewhere: its
+            # copies are spoken for, even though the lot still shows a quantity.
+            lines.append(f"{offer['deck_name']}: {offer['card']} — no copies left in that lot, skipped.")
+            continue
+        take = min(int(offer["quantity"]), lot[0])
+        if take < 1:
+            lines.append(f"{offer['deck_name']}: {offer['card']} — no copies left in that lot, skipped.")
+            continue
+        try:
+            moves += record_purchase(conn, offer["deck_id"], offer["scryfall_id"], take,
+                                     change_id=offer.get("change_id"), collection_id=offer["collection_id"])
+        except ValueError as exc:
+            lines.append(f"{offer['deck_name']}: {offer['card']} — {exc}")
+            continue
+        lines.append(f"{offer['deck_name']}: sleeved {offer['card']} ×{take}.")
     return lines, moves
 
 

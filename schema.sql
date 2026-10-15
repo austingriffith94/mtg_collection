@@ -276,7 +276,8 @@ CREATE TABLE deck_changes (
     -- EDIT_FLOW_PLAN.md Phase 2: where an ADD's copy comes from. NULL = Auto (a copy
     -- already sleeved here, then free copies in storage biggest lot first, then a
     -- starter lot). 'storage' = take it from `source_location`, a storage Location.
-    -- Later phases add 'deck' (another deck, source_location = its name) and 'buy'.
+    -- 'deck' (Phase 3) = another deck, source_location = its name. 'buy' (Phase 4) = a
+    -- planned purchase: the card is on the list, no lot exists, source_location is NULL.
     -- Also written on the 'applied' rows direct edits log, so History can say
     -- "added from Lands Box"; dest_location is likewise set there when a removal
     -- named where its copy went.

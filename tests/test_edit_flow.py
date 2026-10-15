@@ -268,12 +268,12 @@ def test_a_basic_with_no_free_copy_gets_no_starter_lot(fresh):
 
 
 def test_a_source_that_does_not_exist_yet_is_refused(fresh):
-    """Buying (Phase 4) must be refused, not saved and ignored; taking from
+    """A source nobody built (Phase 4 made Buy real) must be refused, not saved and ignored; taking from
     a deck (Phase 3) exists now, and refuses when that deck has no spare copy."""
     c = fresh()
     g = _world(c, box=1, listed=1)
-    with pytest.raises(ValueError, match="isn't available yet"):
-        writes.sleeve_into_deck(c, g, RING, 1, source="buy")
+    with pytest.raises(ValueError, match="isn't a choice"):
+        writes.sleeve_into_deck(c, g, RING, 1, source="teleport")
     with pytest.raises(ValueError, match="no longer needs"):
         writes.sleeve_into_deck(c, g, RING, 1, source="deck", source_location="Tuvasa")
     with pytest.raises(ValueError, match="Location"):

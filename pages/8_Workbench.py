@@ -148,7 +148,7 @@ def _verdict_cell(change_id):
     verdict = availability.get(change_id, {})
     icon = {
         "available": "✅", "claimed_by": "⚠️", "in_other_deck": "📦", "wrong_location": "📍",
-        "not_owned": "🛒", "already_here": "↩️", "no_add": "—",
+        "not_owned": "🛒", "buying": "💳", "already_here": "↩️", "no_add": "—",
     }.get(verdict.get("verdict"), "")
     return f"{icon} {verdict.get('text', '')}".strip()
 
@@ -447,25 +447,28 @@ else:
                         _refresh([f"✅ Dropped {row['card']} from {drop_choice}."], moves=moves)
 
 # ------------------------------------------------------------------
-# Buy list (Phase 3) — unowned ideas, deduplicated across decks, plus one
-# row per contention shortfall above.
+# Buy list (Phase 3, Phase 4) — one row per card, grouped across decks and
+# priced once: cards already on a deck's list from a Buy add (awaiting), open
+# rows marked Buy (chosen), contention shortfalls, and unowned ideas. A card
+# with several reasons shows once, under the most specific.
 # ------------------------------------------------------------------
 st.header(
     f"🛒 Buy list ({len(buy['rows'])}) — ${buy['total']:,.2f}",
     help=(
-        "Ideas with zero owned copies (grouped across decks, priced once) plus contention "
+        "Cards on a deck's list that you chose to buy and don't have a copy of yet, shortlist rows "
+        "marked Buy, ideas with zero owned copies (grouped across decks, priced once), and contention "
         "rows where buying the shortfall resolves it."
     ),
 )
 if not buy["rows"]:
-    st.caption("Nothing to buy — every open idea is already owned, and nothing is short.")
+    st.caption("Nothing to buy — nothing is marked Buy, every open idea is already owned, and nothing is short.")
 else:
     buy_table = pd.DataFrame([{
         "Card": r["card"],
         "Qty": r["quantity"],
         "Price": r["price"],
         "Subtotal": r["subtotal"],
-        "Why": "Idea (unowned)" if r["reason"] == "idea" else "Contention shortfall",
+        "Why": fmt.BUY_REASON_LABELS[r["reason"]],
         "Decks": ", ".join(r["decks"]),
     } for r in buy["rows"]])
     st.dataframe(
@@ -481,6 +484,35 @@ else:
         file_name="buy_list.txt", mime="text/plain",
         key=f"workbench_buy_list_export_{ver}",
     )
+
+    # "Bought": the copy arrived — sleeve it straight into the deck that
+    # wanted it (a contention shortfall belongs to no one deck, so it has no
+    # button: mark one of its ideas Buy first). For an idea that isn't on its
+    # deck's list yet, the copy sits sleeved there until the idea is applied.
+    purchases = [(r, t) for r in buy["rows"] for t in r["targets"]]
+    if purchases:
+        with st.expander(f"✅ Bought something? Sleeve it into its deck ({len(purchases)})"):
+            st.caption(
+                "Enter what you paid per copy (optional) and press Bought: a collection copy is made in "
+                "that deck's sleeves. An order import can do this for you — see Collection Editor."
+            )
+            for r, t in purchases:
+                tkey = f"{t['deck_id']}_{t['scryfall_id']}_{t['change_id']}_{ver}"
+                c_label, c_qty, c_price, c_btn = st.columns([4, 1, 1, 1])
+                c_label.markdown(f"**{r['card']}** → {t['deck_name']} · {fmt.BUY_REASON_LABELS[t['kind']].lower()}")
+                got = c_qty.number_input("Qty", min_value=1, value=int(t["quantity"]), step=1,
+                                         key=f"workbench_bought_qty_{tkey}", label_visibility="collapsed")
+                paid = c_price.number_input("Paid each", min_value=0.0, value=float(r["price"] or 0.0), step=0.25,
+                                            format="%.2f", key=f"workbench_bought_price_{tkey}",
+                                            label_visibility="collapsed")
+                if c_btn.button("Bought", key=f"workbench_bought_btn_{tkey}"):
+                    try:
+                        moves = writes.record_purchase(conn, t["deck_id"], t["scryfall_id"], int(got),
+                                                       price_paid=paid or None, change_id=t["change_id"])
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    else:
+                        _refresh([f"✅ Sleeved {r['card']} ×{int(got)} into {t['deck_name']}."], moves=moves)
 
 # ------------------------------------------------------------------
 # Reconcile (Phase 4) — the physical gaps: lots with no location, and each

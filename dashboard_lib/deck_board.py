@@ -92,7 +92,7 @@ def _front_face(name):
     return (name or "").split(" // ")[0].strip().lower()
 
 
-def board_payload(cards_df, deck_meta, owned_qty, cut_for=None, leaving=None):
+def board_payload(cards_df, deck_meta, owned_qty, cut_for=None, leaving=None, buying=None):
     """The mainboard as a list of card dicts for the component (one per
     deck_cards row — a card with quantity 30 is one dict with qty 30).
 
@@ -110,6 +110,11 @@ def board_payload(cards_df, deck_meta, owned_qty, cut_for=None, leaving=None):
                  a card another deck has a take of carries those names as
                  `leaving` for its "→ Prosper" badge (EDIT_FLOW_PLAN.md
                  Phase 3).
+    buying     : queries.deck_buying() — {scryfall_id: copies still to buy};
+                 a card on the list from a Buy add with no copy sleeved yet
+                 carries `flags.buying` for its "buying" badge (Phase 4) and
+                 is NOT flagged not_owned: that badge means owned zero with no
+                 decision made, this one means the decision is made.
 
     Sorted commander(s) first, then mana value, then name; the JS relies on
     this order within each stack.
@@ -125,6 +130,7 @@ def board_payload(cards_df, deck_meta, owned_qty, cut_for=None, leaving=None):
     owned_qty = owned_qty or {}
     cut_for = cut_for or {}
     leaving = leaving or {}
+    buying = buying or {}
 
     cards = []
     for _, row in cards_df.iterrows():
@@ -152,7 +158,9 @@ def board_payload(cards_df, deck_meta, owned_qty, cut_for=None, leaving=None):
             "flags": {
                 "game_changer": bool(row.get("is_game_changer")) if pd.notna(row.get("is_game_changer")) else False,
                 "reserved": bool(row.get("is_reserved")) if pd.notna(row.get("is_reserved")) else False,
-                "not_owned": not is_basic and _front_face(name) not in owned_qty,
+                "not_owned": (not is_basic and _front_face(name) not in owned_qty
+                              and row["scryfall_id"] not in buying),
+                "buying": row["scryfall_id"] in buying,
                 "commander": name.lower() in commander_names,
             },
         })
@@ -179,6 +187,7 @@ VERDICT_BADGES = {
     "in_other_deck": "elsewhere",
     "wrong_location": "elsewhere",
     "not_owned": "buy",
+    "buying": "buying",    # decided, so its own color rather than the "buy it" red
     "already_here": "neutral",
     "no_add": "neutral",
 }
@@ -214,6 +223,8 @@ def _source_fields(row, sources):
         "deck_options": [{"deck": o["deck"], "label": fmt.deck_choice_label(o)}
                          for o in (sources or {}).get("decks", []) if o.get("listed")],
         "auto_label": fmt.auto_source_label(sources),
+        # Phase 4: Buy is always on offer (no Location, no lookup needed).
+        "can_buy": True,
     }
 
 
@@ -661,6 +672,8 @@ def _apply_change_action(conn, deck_id, op, action, resolve_add=None, with_moves
             return {"message": f"Took {_qty_label(add_name, qty)} from {location}{tail}",
                     "undo": None, "moves": moves}
         where = f" (from {location})" if source and location else ""
+        if source == "buy":
+            where = " — to buy, so it shows on the Workbench buy list"
         return {"message": f"Added {_qty_label(add_name, qty)} to the deck{where}",
                 "undo": {"op": "to_shortlist", "id": sid}, "moves": moves}
 
@@ -868,7 +881,8 @@ def render_deck_board(cards_df, deck_meta, owned_qty, *, key, editable=False, co
         key=key,
         data={
             "cards": board_payload(cards_df, deck_meta, owned_qty, cut_for=planned_cuts(shortlist or []),
-                                   leaving=leaving_by_card),
+                                   leaving=leaving_by_card,
+                                   buying=q.deck_buying(conn, deck_id) if conn is not None and deck_id is not None else None),
             "shortlist": shortlist or [],
             "leaving": leaving,
             "group_by": group_by,

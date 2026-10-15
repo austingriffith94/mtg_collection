@@ -121,9 +121,11 @@ def test_source_choice_labels(c):
     _lot(c, RING, 2, "Lands Box")
     sources = q.card_sources(c, RING, _deck(c))
     assert fmt.source_choices(sources, q.storage_locations(c)) == [
-        ("Auto — Lands Box", None, None), ("Lands Box — 2 free", "storage", "Lands Box")]
+        ("Auto — Lands Box", None, None), ("Lands Box — 2 free", "storage", "Lands Box"),
+        (fmt.BUY_SOURCE_LABEL, "buy", None)]   # Phase 4: Buy always closes the list
     # No card yet: every storage Location, uncounted.
-    assert [x[0] for x in fmt.source_choices(None, ["Box", "Binder"])] == ["Auto", "Box", "Binder"]
+    assert [x[0] for x in fmt.source_choices(None, ["Box", "Binder"])] == [
+        "Auto", "Box", "Binder", fmt.BUY_SOURCE_LABEL]
     assert fmt.format_change_route("storage", "Lands Box", "Binder") == "from Lands Box to Binder"
     assert fmt.format_change_route(None, None, float("nan")) == ""
 
@@ -194,7 +196,7 @@ def test_bad_sources_and_destinations_are_refused_with_a_reason(c):
         ("deck", "Tuvasa", "doesn't run Sol Ring"),   # Phase 3: a real source, checked
         ("deck", "Gisa", "can't take a card from itself"),
         ("deck", "Nobody", "no deck called"),
-        ("buy", None, "isn't available yet"),
+        ("teleport", None, "isn't a choice"),
     ):
         with pytest.raises(ValueError, match=match):
             writes.add_deck_card(c, gisa, RING, 1, source=source, source_location=location)

@@ -472,7 +472,7 @@ def format_money(value):
 MOVE_REASON_LABELS = {
     "deck_edit": "deck edit", "apply": "planned change applied", "reconcile": "reconcile",
     "dismantle": "dismantle", "collection_edit": "collection edit", "import": "order import",
-    "prune": "pruned", "deck_delete": "deck deleted",
+    "prune": "pruned", "deck_delete": "deck deleted", "purchase": "purchase",
 }
 
 
@@ -618,6 +618,20 @@ def deck_choice_label(opt):
     return f"{deck_source_label(opt['deck'])} — on its list, not recorded as sleeved"
 
 
+# Buy (EDIT_FLOW_PLAN.md Phase 4) is the last choice of every picker and the
+# word a data_editor cell holds for it. It needs no Location and no card
+# lookup, so it is always on offer — "keep Gisa's, buy a second" included.
+BUY_SOURCE_LABEL = "🛒 Buy"
+
+# Why a card is on the Workbench buy list (queries.buy_list()'s `reason`).
+BUY_REASON_LABELS = {
+    "awaiting": "On a deck's list, no copy yet",
+    "chosen": "Marked Buy",
+    "contention": "Contention shortfall",
+    "idea": "Idea (unowned)",
+}
+
+
 def source_choices(sources, locations, decks=()):
     """[(label, source, source_location), ...] for the source picker, Auto
     first. With a known card (`sources` = queries.card_sources()) only the
@@ -625,7 +639,7 @@ def source_choices(sources, locations, decks=()):
     (Phase 3) each other deck whose list runs it; with no card yet (the add
     bar before a name is typed, the Shortlist form) every storage Location
     in `locations` and every deck name in `decks` is, and the write itself
-    says if one can't supply it."""
+    says if one can't supply it. Buy (Phase 4) is always the last choice."""
     choices = [(auto_source_label(sources), None, None)]
     if sources is None:
         choices += [(loc, "storage", loc) for loc in locations]
@@ -635,6 +649,7 @@ def source_choices(sources, locations, decks=()):
                     for opt in sources.get("storage") or []]
         choices += [(deck_choice_label(opt), "deck", opt["deck"])
                     for opt in sources.get("decks") or [] if opt.get("listed")]
+    choices.append((BUY_SOURCE_LABEL, "buy", None))
     return choices
 
 
@@ -671,7 +686,8 @@ def apply_result_line(result, verb="Applied"):
 def format_change_route(source=None, source_location=None, dest_location=None):
     """A change row's recorded choices as a phrase for History: "from Lands
     Box", "to Lands Box", both, or "" for a row left on Auto / Box. A deck
-    reads the same way (Phase 3): "from Gisa", "to Prosper"."""
+    reads the same way (Phase 3): "from Gisa", "to Prosper"; a Buy add
+    (Phase 4) reads "to buy"."""
     # A pandas NULL text column comes back as NaN, which isn't a string.
     def text(value):
         return value.strip() if isinstance(value, str) else ""
@@ -679,6 +695,8 @@ def format_change_route(source=None, source_location=None, dest_location=None):
     parts = []
     if source in ("storage", "deck") and text(source_location):
         parts.append(f"from {text(source_location)}")
+    elif source == "buy":
+        parts.append("to buy")
     if text(dest_location):
         parts.append(f"to {text(dest_location)}")
     return " ".join(parts)

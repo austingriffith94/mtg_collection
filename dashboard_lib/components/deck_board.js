@@ -414,6 +414,8 @@ export default function (component) {
     if (card.qty > 1) badges.appendChild(badge("b-qty", "×" + card.qty, card.qty + " copies"));
     if (card.flags.game_changer) badges.appendChild(badge("b-gc", "GC", "Game Changer"));
     if (card.flags.not_owned) badges.appendChild(badge("b-no", "✗", "Not owned"));
+    // A decided purchase (Phase 4): on the list, no copy sleeved yet.
+    if (card.flags.buying) badges.appendChild(badge("b-buy", "🛒", "Buying — no copy sleeved yet"));
 
     // pointerenter covers mouse; click covers touch (no hover there).
     node.addEventListener("pointerenter", () => showPreview(card));
@@ -493,6 +495,8 @@ export default function (component) {
     // Location, or another deck (a take, Phase 3).
     if ((item.source === "storage" || item.source === "deck") && item.source_location) {
       body.appendChild(el("div", "sl-route", "from " + item.source_location));
+    } else if (item.source === "buy") {
+      body.appendChild(el("div", "sl-route", "to buy"));
     }
     if (editable) {
       body.appendChild(shortlistActions(item));
@@ -510,7 +514,8 @@ export default function (component) {
   let srcMenu = null;
 
   function hasSourceChoice(item) {
-    return (item.source_options || []).length > 0 || (item.deck_options || []).length > 0;
+    // Buy (Phase 4) is always a choice, so the menu always opens.
+    return item.can_buy !== false || (item.source_options || []).length > 0 || (item.deck_options || []).length > 0;
   }
 
   function toggleSourceMenu(item, op) {
@@ -524,7 +529,8 @@ export default function (component) {
     list.appendChild(el("div", "menu-title", op === "apply" ? "Apply, taking it from…" : "Add, taking it from…"));
     const saved = item.source === "storage" ? item.source_location : null;
     list.appendChild(menuButton(item.auto_label || "Auto",
-      () => commit({ op, change_id: item.change_id, source: "auto" }), saved ? "" : "menu-primary"));
+      () => commit({ op, change_id: item.change_id, source: "auto" }),
+      saved || item.source === "buy" ? "" : "menu-primary"));
     for (const o of item.source_options || []) {
       list.appendChild(menuButton(o.location + " — " + o.quantity + " free",
         () => commit({ op, change_id: item.change_id, source: "storage", source_location: o.location }),
@@ -543,6 +549,12 @@ export default function (component) {
         commit({ op, change_id: item.change_id, source: "deck", source_location: o.deck });
       }, savedDeck === o.deck ? "menu-primary" : "");
       list.appendChild(b);
+    }
+    // Put it on the list with no copy; the purchase is recorded later.
+    if (item.can_buy !== false) {
+      list.appendChild(menuButton("🛒 Buy — on the list now, copy when bought",
+        () => commit({ op, change_id: item.change_id, source: "buy" }),
+        item.source === "buy" ? "menu-primary" : ""));
     }
     return list;
   }

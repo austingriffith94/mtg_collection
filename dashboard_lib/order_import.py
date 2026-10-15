@@ -184,7 +184,7 @@ def import_rows(conn, rows, *, location=None, date_acquired=None, source_prefix=
     treated as an error here rather than resolved on the fly, so preview
     and import always agree on what a row resolved to). Returns a list of
     {row, status, message} dicts, status one of "added", "added_new_card",
-    "skipped", "error"."""
+    "skipped", "error" (an added row also carries its `collection_id`)."""
     results = []
     for row in rows:
         if not row["is_single"]:
@@ -206,7 +206,7 @@ def import_rows(conn, rows, *, location=None, date_acquired=None, source_prefix=
         if append_seller and row["seller"]:
             source = f"{source_prefix} ({row['seller']})" if source_prefix else row["seller"]
 
-        writes.add_collection_lot(
+        lot_id = writes.add_collection_lot(
             conn, sid,
             quantity=row["quantity"],
             foil=row["foil"],
@@ -218,6 +218,7 @@ def import_rows(conn, rows, *, location=None, date_acquired=None, source_prefix=
         )
         results.append({
             "row": row,
+            "collection_id": lot_id,   # lets the page offer to sleeve it into a deck waiting on a buy
             "status": "added_new_card" if row.get("was_new") else "added",
             "message": "Fetched from Scryfall and added." if row.get("was_new") else "Added.",
         })

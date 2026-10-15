@@ -180,7 +180,8 @@ def export_buy_list_text(buy_list_result):
     lines = []
     for row in buy_list_result["rows"]:
         price = f"${row['price']:.2f} ea" if row["price"] is not None else "price unknown"
-        why = "unowned idea" if row["reason"] == "idea" else "contention shortfall"
+        why = {"awaiting": "on a deck's list, no copy yet", "chosen": "marked Buy",
+               "idea": "unowned idea"}.get(row["reason"], "contention shortfall")
         decks = ", ".join(row["decks"])
         lines.append(f"{row['quantity']}x {row['card']} — {price} ({why}; {decks})")
     lines.append("")

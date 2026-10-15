@@ -986,7 +986,7 @@ def test_deck_editor_add_bar_takes_the_copy_from_the_picked_location(smoke_db_pa
         _forget_deck_board()
         at.run()
         picker = at.selectbox(key="editor_3_board_add_source")
-        assert picker.options == ["Auto — Box", "Box — 3 free", "Lands Box — 1 free"]
+        assert picker.options == ["Auto — Box", "Box — 3 free", "Lands Box — 1 free", "🛒 Buy"]
         picker.select("Lands Box — 1 free")
         _forget_deck_board()
         at.button(key="editor_3_board_add_btn").click().run()
@@ -1033,7 +1033,9 @@ def test_deck_editor_add_bar_refuses_an_empty_location_and_writes_nothing(smoke_
         picker = at.selectbox(key="editor_3_board_add_source")
         # Every storage Location, then (Phase 3) every other deck.
         assert picker.options[:3] == ["Auto", "Box", "Lands Box"]
-        assert all(o.startswith("Deck: ") for o in picker.options[3:]) and picker.options[3:]
+        # ...and Buy (Phase 4) last.
+        assert picker.options[-1] == "🛒 Buy"
+        assert all(o.startswith("Deck: ") for o in picker.options[3:-1]) and picker.options[3:-1]
         picker.select("Lands Box")
         _forget_deck_board()
         at.button(key="editor_3_board_add_btn").click().run()
@@ -1286,6 +1288,98 @@ def test_deck_editor_ideas_table_plans_a_take_with_nothing_cut(smoke_db_path, tm
             "SELECT deck_id, status FROM deck_changes ORDER BY change_id").fetchall()
         assert statuses == [(1, "planned"), (3, "planned")]
         assert "Saved 0 edit(s), planned 1, dropped 0." in [t.body for t in at.toast]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+# ------------------------------------------------------------------
+# EDIT_FLOW_PLAN.md Phase 4: planned buys.
+# ------------------------------------------------------------------
+def _buy_world(smoke_db_path, tmp_path):
+    """_signet_db() (Arcane Signet owned in Box) plus a Buy add of it on Empty Deck."""
+    path = _signet_db(smoke_db_path, tmp_path)
+    from dashboard_lib import queries, writes
+    conn = queries.open_connection(path)
+    writes.add_deck_card(conn, 3, "arcane-sign-1", 1, source="buy")
+    conn.close()
+    return path
+
+
+def test_deck_editor_add_bar_buy_lists_the_card_and_makes_no_lot(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = _signet_db(smoke_db_path, tmp_path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "4_Deck_Editor.py"), default_timeout=15)
+        at.session_state["current_deck_id"] = 3
+        _forget_deck_board()
+        at.run()
+        at.text_input(key="editor_3_board_add_name").set_value("Arcane Signet")
+        _forget_deck_board()
+        at.run()
+        at.selectbox(key="editor_3_board_add_source").select("🛒 Buy")
+        _forget_deck_board()
+        at.button(key="editor_3_board_add_btn").click().run()
+        assert not at.exception
+        assert _location_of(path, "arcane-sign-1") == ["Box"]          # the owned copy didn't move; no new lot
+        row = sqlite3.connect(path).execute(
+            "SELECT source, source_location FROM deck_changes WHERE deck_id=3").fetchone()
+        assert row == ("buy", None)
+        assert any("to buy" in t.body for t in at.toast)
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_workbench_buy_list_bought_sleeves_a_lot_into_the_deck(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = _buy_world(smoke_db_path, tmp_path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "8_Workbench.py"), default_timeout=15)
+        at.run()
+        assert not at.exception
+        at.button(key="workbench_bought_btn_3_arcane-sign-1_None_0").click().run()
+        assert not at.exception
+        assert sorted(_location_of(path, "arcane-sign-1")) == ["Box", "Empty Deck"]
+        assert any("Sleeved Arcane Signet" in t.body for t in at.toast)
+        # Off the buy list now: no button for it on the next run.
+        assert not [b for b in at.button if b.key and b.key.startswith("workbench_bought_btn_3_arcane")]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_collection_editor_offers_imported_copies_to_the_deck_waiting_on_them(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db, queries, writes
+
+    path = _buy_world(smoke_db_path, tmp_path)
+    conn = queries.open_connection(path)
+    lot = writes.add_collection_lot(conn, "arcane-sign-1", quantity=1, location=None, reason="import")
+    offers = queries.buy_matches(conn, [{"collection_id": lot, "scryfall_id": "arcane-sign-1",
+                                         "quantity": 1, "location": None}])
+    conn.close()
+    assert [o["deck_name"] for o in offers] == ["Empty Deck"]
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "5_Collection_Editor.py"), default_timeout=15)
+        at.session_state["editor_order_buy_offers"] = offers
+        at.run()
+        assert not at.exception
+        assert at.checkbox(key="editor_buy_offer_0").value is True
+        at.button(key="editor_buy_offer_go").click().run()
+        assert not at.exception
+        assert _location_of(path, "arcane-sign-1")[-1] == "Empty Deck"
+        assert "editor_order_buy_offers" not in at.session_state
     finally:
         st.cache_resource.clear()
         st.cache_data.clear()

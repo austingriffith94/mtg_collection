@@ -35,6 +35,10 @@ its list at once and leaves Gisa's copy where it is until it's built. The
 Board shows a card another deck is taking with a "→ Prosper" badge and
 lists it under "Leaving" in the rail.
 
+Phase 4: "Comes from" ends with Buy. A Buy add puts the card on the list
+with no collection copy (no phantom lot); it shows on the Workbench buy
+list until a copy is sleeved here, and the Board marks it "buying".
+
 Card Tags (bulk-editing any tag_type across a deck's mainboard) lives
 here too, moved from the earlier standalone Tag Editor page. Deck-level
 tags were removed entirely — use description/tutors instead.
@@ -158,6 +162,9 @@ def _add_card_to_deck(deck_id, name, set_code, number, qty, source=None, source_
                                      source=source, source_location=source_location)
     except ValueError as exc:
         return None, str(exc), []
+    if source == "buy":
+        return (f"Added {qty}x {name or sid} — to buy, so it's on the Workbench buy list until a copy is "
+                "sleeved here" + (f" (now ×{existing + qty})." if existing else "."), None, moves)
     if source == "deck":
         held = loaders.load_deck_meta(conn, deck_id).get("build_state") == "brewing"
         return (
@@ -868,7 +875,7 @@ def _availability_text(availability, change_id):
     verdict = availability.get(change_id, {})
     icon = {
         "available": "✅", "claimed_by": "⚠️", "in_other_deck": "📦", "wrong_location": "📍",
-        "not_owned": "🛒", "already_here": "↩️", "no_add": "—",
+        "not_owned": "🛒", "buying": "💳", "already_here": "↩️", "no_add": "—",
     }.get(verdict.get("verdict"), "")
     return f"{icon} {verdict.get('text', '')}".strip()
 
@@ -878,7 +885,9 @@ AUTO_SOURCE = "Auto"
 
 def _source_label(source, location):
     """A change row's saved source as its table cell: "Auto", the Location,
-    or (Phase 3) "Deck: Gisa"."""
+    (Phase 3) "Deck: Gisa" or (Phase 4) "🛒 Buy"."""
+    if source == "buy":
+        return fmt.BUY_SOURCE_LABEL
     if not (isinstance(location, str) and location.strip()):
         return AUTO_SOURCE
     if source == "deck":
@@ -890,6 +899,8 @@ def _source_edit(label):
     """The table cell back as the (source, source_location) pair to save."""
     if label in (None, AUTO_SOURCE):
         return None, None
+    if label == fmt.BUY_SOURCE_LABEL:
+        return "buy", None
     if label.startswith(fmt.DECK_SOURCE_PREFIX):
         return "deck", label[len(fmt.DECK_SOURCE_PREFIX):]
     return "storage", label
@@ -1069,7 +1080,7 @@ with tab_shortlist:
                     "Price": st.column_config.NumberColumn("Price", format="$%.2f", disabled=True, width="small"),
                     "Comes from": st.column_config.SelectboxColumn(
                         "Comes from",
-                        options=_choices_with([AUTO_SOURCE, *storage_choices, *deck_choices],
+                        options=_choices_with([AUTO_SOURCE, *storage_choices, *deck_choices, fmt.BUY_SOURCE_LABEL],
                                               *initial_sources.values()),
                         required=True, width="small",
                         help="Auto, the storage Location the copy should be taken from when this "
@@ -1184,7 +1195,7 @@ with tab_shortlist:
                     "Availability": st.column_config.TextColumn("Availability", disabled=True),
                     "Comes from": st.column_config.SelectboxColumn(
                         "Comes from",
-                        options=_choices_with([AUTO_SOURCE, *storage_choices, *deck_choices],
+                        options=_choices_with([AUTO_SOURCE, *storage_choices, *deck_choices, fmt.BUY_SOURCE_LABEL],
                                               *(v[0] for v in planned_initial.values())),
                         required=True, width="small"),
                     "Replaces": st.column_config.TextColumn("Replaces", disabled=True),

@@ -513,7 +513,7 @@ def set_deck_rank_list(conn, deck_id, kind, items):
 
 def _cascade_deck_name(conn, old_name, new_name, update_collection_locations=True):
     """Keep every place a deck's name is stored as free text in sync on a
-    rename (rule 3 of EDIT_FLOW_PLAN.md): `collection.location` (what
+    rename (rule 3 of docs/archive/EDIT_FLOW_PLAN.md): `collection.location` (what
     "sleeved in this deck" tracking matches on) and `deck_changes.dest_location`
     on **open** (idea/planned) rows — a dismantle transfer or any other
     planned removal that names this deck as where the copy is headed.
@@ -599,7 +599,7 @@ def delete_deck(conn, deck_id, clear_collection_locations=True):
     target no longer exists to receive them. Applied rows are left alone —
     they're history.
 
-    `dropped` (EDIT_FLOW_PLAN.md Phase 3) is the number of other decks' open
+    `dropped` (docs/archive/EDIT_FLOW_PLAN.md Phase 3) is the number of other decks' open
     rows dropped because they were half of a take with this deck — a take
     from a deck that no longer exists can't be applied, nor can a promise to
     one. linked_change_id is cleared on every other-deck row (applied ones
@@ -716,7 +716,7 @@ def delete_deck(conn, deck_id, clear_collection_locations=True):
 # logging, for execute_swap(), whose caller (apply_change) records the
 # whole swap as ONE row instead of an add plus a remove.
 #
-# EDIT_FLOW_PLAN.md Phase 1: each of them also moves the physical copies
+# docs/archive/EDIT_FLOW_PLAN.md Phase 1: each of them also moves the physical copies
 # (sleeve_into_deck / unsleeve_from_deck, below) and returns the list of
 # moves, so the caller can show them and the Board can undo them.
 # ------------------------------------------------------------------
@@ -919,7 +919,7 @@ def bulk_update_deck_cards(conn, deck_id, updates, with_moves=True, dest=None):
 
 
 # ------------------------------------------------------------------
-# Moves (EDIT_FLOW_PLAN.md Phase 1) — the one place a deck edit decides
+# Moves (docs/archive/EDIT_FLOW_PLAN.md Phase 1) — the one place a deck edit decides
 # what happens to physical copies, whichever page it started on.
 #
 # A move is a plain dict:
@@ -953,7 +953,7 @@ STARTER_LOT_SOURCE = "Auto-added (deck edit)"
 
 
 # ------------------------------------------------------------------
-# Choosing where a copy comes from / goes (EDIT_FLOW_PLAN.md Phase 2).
+# Choosing where a copy comes from / goes (docs/archive/EDIT_FLOW_PLAN.md Phase 2).
 # Everything that takes a source or a dest goes through these two, so a bad
 # value (a typo from the browser, a deck name, a source that doesn't exist
 # yet) is refused with a reason before a list or a lot is touched.
@@ -1055,7 +1055,7 @@ def _move(card, quantity, kind, collection_id=None, frm=None, to=None, **extra):
 def _bulk_move(conn, deck_name, scryfall_id, card, count, direction, reason="deck_edit",
                change_id=None):
     """A basic land joining (`direction` "in") or leaving ("out") a deck's
-    list (EDIT_FLOW_PLAN.md Phase 7). Basics are generic: no lot is touched,
+    list (docs/archive/EDIT_FLOW_PLAN.md Phase 7). Basics are generic: no lot is touched,
     even when you track one. The step is still logged in collection_moves
     with bulk=1 and no collection_id — "basic land supply → Prosper" — so Card
     Lookup shows every basic added or removed. Returns the `bulk` move."""
@@ -1088,7 +1088,7 @@ def sleeve_into_deck(conn, deck_id, scryfall_id, quantity, source=None, source_l
          the order plan_availability() allocates in, so the copy the
          Workbench promised is the one that moves
       3. then a starter lot for the remainder (STARTER_LOT_SOURCE), which
-         can record a copy you don't own yet (EDIT_FLOW_PLAN.md open
+         can record a copy you don't own yet (docs/archive/EDIT_FLOW_PLAN.md open
          question 3)
 
     `source="storage"` with a `source_location` (Phase 2) takes copies from
@@ -1465,7 +1465,7 @@ def _printing_by_name(conn, name, owned_first=True):
 
 
 def add_advisor_idea(conn, deck_id, card, replaces=None, skill=None):
-    """Stage an Advisor suggestion as a Shortlist idea (EDIT_FLOW_PLAN.md
+    """Stage an Advisor suggestion as a Shortlist idea (docs/archive/EDIT_FLOW_PLAN.md
     Phase 5): `card` is the add, `replaces` (when it names a card on the
     deck's list) fills in the idea's "Replaces", and the note says which
     skill suggested it. The Advisor never touches the deck's list or the
@@ -1797,7 +1797,7 @@ def apply_change(conn, change_id, add_scryfall_id=None):
     Returns execute_swap()'s shape in every case — {"moved_out",
     "assigned_lot_id", "created_lot", "moves"} — so one caller can report
     all three. Copies move through sleeve_into_deck() / unsleeve_from_deck()
-    (EDIT_FLOW_PLAN.md Phase 1), the same as a hand edit.
+    (docs/archive/EDIT_FLOW_PLAN.md Phase 1), the same as a hand edit.
 
     NOT atomic across the whole change: the writes commit as they go, so an
     unexpected failure part-way (a database error, not one of the checks
@@ -2012,7 +2012,7 @@ def apply_changes(conn, change_ids, resolve_add=None):
 
 
 # ------------------------------------------------------------------
-# Taking a card from another deck (EDIT_FLOW_PLAN.md Phase 3).
+# Taking a card from another deck (docs/archive/EDIT_FLOW_PLAN.md Phase 3).
 #
 # A take is a linked PAIR of deck_changes rows, each naming the other in
 # linked_change_id:
@@ -2210,7 +2210,7 @@ def _link(conn, a, b):
 def _drop_promises(conn, deck_id, scryfall_id):
     """A card has just come off a deck's list (any printing): drop every open
     removal on another deck that was still promising this deck a copy of it
-    — the leftover half of a brewing deck's take (EDIT_FLOW_PLAN.md: "if you
+    — the leftover half of a brewing deck's take (docs/archive/EDIT_FLOW_PLAN.md: "if you
     drop the card from the brew first, the planned removal on Gisa is dropped
     with it"). Only once the list runs none of the card: a brew going from ×2
     to ×1 still wants what was promised. Returns the change_ids dropped."""
@@ -2383,7 +2383,7 @@ COLLECTION_FIELDS = ["quantity", "foil", "location", "date_acquired", "price_pai
 
 
 # ------------------------------------------------------------------
-# The move log (EDIT_FLOW_PLAN.md Phase 6, rule 2): every function below
+# The move log (docs/archive/EDIT_FLOW_PLAN.md Phase 6, rule 2): every function below
 # that changes a lot writes the move rows for what it did, in the same
 # transaction as the change, so no page can move a copy without a record.
 # Callers say WHY with `reason` (and the deck_changes row behind it with
@@ -2759,7 +2759,7 @@ def delete_game(conn, game_id):
 # collection lot automatically instead of letting the deck and the
 # collection quietly drift apart.
 #
-# No longer called by the Deck Editor (EDIT_FLOW_PLAN.md Phase 1): its add
+# No longer called by the Deck Editor (docs/archive/EDIT_FLOW_PLAN.md Phase 1): its add
 # bar goes through add_deck_card(), whose sleeve_into_deck() Auto rule moves
 # a free copy in before making a starter lot, which this never did. Kept
 # because the offline test harness and old lots' "Auto-added (deck build)"
@@ -2870,7 +2870,7 @@ def sync_deck_lists(conn, offers):
 
 
 # ------------------------------------------------------------------
-# Planned buys (EDIT_FLOW_PLAN.md Phase 4). A Buy add puts a card on a list
+# Planned buys (docs/archive/EDIT_FLOW_PLAN.md Phase 4). A Buy add puts a card on a list
 # with no lot behind it; these two close the loop when the copy turns up.
 # ------------------------------------------------------------------
 PURCHASE_LOT_SOURCE = "Purchase (buy list)"
@@ -2967,7 +2967,7 @@ def execute_swap(conn, deck_id, deck_name, remove_scryfall_id, remove_card_name,
     """Removes `remove_scryfall_id` from the deck's mainboard and adds
     `add_scryfall_id` in its place at `quantity` copies, then moves the
     copies through the same two helpers as every other deck edit
-    (EDIT_FLOW_PLAN.md Phase 1):
+    (docs/archive/EDIT_FLOW_PLAN.md Phase 1):
 
       - the cut card's copies sleeved here go to `default_location`
         (DEFAULT_LOCATION, "Box", if not given) — at most as many as the
@@ -3044,7 +3044,7 @@ def set_build_state(conn, deck_id, state):
 
 
 # ------------------------------------------------------------------
-# Build it (EDIT_FLOW_PLAN.md Phase 5). A brewing deck's edits changed its
+# Build it (docs/archive/EDIT_FLOW_PLAN.md Phase 5). A brewing deck's edits changed its
 # list only; this makes every move it has been waiting on, in one batch:
 #
 #   1. each lopsided take on another deck (Phase 3: the brew's add is
@@ -3229,7 +3229,7 @@ def stage_dismantle(conn, deck_id, target_deck_id=None, transfer_oracle_ids=None
         deck's name, so applying it moves the physical lot source → target
         in one step with no stop in the box
       - an addition against the target, with source='deck' /
-        source_location = this deck (EDIT_FLOW_PLAN.md Phase 3)
+        source_location = this deck (docs/archive/EDIT_FLOW_PLAN.md Phase 3)
 
     and the two are linked (linked_change_id on both), so applying either
     applies the pair, removal first, and dropping either drops both — the
@@ -3300,7 +3300,7 @@ def stage_dismantle(conn, deck_id, target_deck_id=None, transfer_oracle_ids=None
             continue
         if not removal(card, target_name):
             continue
-        # EDIT_FLOW_PLAN.md Phase 3: the add says where it comes from, and
+        # docs/archive/EDIT_FLOW_PLAN.md Phase 3: the add says where it comes from, and
         # the two rows are linked, so a dismantle transfer reads "from
         # Vilis" and applies / drops as one pair, like a take chosen by hand.
         cur = conn.execute(

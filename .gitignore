@@ -17,6 +17,10 @@ __pycache__/
 # mtg_collection.db is rebuilt from scratch via migrate.py + your CSVs;
 # _test_mtg_collection.db is the offline test harnesses' scratch copy.
 *.db
+# SQLite side files (rollback journal / WAL) — transient while the app writes.
+*.db-journal
+*.db-wal
+*.db-shm
 
 # Editor settings
 .vscode/
@@ -24,3 +28,13 @@ __pycache__/
 
 # Local secrets (API keys) — never commit
 .streamlit/secrets.toml
+
+# Generated Moxfield CSV/text exports (Decks/Collection pages, export scripts)
+/moxfield_exports/
+
+# Claude Code per-machine settings
+.claude/settings.local.json
+
+# OS cruft
+.DS_Store
+Thumbs.db

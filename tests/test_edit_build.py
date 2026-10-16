@@ -1,4 +1,4 @@
-"""EDIT_FLOW_PLAN.md Phase 5: "Build it" — writes.build_deck().
+"""docs/archive/EDIT_FLOW_PLAN.md Phase 5: "Build it" — writes.build_deck().
 
 The world: Prosper is brewing; its list was built with each add's source
 saved but nothing moved. Gisa (a normal deck) holds the one Sol Ring copy

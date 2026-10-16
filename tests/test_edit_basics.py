@@ -1,4 +1,4 @@
-"""EDIT_FLOW_PLAN.md Phase 7: basic lands are generic, but still tracked.
+"""docs/archive/EDIT_FLOW_PLAN.md Phase 7: basic lands are generic, but still tracked.
 
 A basic land (here, Swamp) never needs a collection copy and never moves
 one — not even when a tracked lot of it exists in Box or in another deck —

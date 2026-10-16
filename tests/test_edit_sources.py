@@ -1,4 +1,4 @@
-"""EDIT_FLOW_PLAN.md Phase 2: choosing where a card comes from, and where a
+"""docs/archive/EDIT_FLOW_PLAN.md Phase 2: choosing where a card comes from, and where a
 removed copy goes.
 
 Built on the same small world as test_edit_flow.py: Gisa (the deck edited)

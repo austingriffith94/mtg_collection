@@ -282,7 +282,7 @@ def _forget_deck_board():
 
 
 def test_decks_page_stacks_view(smoke_db_path, tmp_path, monkeypatch):
-    # VISUAL_DECK_PLAN.md Phase A: the Cards tab's View gains "Stacks" for the
+    # docs/archive/VISUAL_DECK_PLAN.md Phase A: the Cards tab's View gains "Stacks" for the
     # Mainboard. AppTest can't click inside the component's JS, so this only
     # proves the page renders with the view selected — for a deck with cards
     # (no cached image, so the Scryfall/None fallback path) and an empty one.
@@ -323,7 +323,7 @@ def test_decks_page_stacks_view(smoke_db_path, tmp_path, monkeypatch):
 
 
 def test_deck_editor_board_tab(smoke_db_path, tmp_path, monkeypatch):
-    # VISUAL_DECK_PLAN.md Phase B: the Deck Editor's first tab is the editable
+    # docs/archive/VISUAL_DECK_PLAN.md Phase B: the Deck Editor's first tab is the editable
     # Board. Renders for a deck with cards, an empty deck and (the no-deck
     # case is covered by test_page_runs_without_exception); the add bar adds
     # a card and the board's stats strip follows. AppTest can't click inside
@@ -423,7 +423,7 @@ def test_board_edit_glue_undo_button(smoke_db_path, tmp_path, monkeypatch):
         # Stashed for setup_page() to show on the full rerun (card_view.stash_edit).
         assert at.session_state["_pending_feedback"]["lines"] == ["Sol Ring → ×2"]
         assert at.button(key="k__undo_btn").label.startswith("↶ Undo: ")
-        # EDIT_FLOW_PLAN.md Phase 1: the deck's only copy is already sleeved
+        # docs/archive/EDIT_FLOW_PLAN.md Phase 1: the deck's only copy is already sleeved
         # and deck 2 has none to give, so +1 makes a starter lot here — and
         # the Undo has to delete it again, not just lower the quantity.
         lots = lambda: sqlite3.connect(path).execute(  # noqa: E731
@@ -446,7 +446,7 @@ def test_board_edit_glue_undo_button(smoke_db_path, tmp_path, monkeypatch):
 
 
 def test_deck_editor_board_tab_with_shortlist(smoke_db_path, tmp_path, monkeypatch):
-    # VISUAL_DECK_PLAN.md Phase C: the Board carries the Shortlist (with
+    # docs/archive/VISUAL_DECK_PLAN.md Phase C: the Board carries the Shortlist (with
     # cross-deck verdicts) once the deck has ideas, then a planned swap. The
     # empty-Shortlist case is test_deck_editor_board_tab above.
     from dashboard_lib import db
@@ -546,7 +546,7 @@ def test_board_glue_plan_then_apply(smoke_db_path, tmp_path, monkeypatch):
         st.cache_data.clear()
 
 
-# Phase 0 of EDIT_FLOW_PLAN.md: card_view.finish_edit()/show_pending_feedback()
+# Phase 0 of docs/archive/EDIT_FLOW_PLAN.md: card_view.finish_edit()/show_pending_feedback()
 # replaced the Deck Editor's hand-rolled invalidate/toast/rerun triples —
 # these two prove a rename and a Shortlist "add idea" still write, still
 # show their message (now a toast surfaced on the NEXT run), and the page
@@ -607,7 +607,7 @@ def test_deck_editor_shortlist_add_idea_shows_toast_after_finish_edit(smoke_db_p
 def test_workbench_contention_drop_writes_and_shows_message(smoke_db_path, tmp_path, monkeypatch):
     # The smoke DB runs Sol Ring in both decks on one owned copy, so it's in
     # contention. Dropping it from a deck goes through the Workbench's
-    # _refresh() -> card_view.finish_edit() (EDIT_FLOW_PLAN.md Phase 0).
+    # _refresh() -> card_view.finish_edit() (docs/archive/EDIT_FLOW_PLAN.md Phase 0).
     from dashboard_lib import db
 
     path = str(tmp_path / "mtg_collection.db")
@@ -657,7 +657,7 @@ def test_collection_editor_location_catalog_add_shows_message(smoke_db_path, tmp
 
 
 # ------------------------------------------------------------------
-# EDIT_FLOW_PLAN.md Phase 1: direct edits move copies, and the pop-up says
+# docs/archive/EDIT_FLOW_PLAN.md Phase 1: direct edits move copies, and the pop-up says
 # what moved — a toast for one or two moves, a dialog listing more.
 # ------------------------------------------------------------------
 def _signet_db(smoke_db_path, tmp_path, extra_sql=()):
@@ -710,7 +710,7 @@ def test_deck_editor_add_bar_moves_the_box_copy_and_says_so(smoke_db_path, tmp_p
 
 
 def test_deck_editor_add_bar_skips_the_picker_for_a_basic_land(smoke_db_path, tmp_path, monkeypatch):
-    # EDIT_FLOW_PLAN.md Phase 7: a typed basic land shows no "Comes from", and
+    # docs/archive/EDIT_FLOW_PLAN.md Phase 7: a typed basic land shows no "Comes from", and
     # adding it leaves its tracked lot in Box alone.
     from dashboard_lib import db
 
@@ -906,7 +906,7 @@ def test_workbench_sleeved_here_reports_the_move(smoke_db_path, tmp_path, monkey
 
 
 # ------------------------------------------------------------------
-# EDIT_FLOW_PLAN.md Phase 6: a Collection-side save that moves a lot into a
+# docs/archive/EDIT_FLOW_PLAN.md Phase 6: a Collection-side save that moves a lot into a
 # deck asks whether the deck's list should follow, and every lot change is in
 # the move log that Card Lookup shows.
 # ------------------------------------------------------------------
@@ -1060,7 +1060,7 @@ def test_card_lookup_shows_where_copies_went(smoke_db_path, tmp_path, monkeypatc
 
 
 # ------------------------------------------------------------------
-# EDIT_FLOW_PLAN.md Phase 2: the source / destination pickers on the Deck
+# docs/archive/EDIT_FLOW_PLAN.md Phase 2: the source / destination pickers on the Deck
 # Editor, end to end through the page.
 # ------------------------------------------------------------------
 LANDS_BOX = ["INSERT OR IGNORE INTO location_catalog (location) VALUES ('Lands Box')"]
@@ -1214,7 +1214,7 @@ def test_deck_editor_shortlist_tab_shows_the_saved_choices(smoke_db_path, tmp_pa
 
 
 # ------------------------------------------------------------------
-# EDIT_FLOW_PLAN.md Phase 3: taking a card from another deck, through the
+# docs/archive/EDIT_FLOW_PLAN.md Phase 3: taking a card from another deck, through the
 # pages. The smoke DB runs Sol Ring in Smoke Test Deck (its copy sleeved
 # there) and in Second Deck (none sleeved); deck 3 is empty.
 # ------------------------------------------------------------------
@@ -1395,7 +1395,7 @@ def test_deck_editor_ideas_table_plans_a_take_with_nothing_cut(smoke_db_path, tm
 
 
 # ------------------------------------------------------------------
-# EDIT_FLOW_PLAN.md Phase 4: planned buys.
+# docs/archive/EDIT_FLOW_PLAN.md Phase 4: planned buys.
 # ------------------------------------------------------------------
 def _buy_world(smoke_db_path, tmp_path):
     """_signet_db() (Arcane Signet owned in Box) plus a Buy add of it on Empty Deck."""

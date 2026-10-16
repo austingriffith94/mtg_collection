@@ -1,4 +1,4 @@
-"""EDIT_FLOW_PLAN.md Phase 3: taking a card from another deck, as a linked
+"""docs/archive/EDIT_FLOW_PLAN.md Phase 3: taking a card from another deck, as a linked
 pair that shows on both decks.
 
 The world: Gisa (the donor, running Sol Ring with its copy sleeved there),

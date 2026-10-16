@@ -1,4 +1,4 @@
-// Stacks deck board (VISUAL_DECK_PLAN.md, Phase A read-only view + Phase B
+// Stacks deck board (docs/archive/VISUAL_DECK_PLAN.md, Phase A read-only view + Phase B
 // edits + Phase C Shortlist column and pick mode).
 //
 // CCv2 module: `export default function(component)`. Everything is drawn
@@ -37,7 +37,7 @@
 //   type_order    stack order for "Type"
 //   editable      true on the Deck Editor's Board tab only
 //
-// Where copies come from / go (EDIT_FLOW_PLAN.md Phase 2): "Add" and "Apply"
+// Where copies come from / go (docs/archive/EDIT_FLOW_PLAN.md Phase 2): "Add" and "Apply"
 // on a Shortlist row open a small menu (Auto first, then each Location with a
 // free copy) when there is a choice, and the card menu's "-1 to..." / "Remove
 // to..." ask where the copy is put. The pick rides on the same trigger as
@@ -331,7 +331,7 @@ export default function (component) {
   function openMenu(card, node) {
     menuCard = card;
     // Only worth asking when copies actually move and there is a choice. A
-    // basic land's never do (EDIT_FLOW_PLAN.md Phase 7).
+    // basic land's never do (docs/archive/EDIT_FLOW_PLAN.md Phase 7).
     const askWhere = copiesMove && locations.length > 1 && !card.basic;
     menu.replaceChildren(
       el("div", "menu-title", card.name),

@@ -1,4 +1,4 @@
-"""EDIT_FLOW_PLAN.md Phase 4: planned buys — a card can be on a deck's list
+"""docs/archive/EDIT_FLOW_PLAN.md Phase 4: planned buys — a card can be on a deck's list
 while you wait to buy it.
 
 The world: Gisa, Prosper and Tuvasa (three decks) and a few cards. The rules

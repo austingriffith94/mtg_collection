@@ -615,7 +615,7 @@ def test_a_bulk_basic_does_not_starve_a_non_basic_with_a_null_lot(conn, add_card
 
 
 def test_a_basic_is_always_available_even_with_tracked_quantities(conn, add_card):
-    """EDIT_FLOW_PLAN.md Phase 7: a basic is generic. A tracked lot of one
+    """docs/archive/EDIT_FLOW_PLAN.md Phase 7: a basic is generic. A tracked lot of one
     no longer limits it (it used to: a basic was only unlimited when held as
     untracked bulk), and one owned nowhere at all is never "not owned"."""
     sid = _basic(conn, add_card)

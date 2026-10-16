@@ -47,35 +47,35 @@ plus pytest (`pip install -r requirements-dev.txt`):
   the shared current deck (UI plan Phase 2): every deck page opens on it,
   it carries across pages, a `?deck_id=` param seeds it once, and creating a
   deck in the Deck Editor selects the new one.
-- `test_finish_edit.py` — EDIT_FLOW_PLAN.md Phase 0: `card_view.result_from_lines()`, and through
+- `test_finish_edit.py` — docs/archive/EDIT_FLOW_PLAN.md Phase 0: `card_view.result_from_lines()`, and through
   `AppTest` that a write's message shows exactly once after `finish_edit()`'s rerun (toasts for one or
   two lines, one success list for more, warnings and errors alongside). Page adoption is covered by
   `test_pages_smoke.py` (rename, Shortlist add, game delete, Workbench contention drop, Location catalog).
-- `test_edit_flow.py` — EDIT_FLOW_PLAN.md Phase 1: one scenario run through every entry point that can
+- `test_edit_flow.py` — docs/archive/EDIT_FLOW_PLAN.md Phase 1: one scenario run through every entry point that can
   express it (add bar write, each Board op, the Mainboard table save, `apply_change()`'s three shapes),
   each on a fresh database, asserting they leave the same list and collection. Then the rules one at a
   time: a Box copy before a starter lot, never another deck's copy, splitting a lot, −1 on an
   under-sleeved deck, printing swaps, basic lands, Undo putting each copy back (and deleting a starter
   lot), brewing / dismantled decks, and lot-only `move_copies()`. The page side (add bar toast, Mainboard
   save dialog, the Build it dialog (mark-built count, a build moving a copy), Reconcile "Sleeved here", Board Undo) is in `test_pages_smoke.py`.
-- `test_edit_basics.py` — EDIT_FLOW_PLAN.md Phase 7: a basic land through every entry point in three collection
+- `test_edit_basics.py` — docs/archive/EDIT_FLOW_PLAN.md Phase 7: a basic land through every entry point in three collection
   states (no lot, tracked in Box, tracked in another deck) — list changes, collection untouched, one `bulk` move,
   a history row and one `bulk=1` move-log row with its `change_id`; Undo, ignored sources, and that the buy list,
   contention, Reconcile, Build it and deck-sync never list one.
-- `test_edit_build.py` — EDIT_FLOW_PLAN.md Phase 5: `writes.build_deck()` (dry run == real run, storage / Auto /
+- `test_edit_build.py` — docs/archive/EDIT_FLOW_PLAN.md Phase 5: `writes.build_deck()` (dry run == real run, storage / Auto /
   donor sources, donor first, selections, flag clearing, "to pull" reporting) and the Advisor's
   `add_advisor_idea()`.
-- `test_edit_sources.py` — EDIT_FLOW_PLAN.md Phase 2: picking the storage Location an add comes from
+- `test_edit_sources.py` — docs/archive/EDIT_FLOW_PLAN.md Phase 2: picking the storage Location an add comes from
   and where a removal goes — the reads, refusal before writing, history rows, staged rows, the
   allocator's pinned rows and brewing claims, and the Board's source / dest actions.
-- `test_edit_takes.py` — EDIT_FLOW_PLAN.md Phase 3: taking a card from another deck. A direct take
+- `test_edit_takes.py` — docs/archive/EDIT_FLOW_PLAN.md Phase 3: taking a card from another deck. A direct take
   (both lists, the lot moving deck to deck, linked history rows, every refusal writing nothing), a
   brewing receiver's lopsided pair, staged takes (the pair, guards, apply / drop / demote / re-point /
   reopen from either side), dismantle pairs, the allocator and conflicts, delete / rename of a deck in a
   pair, the Workbench's one-row-per-pair view, the Board payload and actions, Card Lookup. The page
   side (add bar confirm and cancel, a Shortlist tab holding a take and planning one with nothing cut, the
   Workbench applying a pair, Card Lookup's Pending moves) is in `test_pages_smoke.py`; the Board's menus were clicked in headless Edge.
-- `test_collection_moves.py` — EDIT_FLOW_PLAN.md Phase 6: each lot writer logs exactly the moves it made
+- `test_collection_moves.py` — docs/archive/EDIT_FLOW_PLAN.md Phase 6: each lot writer logs exactly the moves it made
   (new copy record, move, split, quantity up/down, delete, bulk, prune, a deck's deletion), a rename logs
   none, Phase 1's deck edits log with their `change_id`, and `queries.deck_sync_offers()` /
   `writes.sync_deck_lists()` offer and apply list changes without moving a lot twice. The page side (a
@@ -87,7 +87,7 @@ plus pytest (`pip install -r requirements-dev.txt`):
   `resolve_current_deck()` with a dict standing in for session state.
 - `test_nav.py` — the page registry in `dashboard_lib/nav.py` matches the
   files in `pages/`, and the Decks page keeps its `Decks` URL.
-- `test_deck_board.py` — VISUAL_DECK_PLAN.md Phase A: `board_payload()`
+- `test_deck_board.py` — docs/archive/VISUAL_DECK_PLAN.md Phase A: `board_payload()`
   (commander first, MDFC land flags, not-owned flags, URL-only images,
   payload size), plus Phase B's `apply_board_action()`: each op's effect on
   `deck_cards`, `deck_changes` history rows and tags, each returned undo

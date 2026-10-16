@@ -1,4 +1,4 @@
-"""Moxfield-style "Stacks" deck board (VISUAL_DECK_PLAN.md, Phases A-C).
+"""Moxfield-style "Stacks" deck board (docs/archive/VISUAL_DECK_PLAN.md, Phases A-C).
 
 Shows a deck as overlapping card stacks grouped by type / mana value /
 strategy tag / color, with a full-card hover preview. Grouping, hovering and
@@ -14,7 +14,7 @@ Split so the logic stays testable:
     writes.* functions and returns a message plus the inverse action for
     one-level undo. No Streamlit and no SQL of its own; unit-tested.
     Phase C adds the Shortlist ops (plan / unpair / apply / drop / add) to it.
-    EDIT_FLOW_PLAN.md Phase 1: every op also returns the copies it moved,
+    docs/archive/EDIT_FLOW_PLAN.md Phase 1: every op also returns the copies it moved,
     and Undo puts them back (writes.revert_moves). Phase 2: an add (`add`,
     `apply`) may name a storage Location to take its copy from, and a
     removal (`dec`, `remove`, `to_shortlist`) the Location to put it in.
@@ -108,7 +108,7 @@ def board_payload(cards_df, deck_meta, owned_qty, cut_for=None, leaving=None, bu
                  `cut_for` (empty list otherwise) for its "cut for Y" badge.
     leaving    : queries.deck_leaving() — {scryfall_id: [receiving decks]};
                  a card another deck has a take of carries those names as
-                 `leaving` for its "→ Prosper" badge (EDIT_FLOW_PLAN.md
+                 `leaving` for its "→ Prosper" badge (docs/archive/EDIT_FLOW_PLAN.md
                  Phase 3).
     buying     : queries.deck_buying() — {scryfall_id: copies still to buy};
                  a card on the list from a Buy add with no copy sleeved yet
@@ -380,7 +380,7 @@ def planned_cuts(shortlist_items):
 # Undo never deletes history: undoing a remove logs the re-add as its own
 # applied row, so history records the mistake and the fix (plan decision).
 #
-# Physical copies (EDIT_FLOW_PLAN.md Phase 1) follow the list through
+# Physical copies (docs/archive/EDIT_FLOW_PLAN.md Phase 1) follow the list through
 # writes.sleeve_into_deck / unsleeve_from_deck, and every op returns the
 # moves. Undo does NOT re-run that Auto rule: it changes the list only and
 # hands the forward edit's moves to writes.revert_moves(), so each copy
@@ -733,7 +733,7 @@ CURVE_BUCKETS = 8          # mana values 0..6 and a "7+" bucket
 # Scope of the rerun after a board edit. "app" follows UI plan Phase 4's rule
 # (a write inside a fragment ends in a full rerun) and matters here: the
 # Mainboard tab's data_editor would otherwise keep stale quantities and its
-# Save would write them back over the edit. See VISUAL_DECK_PLAN.md.
+# Save would write them back over the edit. See docs/archive/VISUAL_DECK_PLAN.md.
 BOARD_RERUN_SCOPE = "app"
 
 
@@ -778,7 +778,7 @@ def _dirty_key(key):
 def run_board_action(conn, deck_id, key, action, *, is_undo=False, undo_moves=None):
     """Apply one action for the page: remember the inverse (and the moves it
     must put back) for the Undo button, stash the outcome and drop stale
-    caches (card_view.stash_edit — EDIT_FLOW_PLAN.md rule 1; any moves also
+    caches (card_view.stash_edit — docs/archive/EDIT_FLOW_PLAN.md rule 1; any moves also
     clear the collection caches and reach the pop-up), and flag the page to
     rerun. Returns True if something was applied.
 

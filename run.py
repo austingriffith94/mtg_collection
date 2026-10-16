@@ -27,7 +27,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "mtg_collection.db")
 SCRIPTS_DIR = os.path.join(BASE_DIR, "scripts")
 
-MIN_PYTHON = (3, 8)
+MIN_PYTHON = (3, 11)  # tomllib (advisor secrets) is 3.11+
 
 
 def check_python_version():

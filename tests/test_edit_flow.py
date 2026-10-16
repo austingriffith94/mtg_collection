@@ -1,4 +1,4 @@
-"""EDIT_FLOW_PLAN.md Phase 1: one write path for every deck edit.
+"""docs/archive/EDIT_FLOW_PLAN.md Phase 1: one write path for every deck edit.
 
 The point of the phase is that the same intent leaves the collection in the
 same state whichever page it started on. So the core tests here are tables:

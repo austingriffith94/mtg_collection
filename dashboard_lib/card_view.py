@@ -53,14 +53,14 @@ def setup_page(page_title, page_icon, layout="wide"):
     imported, so that part stays per-file.
 
     Also shows any feedback a write stashed before its rerun (Phase 0 of
-    EDIT_FLOW_PLAN.md) — see finish_edit()/show_pending_feedback() below."""
+    docs/archive/EDIT_FLOW_PLAN.md) — see finish_edit()/show_pending_feedback() below."""
     setup_logging()
     st.set_page_config(page_title=page_title, page_icon=page_icon, layout=layout)
     show_pending_feedback()
 
 
 # ------------------------------------------------------------------
-# One ending for every write (EDIT_FLOW_PLAN.md Phase 0, rule 1): clears
+# One ending for every write (docs/archive/EDIT_FLOW_PLAN.md Phase 0, rule 1): clears
 # the right caches, stashes the outcome, and reruns — so no page hand-rolls
 # its own invalidate_*() / st.toast() / st.rerun() triple after a write.
 # Read-only notices (st.info hints, empty states) are unaffected; this is
@@ -133,7 +133,7 @@ def result_from_lines(lines, **flags):
 
 
 # ------------------------------------------------------------------
-# The moves pop-up (EDIT_FLOW_PLAN.md Phase 1): every physical copy a write
+# The moves pop-up (docs/archive/EDIT_FLOW_PLAN.md Phase 1): every physical copy a write
 # moved, named — never summarised as a count. Moves are writes.py's dicts;
 # their `kind` decides how each reads.
 # ------------------------------------------------------------------
@@ -191,7 +191,7 @@ def _moves_dialog_body(moves):
 
 
 # ------------------------------------------------------------------
-# The source / destination pickers (EDIT_FLOW_PLAN.md Phase 2): one widget
+# The source / destination pickers (docs/archive/EDIT_FLOW_PLAN.md Phase 2): one widget
 # per question, so the add bar, the Shortlist form and the Mainboard save
 # ask it the same way. They return the choice in the shape writes.py takes
 # — (source, source_location) / dest — with None meaning Auto / Box.
@@ -238,7 +238,7 @@ def show_moves(moves):
 
 
 # ------------------------------------------------------------------
-# "Build it" (EDIT_FLOW_PLAN.md Phase 5): the preview dialog for a brewing
+# "Build it" (docs/archive/EDIT_FLOW_PLAN.md Phase 5): the preview dialog for a brewing
 # deck, shared by the Decks page's Build Plan and the Deck Editor's Board,
 # so both ask the same question and finish the same way.
 # ------------------------------------------------------------------
@@ -341,7 +341,7 @@ def show_pending_feedback():
 
 
 # ------------------------------------------------------------------
-# "Also update Gisa's list?" (EDIT_FLOW_PLAN.md Phase 6): a Collection-side
+# "Also update Gisa's list?" (docs/archive/EDIT_FLOW_PLAN.md Phase 6): a Collection-side
 # save that moved copies into or out of a deck has already happened — the
 # lots are changed and in the move log. This asks, per deck, whether the
 # deck's LIST should follow. There is no silent default: closing the dialog
@@ -737,7 +737,7 @@ def render_browser(df, key_prefix, group_options, column_config, extra_table_col
                    Table view's columns (order + rendering, incl. the
                    clickable Scryfall LinkColumn).
     stacks_renderer: optional callable(df) that draws the deck's Stacks board
-                   (VISUAL_DECK_PLAN.md Phase A). Passing it adds a third
+                   (docs/archive/VISUAL_DECK_PLAN.md Phase A). Passing it adds a third
                    "Stacks" View option; that view has its own group-by, so
                    the browser's group / sort controls are skipped for it,
                    but the (already-applied) filters still narrow `df`. It's

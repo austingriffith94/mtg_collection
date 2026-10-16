@@ -11,11 +11,11 @@ rollup, built on queries.card_lookup(), which matches by oracle_id the
 same way the plan allocator and contention table do, so two printings of
 one card (or a card referenced by either face of an MDFC) answer as one.
 
-EDIT_FLOW_PLAN.md Phase 6: the History section sets the card's deck-list
+docs/archive/EDIT_FLOW_PLAN.md Phase 6: the History section sets the card's deck-list
 changes beside its move log — where each copy went, when and why — so
 "where did my Blood Crypt go?" has one answer.
 
-EDIT_FLOW_PLAN.md Phase 3: "Pending moves" lists copies one deck has
+docs/archive/EDIT_FLOW_PLAN.md Phase 3: "Pending moves" lists copies one deck has
 promised another (a take not applied yet), and a shortlist entry taking
 the card from another deck says "from Gisa".
 """
@@ -103,7 +103,7 @@ with info_col:
     else:
         st.caption("　Not on any open shortlist.")
 
-    # EDIT_FLOW_PLAN.md Phase 3: copies promised from one deck to another.
+    # docs/archive/EDIT_FLOW_PLAN.md Phase 3: copies promised from one deck to another.
     if result.get("pending_takes"):
         st.markdown("**Pending moves**")
         for take in result["pending_takes"]:

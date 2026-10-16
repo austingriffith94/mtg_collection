@@ -1,7 +1,7 @@
 # Visual Deck Plan — Moxfield-style stacks, edit in place, Shortlist alongside
 
 Working plan from the review of 2026-10-12, following the finished
-[UI_ACTION_PLAN.md](docs/archive/UI_ACTION_PLAN.md). Goal: manage a deck while looking
+[UI_ACTION_PLAN.md](UI_ACTION_PLAN.md). Goal: manage a deck while looking
 at the cards, the way Moxfield does — cards in overlapping stacks grouped
 by type, hover for the full card, and quick edits without leaving the view.
 
@@ -353,7 +353,7 @@ in the preview (the cache stores the front face only).
 
 ## Conventions to hold to
 
-Carried forward from [UI_ACTION_PLAN.md](docs/archive/UI_ACTION_PLAN.md):
+Carried forward from [UI_ACTION_PLAN.md](UI_ACTION_PLAN.md):
 
 - **`queries.py` reads, `writes.py` writes, `loaders.py` caches, pages
   render.** `deck_board.py` is UI glue: it may call writes, but holds no

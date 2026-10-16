@@ -14,7 +14,7 @@ Chat mode: free-form conversation; the model calls read-only tools
 it mentions is checked against the database afterwards (chat.py, guard.py).
 Gated off for any provider that doesn't declare `capabilities.tools`.
 
-Adds Shortlist ideas only (EDIT_FLOW_PLAN.md Phase 5): a verified "add" suggestion has an
+Adds Shortlist ideas only (docs/archive/EDIT_FLOW_PLAN.md Phase 5): a verified "add" suggestion has an
 "Add to Shortlist" button that stages an idea (note "Advisor: <skill>", the suggested cut
 filled in as Replaces). Nothing here touches a deck's list or the collection; the idea is
 planned and applied on the Board / Shortlist like any other.

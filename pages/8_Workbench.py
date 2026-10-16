@@ -27,16 +27,16 @@ UI plan Phase 4: each deck's planned-changes block is an st.fragment
 (_planned_block), so ticking its checkboxes doesn't recompute the whole
 page; every write still ends in a full-app rerun via _refresh().
 
-EDIT_FLOW_PLAN.md Phase 1: applying, the contention "Drop", and
+docs/archive/EDIT_FLOW_PLAN.md Phase 1: applying, the contention "Drop", and
 Reconcile's "Sleeved here" / "Put away" all report the copies they moved
 through the shared pop-up (card_view.show_moves).
 
-EDIT_FLOW_PLAN.md Phase 6: assigning unlocated lots to a Location can put
+docs/archive/EDIT_FLOW_PLAN.md Phase 6: assigning unlocated lots to a Location can put
 copies into a deck's sleeves, so those saves ask whether the deck's list
 should follow (card_view.show_deck_sync). Reconcile's own moves are logged
 as "reconcile" in the move log.
 
-EDIT_FLOW_PLAN.md Phase 3: a card taken from another deck is a linked pair
+docs/archive/EDIT_FLOW_PLAN.md Phase 3: a card taken from another deck is a linked pair
 (a removal on the donor, an add on the receiver). Planned changes shows it
 as ONE row — "Sol Ring: Gisa → Prosper", under the receiving deck — counted
 once in the header, applied or dropped together
@@ -75,7 +75,7 @@ ver = st.session_state.get(VER_KEY, 0)
 
 
 def _refresh(lines, collection=False, moves=None, deck_sync=None):
-    """Bump the editor version, then finish the write (EDIT_FLOW_PLAN.md
+    """Bump the editor version, then finish the write (docs/archive/EDIT_FLOW_PLAN.md
     Phase 0): `lines` are "✅ ..." / "❌ ..." outcomes; `moves` are the
     copies the write moved (Phase 1), named in the pop-up; `deck_sync` are
     the list changes a collection-side save could make (Phase 6) —
@@ -259,7 +259,7 @@ def _planned_block(deck_id, deck_name, entries):
 
     `entries` are queries.collapse_linked_pairs() items grouped under this
     deck: a take from another deck is one row whose actions name either
-    half, and writes applies / drops the pair (EDIT_FLOW_PLAN.md Phase 3)."""
+    half, and writes applies / drops the pair (docs/archive/EDIT_FLOW_PLAN.md Phase 3)."""
     with st.expander(f"{deck_name} ({len(entries)})"):
         table = []
         for e in entries:

@@ -24,7 +24,7 @@ Collection page — browse the full physical collection.
   button comes from the data_editor's own edited_rows state (Phase 5).
   A save that moves a lot into or out of a deck's Location, or deletes a
   lot sleeved in a deck, asks whether that deck's list should follow
-  (EDIT_FLOW_PLAN.md Phase 6) — every lot change is also in the move log
+  (docs/archive/EDIT_FLOW_PLAN.md Phase 6) — every lot change is also in the move log
   that Card Lookup shows.
 - "Duplicate names only" (name on more than one lot, judged across the whole
   collection) and "No location only" (blank Location) sidebar toggles.

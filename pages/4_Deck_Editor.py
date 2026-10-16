@@ -6,7 +6,7 @@ when needed), and the Shortlist — ideas for the deck, the swaps staged from
 them, and the history of what was applied. No CSV editing or re-migration
 required for any of this.
 
-The Board tab (VISUAL_DECK_PLAN.md Phases B-C) is the visual way to edit the
+The Board tab (docs/archive/VISUAL_DECK_PLAN.md Phases B-C) is the visual way to edit the
 mainboard: the Stacks view with a card menu (+1 / −1 / Remove / Move to
 Shortlist / Tags…), the add bar, a stats strip and a one-level Undo, plus a
 Shortlist rail to pair an idea with a card to cut, unpair it, apply it, add
@@ -16,7 +16,7 @@ Mainboard tab keeps its table for changing many quantities at once.
 
 Every list edit here — Board, add bar, Mainboard table, applying a
 Shortlist swap — also moves the physical copies the same way
-(EDIT_FLOW_PLAN.md Phase 1: writes.sleeve_into_deck / unsleeve_from_deck),
+(docs/archive/EDIT_FLOW_PLAN.md Phase 1: writes.sleeve_into_deck / unsleeve_from_deck),
 and a pop-up names each copy moved. A brewing deck's edits change its
 list only.
 
@@ -152,7 +152,7 @@ if deck_id is not None:
 # Add a card — shared by the Board and Mainboard tabs (one flow, not two
 # copies): resolve locally or via Scryfall, then add it to the mainboard
 # through writes.add_deck_card(), which also sleeves the copies by the
-# Auto rule (EDIT_FLOW_PLAN.md Phase 1: a free copy from storage first,
+# Auto rule (docs/archive/EDIT_FLOW_PLAN.md Phase 1: a free copy from storage first,
 # a starter lot only for what isn't owned) and returns the moves for the
 # pop-up.
 # ------------------------------------------------------------------
@@ -268,7 +268,7 @@ def _render_add_card_form(deck_id, key_prefix, on_added=None):
 
 
 # ------------------------------------------------------------------
-# Board (VISUAL_DECK_PLAN.md Phase B)
+# Board (docs/archive/VISUAL_DECK_PLAN.md Phase B)
 # ------------------------------------------------------------------
 @st.fragment
 def _board_fragment(deck_id):
@@ -1011,7 +1011,7 @@ with tab_shortlist:
         def _refresh(flash=None, moves=None):
             """Bump the data_editor version (so stale pending edits don't
             replay onto a different row, see ver_key above) and finish the
-            write (Phase 0 of EDIT_FLOW_PLAN.md). `flash`: a list of lines,
+            write (Phase 0 of docs/archive/EDIT_FLOW_PLAN.md). `flash`: a list of lines,
             each prefixed "✅ " or "❌ "; `moves`: copies an apply moved."""
             st.session_state[ver_key] = ver + 1
             cv.finish_edit(cv.result_from_lines(flash or [], moves=moves or []))

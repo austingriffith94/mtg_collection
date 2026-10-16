@@ -1,5 +1,5 @@
 """card_view.finish_edit() / stash_edit() / show_pending_feedback() —
-EDIT_FLOW_PLAN.md Phase 0, rule 1: every write ends in one helper that
+docs/archive/EDIT_FLOW_PLAN.md Phase 0, rule 1: every write ends in one helper that
 clears caches, stashes its outcome, and reruns; setup_page() shows the
 outcome exactly once on the next run. Page-level adoption is covered in
 test_pages_smoke.py."""

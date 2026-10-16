@@ -18,7 +18,7 @@ rebuilds the whole database from the CSVs, discarding anything edited
 here since the last migration. Use the CSVs + migrate.py for your initial
 import, then manage everything here from then on — see the README.
 
-EDIT_FLOW_PLAN.md Phase 6: an import or add whose Location is a deck's name
+docs/archive/EDIT_FLOW_PLAN.md Phase 6: an import or add whose Location is a deck's name
 sleeves the copies there already, so it asks whether that deck's list
 should gain the card (card_view.show_deck_sync). Imports are logged as
 "import" in the move log, a hand add as "collection_edit".

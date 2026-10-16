@@ -1,4 +1,4 @@
-# Streamlit app config. Theme block is Phase 0 of UI_ACTION_PLAN.md; the
+# Streamlit app config. Theme block is Phase 0 of docs/archive/UI_ACTION_PLAN.md; the
 # [server] section is Phase 4.
 [theme]
 base = "dark"

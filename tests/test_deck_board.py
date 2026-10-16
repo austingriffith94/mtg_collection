@@ -1,5 +1,5 @@
 """deck_board.board_payload() — the pure data contract behind the Stacks
-view (VISUAL_DECK_PLAN.md Phase A), and apply_board_action(), the Phase B
+view (docs/archive/VISUAL_DECK_PLAN.md Phase A), and apply_board_action(), the Phase B
 edit handler. The JS side can't be run here, so the logic it relies on
 (ordering, flags, URL-only images, what each edit writes) is pinned down on
 the Python side."""

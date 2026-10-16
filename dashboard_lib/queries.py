@@ -57,19 +57,19 @@ _SCHEMA_UPGRADES = [
     # feeds another deck sets it to that deck's name, which is what lets a
     # direct transfer move a lot source → target without a stop in the box.
     ("deck_changes", "dest_location", "ALTER TABLE deck_changes ADD COLUMN dest_location TEXT"),
-    # EDIT_FLOW_PLAN.md Phase 2: where an ADD's copy comes from. NULL = Auto
+    # docs/archive/EDIT_FLOW_PLAN.md Phase 2: where an ADD's copy comes from. NULL = Auto
     # (writes.sleeve_into_deck()'s rule), 'storage' = a chosen storage
     # location (source_location), 'deck' (Phase 3) another deck, 'buy'
     # (Phase 4) a planned purchase with no location. They sit on deck_changes so a staged idea and the applied
     # history row a direct edit writes both carry the choice.
     ("deck_changes", "source", "ALTER TABLE deck_changes ADD COLUMN source TEXT"),
     ("deck_changes", "source_location", "ALTER TABLE deck_changes ADD COLUMN source_location TEXT"),
-    # EDIT_FLOW_PLAN.md Phase 3: ties a donor deck's removal to the receiving
+    # docs/archive/EDIT_FLOW_PLAN.md Phase 3: ties a donor deck's removal to the receiving
     # deck's add when a card is taken from another deck (set on BOTH rows,
     # each naming the other). NULL = not part of a pair, which is every row
     # written before this phase (old dismantle pairs aren't backfilled).
     ("deck_changes", "linked_change_id", "ALTER TABLE deck_changes ADD COLUMN linked_change_id INTEGER"),
-    # EDIT_FLOW_PLAN.md Phase 7: 1 = a basic land joining or leaving a deck's
+    # docs/archive/EDIT_FLOW_PLAN.md Phase 7: 1 = a basic land joining or leaving a deck's
     # list. It has no lot (collection_id NULL), and its None side means "basic
     # land supply" rather than "new copy record" / "deleted". Every earlier
     # row is a real lot's step, so the default 0 is right for them.
@@ -289,7 +289,7 @@ _SCHEMA_TABLE_UPGRADES = [
            )""",
         None,
     ),
-    # Move log (EDIT_FLOW_PLAN.md Phase 6) — see schema.sql for the column
+    # Move log (docs/archive/EDIT_FLOW_PLAN.md Phase 6) — see schema.sql for the column
     # meanings. Starts empty: moves made before this existed aren't known.
     (
         "collection_moves",
@@ -1089,7 +1089,7 @@ def is_basic_land(conn, name=None, scryfall_id=None):
     cards.is_basic_land, matched across printings like every ownership
     question (a printing's oracle_id, or a bare name for a typed reference).
 
-    EDIT_FLOW_PLAN.md Phase 7: the ONE place that decides a card is generic.
+    docs/archive/EDIT_FLOW_PLAN.md Phase 7: the ONE place that decides a card is generic.
     A basic needs no collection copy, is never pulled from or put back in
     storage (even when a lot of it is tracked), is never short, not owned,
     contended, to buy or to pull — but every add and removal is still in
@@ -2315,7 +2315,7 @@ def deck_card_entry(conn, deck_id, scryfall_id):
 
 # ------------------------------------------------------------------
 # Reads behind writes.sleeve_into_deck() / unsleeve_from_deck()
-# (EDIT_FLOW_PLAN.md Phase 1). Both match across printings — oracle_id,
+# (docs/archive/EDIT_FLOW_PLAN.md Phase 1). Both match across printings — oracle_id,
 # falling back to the exact name — like every other ownership question
 # here, so a different printing sleeved in the deck still counts.
 # ------------------------------------------------------------------
@@ -2357,7 +2357,7 @@ def deck_list_quantity(conn, deck_id, scryfall_id):
 
 
 # ------------------------------------------------------------------
-# Where a copy can come from (EDIT_FLOW_PLAN.md Phase 2). One set of reads
+# Where a copy can come from (docs/archive/EDIT_FLOW_PLAN.md Phase 2). One set of reads
 # behind the source picker, the Board payload, writes.sleeve_into_deck()'s
 # Auto rule and the allocator, so what the picker offers, what Auto picks
 # and what actually moves can't drift apart.
@@ -2539,7 +2539,7 @@ def brewing_claims(conn):
 
 
 # ------------------------------------------------------------------
-# Linked pairs (EDIT_FLOW_PLAN.md Phase 3): a card taken from another deck
+# Linked pairs (docs/archive/EDIT_FLOW_PLAN.md Phase 3): a card taken from another deck
 # is a removal on the donor (add side empty, dest_location = the receiving
 # deck) and an add on the receiver (source='deck', source_location = the
 # donor), each naming the other in linked_change_id. The donor's half is
@@ -2647,7 +2647,7 @@ def collapse_linked_pairs(rows):
 
 
 # ------------------------------------------------------------------
-# The move log (EDIT_FLOW_PLAN.md Phase 6; table and column meanings in
+# The move log (docs/archive/EDIT_FLOW_PLAN.md Phase 6; table and column meanings in
 # schema.sql). Written only by writes.py's lot writers.
 # ------------------------------------------------------------------
 def last_move_id(conn):
@@ -2696,7 +2696,7 @@ def deck_list_printing(conn, deck_id, scryfall_id):
 
 def deck_sync_offers(conn, since_move_id):
     """What a collection-side save did to decks' sleeves, as list changes
-    to offer (EDIT_FLOW_PLAN.md Phase 6). Reads the moves logged after
+    to offer (docs/archive/EDIT_FLOW_PLAN.md Phase 6). Reads the moves logged after
     `since_move_id` and, per deck and card, nets the copies that came in
     against those that left. An offer is made only where the deck's list
     does NOT already agree with its sleeves, and never for more copies than
@@ -2755,7 +2755,7 @@ BUY_REASONS = ("awaiting", "chosen", "contention", "idea")   # most specific fir
 
 def awaiting_buys(conn, deck_id=None):
     """Cards on a deck's list from a Buy add that no copy is sleeved for yet
-    (EDIT_FLOW_PLAN.md Phase 4's `awaiting`). A card is one when its latest
+    (docs/archive/EDIT_FLOW_PLAN.md Phase 4's `awaiting`). A card is one when its latest
     applied add row on the deck is source='buy' (a direct add logs one; so
     does applying an idea) and the list runs more copies than the deck's
     sleeves hold. A dismantled deck and an untracked basic land never are.

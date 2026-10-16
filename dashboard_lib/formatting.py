@@ -583,7 +583,7 @@ def safe_filename(name, max_length=150):
 
 
 # ------------------------------------------------------------------
-# Where a copy came from / went (EDIT_FLOW_PLAN.md Phase 2) — the words the
+# Where a copy came from / went (docs/archive/EDIT_FLOW_PLAN.md Phase 2) — the words the
 # source picker, the Board and History share, so one choice reads the same
 # everywhere. Pure: they take queries.card_sources()'s dict / a change row.
 # ------------------------------------------------------------------
@@ -604,7 +604,7 @@ def auto_source_label(sources):
     return "Auto"
 
 
-# A deck as a source (EDIT_FLOW_PLAN.md Phase 3) is shown with this prefix
+# A deck as a source (docs/archive/EDIT_FLOW_PLAN.md Phase 3) is shown with this prefix
 # wherever sources share one list of plain strings (a data_editor column), so
 # "Deck: Gisa" can't be mistaken for a storage box called Gisa.
 DECK_SOURCE_PREFIX = "Deck: "
@@ -623,7 +623,7 @@ def deck_choice_label(opt):
     return f"{deck_source_label(opt['deck'])} — on its list, not recorded as sleeved"
 
 
-# Buy (EDIT_FLOW_PLAN.md Phase 4) is the last choice of every picker and the
+# Buy (docs/archive/EDIT_FLOW_PLAN.md Phase 4) is the last choice of every picker and the
 # word a data_editor cell holds for it. It needs no Location and no card
 # lookup, so it is always on offer — "keep Gisa's, buy a second" included.
 BUY_SOURCE_LABEL = "🛒 Buy"

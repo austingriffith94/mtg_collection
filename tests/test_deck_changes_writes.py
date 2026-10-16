@@ -272,7 +272,7 @@ def test_apply_creates_a_starter_lot_for_a_card_that_is_not_owned(conn, deck, ad
     outcome = writes.apply_change(conn, cid)
     assert outcome["created_lot"]
     assert _lot(conn, wanted)["location"] == "Gisa"
-    # EDIT_FLOW_PLAN.md Phase 1: one Auto rule, one starter-lot source.
+    # docs/archive/EDIT_FLOW_PLAN.md Phase 1: one Auto rule, one starter-lot source.
     assert _lot(conn, wanted)["source"] == writes.STARTER_LOT_SOURCE
 
 
@@ -541,7 +541,7 @@ def test_deleting_a_deck_removes_its_changes_and_the_frozen_legacy_rows(conn, de
 
 
 # ------------------------------------------------------------------
-# Phase 0 (EDIT_FLOW_PLAN.md): deck names cascade on rename/delete
+# Phase 0 (docs/archive/EDIT_FLOW_PLAN.md): deck names cascade on rename/delete
 # ------------------------------------------------------------------
 
 @pytest.fixture

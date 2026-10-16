@@ -138,7 +138,7 @@ doesn't need it. If something's missing for the action you picked,
 it prints the exact `pip`/`conda` install command and stops, rather than
 installing anything on its own.
 
-It still checks you're on Python 3.8+ and gives a clear message (not a
+It still checks you're on Python 3.11+ and gives a clear message (not a
 raw crash) if not — that's a version check, not a package install, so
 it stays regardless of how you manage dependencies.
 
@@ -707,7 +707,7 @@ any more. See `docs/archive/IMPLEMENTATION_PLAN.md` for the phase-by-phase plan 
 
 ## Deck edits move the copies
 
-Since [EDIT_FLOW_PLAN.md](EDIT_FLOW_PLAN.md) Phase 1, changing a deck's
+Since [docs/archive/EDIT_FLOW_PLAN.md](docs/archive/EDIT_FLOW_PLAN.md) Phase 1, changing a deck's
 list moves the physical copies right away, the same way wherever you make
 the edit: the Board (+1, −1, Remove, Move to Shortlist, Add to deck,
 Apply), the add bar, the Mainboard table, applying planned swaps on the
@@ -743,7 +743,7 @@ Reconcile only shows real drift.
 
 ### Choosing where a copy comes from, and where it goes
 
-Since [EDIT_FLOW_PLAN.md](EDIT_FLOW_PLAN.md) Phase 2, "Auto" is the default
+Since [docs/archive/EDIT_FLOW_PLAN.md](docs/archive/EDIT_FLOW_PLAN.md) Phase 2, "Auto" is the default
 rather than the only choice.
 
 - **Comes from.** The add bar (Board and Mainboard tabs), the Shortlist's
@@ -771,7 +771,7 @@ rather than the only choice.
 
 ### Planned buys
 
-Since [EDIT_FLOW_PLAN.md](EDIT_FLOW_PLAN.md) Phase 4, the last **Comes from**
+Since [docs/archive/EDIT_FLOW_PLAN.md](docs/archive/EDIT_FLOW_PLAN.md) Phase 4, the last **Comes from**
 choice is **🛒 Buy**: the card goes on the deck's list (or an idea / planned
 row) now, and **no collection copy is made or moved**. It's allowed even when
 you own copies elsewhere — keep Gisa's, buy a second.
@@ -792,7 +792,7 @@ you own copies elsewhere — keep Gisa's, buy a second.
 
 ### Taking a card from another deck
 
-Since [EDIT_FLOW_PLAN.md](EDIT_FLOW_PLAN.md) Phase 3, **Comes from** also
+Since [docs/archive/EDIT_FLOW_PLAN.md](docs/archive/EDIT_FLOW_PLAN.md) Phase 3, **Comes from** also
 lists your other decks that run the card (*"Deck: Gisa — 1 sleeved"*).
 Taking it from Gisa changes Gisa's list too, so both decks show it.
 
@@ -829,7 +829,7 @@ Taking it from Gisa changes Gisa's list too, so both decks show it.
 
 ## Every copy has a history, and collection edits flow back to decks
 
-Since [EDIT_FLOW_PLAN.md](EDIT_FLOW_PLAN.md) Phase 6 the collection side is
+Since [docs/archive/EDIT_FLOW_PLAN.md](docs/archive/EDIT_FLOW_PLAN.md) Phase 6 the collection side is
 tracked too, so the answer to *"where did my Blood Crypt go?"* is on one page.
 
 - **The move log.** Every change to a lot — adding or importing one, moving

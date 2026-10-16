@@ -62,7 +62,7 @@ the Mainboard, Shortlist, or both at once.
 Proxy flags are intentionally NOT shown here yet — per the project state
 doc, the Proxy convention in Location hasn't been confirmed with the user.
 
-EDIT_FLOW_PLAN.md Phase 5: the Overview tab's Build Plan reads the sources a
+docs/archive/EDIT_FLOW_PLAN.md Phase 5: the Overview tab's Build Plan reads the sources a
 brewing deck's cards chose — one group per storage Location and per donor
 deck, each with its own "Pull this group" button, then Buy cards (they stay
 on the buy list) and anything that can't be pulled, with why. "🔨 Build it"
@@ -509,7 +509,7 @@ def _render_overview(conn, deck_id, meta, deck_name, color_identity_raw):
                      "boxes collects everything. Open it in a browser and print.",
             )
             if _brewing:
-                # EDIT_FLOW_PLAN.md Phase 5: "Build it" replaces "Mark deck as
+                # docs/archive/EDIT_FLOW_PLAN.md Phase 5: "Build it" replaces "Mark deck as
                 # built". The cards a brewing deck's edits left unpulled are
                 # pulled from the sources they chose, after a preview.
                 _state_col.button(
@@ -932,7 +932,7 @@ def _render_cards(conn, deck_id):
         if "board" in working_df.columns:
             group_options.append(("board", "Board"))
 
-        # Stacks (VISUAL_DECK_PLAN.md Phase A) is offered for the Mainboard
+        # Stacks (docs/archive/VISUAL_DECK_PLAN.md Phase A) is offered for the Mainboard
         # only: the board has no notion of Shortlist rows.
         stacks_renderer = None
         if board_choice == "Mainboard":

@@ -293,7 +293,7 @@ def test_lots_sleeved_here_but_not_on_the_list_are_strays(conn, add_card):
     assert [c["card"] for c in plan["to_box"]] == ["Sol Ring"]
     assert [c["card"] for c in plan["strays"]] == ["Heirloom Blade"]
 
-    # Phase 1 of EDIT_FLOW_PLAN.md: the moves come back for the pop-up.
+    # Phase 1 of docs/archive/EDIT_FLOW_PLAN.md: the moves come back for the pop-up.
     moves = writes.move_dismantle_strays(conn, vilis)
     assert [(m["card"], m["from"], m["to"], m["kind"]) for m in moves] == [
         ("Heirloom Blade", "Vilis", "Box", "move")]
@@ -494,7 +494,7 @@ def test_staging_the_same_deck_twice_queues_one_cut_not_two(conn, add_card):
 
 def test_a_dismantle_claiming_a_copy_someone_else_wants_is_a_conflict(conn, add_card):
     """The dismantle's add and an unrelated shortlist row both want the one
-    copy still sleeved in Vilis. EDIT_FLOW_PLAN.md Phase 3: the dismantle's
+    copy still sleeved in Vilis. docs/archive/EDIT_FLOW_PLAN.md Phase 3: the dismantle's
     pair is a take from Vilis, so it holds the copy ("From Vilis") and the
     other row is told it's promised; plan_conflicts still names the card as
     the decision to make, one short."""

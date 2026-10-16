@@ -1,4 +1,4 @@
-"""EDIT_FLOW_PLAN.md Phase 6: collection-side edits, tracked and flowing back.
+"""docs/archive/EDIT_FLOW_PLAN.md Phase 6: collection-side edits, tracked and flowing back.
 
 Two halves:
 

@@ -18,6 +18,7 @@ import logging
 import os
 import sqlite3
 
+from . import backup
 from . import queries as q
 
 logger = logging.getLogger(__name__)
@@ -641,6 +642,7 @@ def delete_deck(conn, deck_id, clear_collection_locations=True):
     if not row:
         return None, "Deck not found.", 0, 0
     deck_name = row[0]
+    backup.snapshot(conn, "before", "delete-deck")  # recoverable if it was a mistake
 
     conn.execute(
         "UPDATE game_participants SET deck_id=NULL, is_own_deck=0 WHERE deck_id=?", (deck_id,)
@@ -2635,6 +2637,7 @@ def prune_collection(conn):
     if not rows:
         return []
     ids = [r[0] for r in rows]
+    backup.snapshot(conn, "before", "prune-collection")
     placeholders = ",".join("?" for _ in ids)
     # Phase 6: a pruned lot leaves a row in the move log (it had no Location,
     # so it reads "no location → deleted") — these used to vanish silently.

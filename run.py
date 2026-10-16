@@ -18,6 +18,11 @@ migration is intentionally NOT a numbered menu option — it's destructive
 (wipes and rebuilds mtg_collection.db, discarding any dashboard-made
 edits) so it's tucked behind typing the word 'migrate' instead of a
 number, with its own confirmation prompt before it actually runs.
+
+The database is also protected by dashboard_lib/backup.py: an integrity
+check and a once-a-day snapshot (backups/) whenever the dashboard is
+launched from here, a "Back up the database now" menu option, and a
+snapshot before 'migrate'.
 """
 import os
 import sys
@@ -26,6 +31,9 @@ import subprocess
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "mtg_collection.db")
 SCRIPTS_DIR = os.path.join(BASE_DIR, "scripts")
+
+sys.path.insert(0, BASE_DIR)
+from dashboard_lib import backup  # stdlib-only, safe to import before the env check
 
 MIN_PYTHON = (3, 11)  # tomllib (advisor secrets) is 3.11+
 
@@ -74,6 +82,9 @@ def run_migration():
     if confirm != "REBUILD":
         print("Cancelled — nothing was touched.\n")
         return
+    saved = backup.snapshot_path(DB_PATH, "before", "migrate")
+    if saved:
+        print(f"Backed up the current database first: {saved}")
     print("\nRunning migration — this hits the Scryfall API for each unique "
           "printing and can take a few minutes.\n")
     subprocess.run([sys.executable, "migrate.py"], cwd=SCRIPTS_DIR)
@@ -114,9 +125,37 @@ def run_refresh_card_data():
     subprocess.run([sys.executable, "refresh_card_data.py"], cwd=SCRIPTS_DIR)
 
 
+def run_backup():
+    saved = backup.snapshot_path(DB_PATH, "manual")
+    if saved:
+        print(f"\nBacked up to {saved}\n")
+    else:
+        print("\nBackup failed — see logs/ for details.\n")
+
+
+def check_database_health():
+    """Integrity-check the live database and take today's snapshot (once a
+    day). Never blocks launching, but a damaged database is called out
+    loudly along with the newest snapshot that is still good."""
+    if not os.path.exists(DB_PATH):
+        return
+    problems = backup.integrity_problems(DB_PATH)
+    if problems:
+        print("\n⚠ DATABASE PROBLEM — mtg_collection.db failed its integrity check:")
+        for p in problems[:5]:
+            print(f"  {p}")
+        good = backup.latest_good_snapshot(DB_PATH)
+        print(f"  Newest good snapshot: {good or 'none found in backups/'}")
+        print("  Not taking today's snapshot (it would copy the damage). "
+              "See README: Backups.\n")
+        return
+    backup.snapshot_path(DB_PATH, "daily")
+
+
 def run_dashboard():
     if not require("streamlit", label="the dashboard"):
         return
+    check_database_health()
     # One-time, idempotent: the image cache moved from image_cache/ to
     # static/image_cache/ (UI plan Phase 4) so Streamlit can serve it.
     sys.path.insert(0, SCRIPTS_DIR)
@@ -134,6 +173,7 @@ MENU = [
     ("Launch dashboard", run_dashboard, True),
     ("Export a deck to Moxfield format", run_export, True),
     ("Export collection to Moxfield CSV", run_export_collection, True),
+    ("Back up the database now", run_backup, True),
     ("Sync image cache (download new + prune unused)", run_image_sync, True),
     ("Refresh Scryfall card data (Reserved List/Game Changer/legality/price)",
      run_refresh_card_data, True),

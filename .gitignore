@@ -38,3 +38,6 @@ __pycache__/
 # OS cruft
 .DS_Store
 Thumbs.db
+
+# Dated database snapshots (dashboard_lib/backup.py)
+/backups/

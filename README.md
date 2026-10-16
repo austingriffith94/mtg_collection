@@ -173,6 +173,26 @@ confirm before it actually touches anything. The first time you run
 `run.py` with no `mtg_collection.db` yet, the menu shows only Exit and
 tells you to type `migrate` to get started.
 
+### Backups
+
+`mtg_collection.db` is gitignored, so it needs its own safety net beyond a
+file-level backup tool (which can copy it mid-write). `dashboard_lib/backup.py`
+keeps consistent copies in `backups/` (also gitignored) using SQLite's online
+backup API:
+
+- **Daily** — the first time you launch the dashboard from `run.py` each day
+  (also runs an integrity check first; a damaged database is flagged, with the
+  newest good snapshot named, and no snapshot is taken). Newest 14 kept.
+- **Manual** — menu option "Back up the database now". Newest 10 kept.
+- **Before risky actions** — before `migrate`, deleting a deck and pruning
+  collection lots (at most one per action every 10 minutes). Newest 10 kept.
+
+**Restoring:** close the dashboard, then copy the snapshot you want over
+`mtg_collection.db` (delete any `mtg_collection.db-journal` next to it).
+Snapshots are ordinary SQLite files, so you can also open one read-only to
+compare before restoring. Launching the dashboard directly with
+`streamlit run dashboard.py` skips the daily snapshot; use `run.py`.
+
 To skip the menu and open the app directly, run `python run.py --dashboard`
 (`run.bat --dashboard`, `./run.sh --dashboard` and `./run.command --dashboard`
 work too). It exits with a message if there's no database yet.

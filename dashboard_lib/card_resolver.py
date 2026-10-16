@@ -78,10 +78,11 @@ def _insert_card_row(conn, row):
     )
 
 
-def resolve_or_fetch_card(conn, name=None, set_code=None, collector_number=None):
+def resolve_or_fetch_card(conn, name=None, set_code=None, collector_number=None, client=None):
     """Returns (scryfall_id, was_newly_fetched, error). error is None on
     success. Checks locally first (no network needed); falls back to a
-    live Scryfall lookup only if nothing local matches."""
+    live Scryfall lookup only if nothing local matches. Batch callers pass
+    a shared `client` so request pacing/backoff spans the whole batch."""
     name = (name or "").strip() or None
     set_code = (set_code or "").strip() or None
     collector_number = (str(collector_number).strip() if collector_number not in (None, "") else None)
@@ -103,7 +104,7 @@ def resolve_or_fetch_card(conn, name=None, set_code=None, collector_number=None)
             "one via the CSV migration instead."
         )
 
-    client = scryfall_lookup.ScryfallClient(verbose=False)
+    client = client or scryfall_lookup.ScryfallClient(verbose=False)
     if set_code and collector_number:
         data = client.get_by_set_number(set_code, collector_number)
     else:
@@ -111,6 +112,8 @@ def resolve_or_fetch_card(conn, name=None, set_code=None, collector_number=None)
 
     if not data:
         target = f"{set_code}/{collector_number}" if set_code and collector_number else name
+        if client.last_error:
+            return None, False, f"Scryfall lookup for '{target}' failed ({client.last_error}) — try again shortly."
         return None, False, (
             f"Couldn't resolve '{target}' on Scryfall — check the spelling/set code, "
             f"or that you have network access right now."
@@ -143,8 +146,13 @@ def fetch_missing_names(conn, names, progress_callback=None):
     """Fetch card data for names with no `cards` row. Network access, so
     only called from an explicit button. Returns (fetched, failed) name lists."""
     fetched, failed = [], []
+    client = None
+    try:
+        client = _load_scryfall_module().ScryfallClient(verbose=False)  # one shared client
+    except ImportError:
+        pass  # resolve_or_fetch_card reports this per card
     for i, name in enumerate(names, start=1):
-        sid, _new, error = resolve_or_fetch_card(conn, name=name)
+        sid, _new, error = resolve_or_fetch_card(conn, name=name, client=client)
         (failed if error or not sid else fetched).append(name)
         if progress_callback:
             progress_callback(i, len(names), name)

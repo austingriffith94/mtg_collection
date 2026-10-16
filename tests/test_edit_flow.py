@@ -320,11 +320,13 @@ def test_undoing_a_bump_deletes_the_starter_lot_it_made(fresh):
     assert _state(c) == {"list": [(RING, 1)], "lots": [(RING, "Gisa", 1, "")]}
 
 
-def test_undoing_a_split_leaves_two_lots_in_the_same_place(fresh):
+def test_undoing_a_split_merges_back_into_one_lot(fresh):
+    # move_lot() merges moved copies into an interchangeable lot already at
+    # the destination, so undoing a split no longer leaves two lots.
     c = fresh()
     g = _world(c, sleeved=3, listed=3)
     _undo(c, g, _board(c, g, op="dec", id=RING))
-    assert _state(c)["lots"] == [(RING, "Gisa", 1, ""), (RING, "Gisa", 2, "")]
+    assert _state(c)["lots"] == [(RING, "Gisa", 3, "")]
 
 
 def test_undo_leaves_a_lot_that_has_moved_on_since(fresh):

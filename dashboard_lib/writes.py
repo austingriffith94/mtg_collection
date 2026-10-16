@@ -2476,6 +2476,65 @@ def update_collection_lot(conn, collection_id, *, reason="collection_edit", chan
     conn.commit()
 
 
+def _find_twin(conn, collection_id):
+    """The OTHER lot that is interchangeable with this one — same printing,
+    finish, Location (blank == NULL), source and acquired date — or None.
+    Lots with no tracked quantity (NULL) never merge: there's nothing to add."""
+    row = conn.execute(
+        "SELECT scryfall_id, foil, location, date_acquired, source, quantity "
+        "FROM collection WHERE collection_id=?", (collection_id,)
+    ).fetchone()
+    if row is None or row[5] is None:
+        return None
+    sid, foil, loc, acquired, source, _ = row
+    twin = conn.execute(
+        """SELECT collection_id FROM collection
+           WHERE collection_id != ? AND scryfall_id=? AND foil=?
+             AND TRIM(COALESCE(location,'')) = ? AND date_acquired IS ? AND source IS ?
+             AND quantity IS NOT NULL
+           ORDER BY collection_id LIMIT 1""",
+        (collection_id, sid, foil, _loc(loc), acquired, source),
+    ).fetchone()
+    return twin[0] if twin else None
+
+
+def _merge_lots(conn, keep_id, drop_id):
+    """Fold lot `drop_id` into `keep_id`: quantities add, price_paid adds
+    (a NULL side counts as nothing), then `drop_id` is deleted. No move-log
+    row and no commit — the copies didn't go anywhere, the caller commits.
+    Returns keep_id."""
+    keep_q, keep_p = conn.execute(
+        "SELECT quantity, price_paid FROM collection WHERE collection_id=?", (keep_id,)).fetchone()
+    drop_q, drop_p = conn.execute(
+        "SELECT quantity, price_paid FROM collection WHERE collection_id=?", (drop_id,)).fetchone()
+    prices = [p for p in (keep_p, drop_p) if p is not None]
+    conn.execute(
+        "UPDATE collection SET quantity=?, price_paid=? WHERE collection_id=?",
+        (keep_q + drop_q, round(sum(prices), 2) if prices else None, keep_id),
+    )
+    conn.execute("DELETE FROM collection WHERE collection_id=?", (drop_id,))
+    return keep_id
+
+
+def consolidate_lots(conn):
+    """One-time (re-runnable) cleanup: merge every group of interchangeable
+    lots (see _find_twin) into the lowest-id lot of the group. Returns the
+    number of lots removed. Touches no Location, so the move log is untouched."""
+    removed = 0
+    ids = [r[0] for r in conn.execute("SELECT collection_id FROM collection ORDER BY collection_id")]
+    for cid in ids:
+        if conn.execute("SELECT 1 FROM collection WHERE collection_id=?", (cid,)).fetchone() is None:
+            continue
+        while (twin := _find_twin(conn, cid)) is not None:
+            # keep the lowest id of the pair
+            keep, drop = (cid, twin) if cid < twin else (twin, cid)
+            _merge_lots(conn, keep, drop)
+            removed += 1
+            cid = keep
+    conn.commit()
+    return removed
+
+
 def move_lot(conn, collection_id, location, quantity=None, *, reason="collection_edit", change_id=None):
     """Set a lot's Location, moving only `quantity` copies when that is
     fewer than the lot holds (Workbench reconciliation: a lot of 3 where the
@@ -2483,8 +2542,10 @@ def move_lot(conn, collection_id, location, quantity=None, *, reason="collection
     location, with the same printing/finish/source/date; `price_paid` is
     split in proportion, on the evidence that it's a lot total (a 2-copy lot
     paid $0.69 for a $0.53 card). A NULL-quantity (untracked) lot can't be
-    split and always moves whole. Returns the collection_id of the lot now
-    at `location`."""
+    split and always moves whole. If `location` already holds an
+    interchangeable lot (_find_twin), the moved copies are merged into it
+    rather than left as a second row. Returns the collection_id of the lot
+    now at `location`."""
     row = conn.execute(
         "SELECT scryfall_id, quantity, foil, location, date_acquired, price_paid, source "
         "FROM collection WHERE collection_id=?", (collection_id,)
@@ -2495,6 +2556,11 @@ def move_lot(conn, collection_id, location, quantity=None, *, reason="collection
     if quantity is None or have is None or quantity >= have:
         update_collection_lot(conn, collection_id, location=location,
                               reason=reason, change_id=change_id)
+        twin = _find_twin(conn, collection_id)
+        if twin is not None:
+            _merge_lots(conn, twin, collection_id)
+            conn.commit()
+            return twin
         return collection_id
     if quantity < 1:
         raise ValueError("Move at least one copy.")
@@ -2512,6 +2578,11 @@ def move_lot(conn, collection_id, location, quantity=None, *, reason="collection
     # A split is logged against the lot the moved copies now sit in.
     _log_collection_move(conn, cur.lastrowid, sid, quantity, _loc(old_loc), _loc(location),
                          reason, change_id)
+    twin = _find_twin(conn, cur.lastrowid)
+    if twin is not None:
+        _merge_lots(conn, twin, cur.lastrowid)
+        conn.commit()
+        return twin
     conn.commit()
     return cur.lastrowid
 

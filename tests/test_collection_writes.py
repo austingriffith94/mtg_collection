@@ -74,3 +74,23 @@ def test_prune_removes_only_unhomed_zero_qty_lots_not_in_a_deck(conn, add_card):
     assert removed == {stale, blank_loc}
     remaining = {r[0] for r in conn.execute("SELECT collection_id FROM collection")}
     assert remaining == {located, owned, in_deck}
+
+
+def test_consolidate_merges_interchangeable_lots_only(conn, add_card):
+    sid = add_card("Sol Ring")
+    a = writes.add_collection_lot(conn, sid, quantity=1, location="Box", price_paid=1.0)
+    writes.add_collection_lot(conn, sid, quantity=2, location="Box", price_paid=0.5)
+    foil = writes.add_collection_lot(conn, sid, quantity=1, foil=True, location="Box")
+    other = writes.add_collection_lot(conn, sid, quantity=1, location="Binder")
+    assert writes.consolidate_lots(conn) == 1
+    assert _lot(conn, a)["quantity"] == 3 and _lot(conn, a)["price_paid"] == 1.5
+    assert {foil, other} <= {r[0] for r in conn.execute("SELECT collection_id FROM collection")}
+    assert writes.consolidate_lots(conn) == 0
+
+
+def test_move_lot_merges_into_existing_lot_at_destination(conn, add_card):
+    sid = add_card("Sol Ring")
+    src = writes.add_collection_lot(conn, sid, quantity=3, location="Box")
+    dest = writes.add_collection_lot(conn, sid, quantity=1, location="Binder")
+    assert writes.move_lot(conn, src, "Binder", quantity=2) == dest
+    assert _lot(conn, dest)["quantity"] == 3 and _lot(conn, src)["quantity"] == 1

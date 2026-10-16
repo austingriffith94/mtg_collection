@@ -178,7 +178,7 @@ def test_copies_already_sleeved_here_count_before_the_chosen_location(c):
     _lot(c, RING, 1, "Lands Box")
     # List goes 0 -> 2: one is already sleeved here, one comes from Lands Box.
     writes.add_deck_card(c, gisa, RING, 2, source="storage", source_location="Lands Box")
-    assert _lots(c) == [("Gisa", 1), ("Gisa", 1)]
+    assert _lots(c) == [("Gisa", 2)]  # merged: interchangeable lots at one place
 
 
 def test_a_chosen_location_never_makes_a_starter_lot(c):
@@ -240,7 +240,7 @@ def test_a_bump_records_where_the_extra_copy_came_from(c):
     writes.add_deck_card(c, gisa, RING, 2, source="storage", source_location="Binder")
     bump = _history(c)[1]
     assert (bump["quantity"], bump["source_location"], bump["notes"]) == (1, "Binder", "quantity 1 → 2")
-    assert _lots(c) == [("Gisa", 1), ("Gisa", 1)]
+    assert _lots(c) == [("Gisa", 2)]  # merged: interchangeable lots at one place
 
 
 def test_a_removal_goes_where_asked_and_says_so(c):

@@ -23,7 +23,9 @@ import requests
 logger = logging.getLogger(__name__)
 
 SCRYFALL_API = "https://api.scryfall.com"
-RATE_LIMIT_SECONDS = 0.1  # be polite; Scryfall asks for 50-100ms between calls
+RATE_LIMIT_SECONDS = 0.15  # Scryfall asks for 50-100ms between calls; a bit of headroom
+MAX_RETRIES = 4            # extra attempts after a 429
+BACKOFF_BASE_SECONDS = 2.0  # 2s, 4s, 8s, 16s when no Retry-After header
 
 
 class ScryfallClient:
@@ -35,15 +37,40 @@ class ScryfallClient:
         })
         self.verbose = verbose
         self._miss_log = []  # collects (query, reason) for anything unresolved
+        self._last_request_at = 0.0
+        self.last_error = None  # set by _get() on network/HTTP failure (not on 404)
 
     def _get(self, url, params=None):
-        try:
-            resp = self.session.get(url, params=params, timeout=15)
-        except requests.RequestException as e:
-            logger.warning("Scryfall request failed: %s (%s)", url, e)
-            self._miss_log.append((url, f"network error: {e}"))
-            return None
-        time.sleep(RATE_LIMIT_SECONDS)
+        """GET + JSON. Returns None for a genuine 404 (card doesn't exist)
+        and ALSO None for errors, but errors set self.last_error so callers
+        (get_by_name) can tell "not found" from "couldn't ask" and avoid
+        firing fallback queries at a server that is throttling us."""
+        self.last_error = None
+        resp = None
+        for attempt in range(MAX_RETRIES + 1):
+            # Space every request out from the previous one, measured from
+            # request START, so slow responses don't make us faster.
+            wait = self._last_request_at + RATE_LIMIT_SECONDS - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            self._last_request_at = time.monotonic()
+            try:
+                resp = self.session.get(url, params=params, timeout=15)
+            except requests.RequestException as e:
+                logger.warning("Scryfall request failed: %s (%s)", url, e)
+                self._miss_log.append((url, f"network error: {e}"))
+                self.last_error = "network"
+                return None
+            if resp.status_code != 429 or attempt == MAX_RETRIES:
+                break
+            # Rate limited: honor Retry-After if sent, else back off exponentially.
+            try:
+                delay = float(resp.headers.get("Retry-After", ""))
+            except ValueError:
+                delay = BACKOFF_BASE_SECONDS * (2 ** attempt)
+            logger.warning("Scryfall 429, retrying in %.1fs: %s", delay, url)
+            time.sleep(delay)
+
         if resp.status_code == 404:
             return None
         try:
@@ -51,6 +78,7 @@ class ScryfallClient:
         except requests.HTTPError as e:
             logger.warning("Scryfall request returned %s: %s (%s)", resp.status_code, url, e)
             self._miss_log.append((url, f"http error: {e}"))
+            self.last_error = f"http {resp.status_code}"
             return None
         return resp.json()
 
@@ -88,11 +116,15 @@ class ScryfallClient:
         data = self._get(f"{SCRYFALL_API}/cards/named", params={"exact": name})
         if data:
             return data
+        if self.last_error:  # throttled/offline: fallbacks would just pile on
+            return None
 
         if front_face != name:
             data = self._get(f"{SCRYFALL_API}/cards/named", params={"exact": front_face})
             if data:
                 return data
+            if self.last_error:
+                return None
 
         data = self._get(f"{SCRYFALL_API}/cards/named", params={"fuzzy": front_face})
         if data:

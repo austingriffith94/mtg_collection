@@ -26,6 +26,10 @@ Collection page — browse the full physical collection.
   lot sleeved in a deck, asks whether that deck's list should follow
   (EDIT_FLOW_PLAN.md Phase 6) — every lot change is also in the move log
   that Card Lookup shows.
+- "Duplicate names only" (name on more than one lot, judged across the whole
+  collection) and "No location only" (blank Location) sidebar toggles.
+- "Tidy lots" expander: one-click consolidation of interchangeable lots
+  (writes.consolidate_lots). Moves also merge into an existing twin lot.
 - "Group / breakout by" lets you layer multiple groupings (e.g. Type, then
   Rarity within each type) — each top-level group is a collapsible
   section.
@@ -215,6 +219,13 @@ if export_box.open:
     with export_box:
         render_moxfield_export()
 
+with st.expander("🧹 Tidy lots"):
+    st.caption("Merge lots that are interchangeable (same printing, finish, Location, "
+               "source and date) into one lot with the combined quantity and price.")
+    if st.button("Consolidate duplicate lots", key="collection_consolidate"):
+        merged = writes.consolidate_lots(conn)
+        cv.finish_edit({"message": f"Merged away {merged} duplicate lot(s).", "collection": True})
+
 # Read from session_state, not the (not-yet-drawn) toggle below — the Edit
 # mode toggle is drawn after these filters in script order (Phase 5).
 _edit_mode_active = st.session_state.get("collection_edit_mode", False)
@@ -273,6 +284,23 @@ elif deck_status == "Not in a deck OR another location":
         (filtered["in_deck"] == 0)
         & (filtered["location"].isna() | (filtered["location"].astype(str).str.strip() == ""))
     ]
+
+# Duplicate / no-location toggles. "Duplicates" = the card name appears on
+# more than one lot (any printing/foil/location), judged against the FULL
+# collection so other sidebar filters don't hide a card's other copies.
+only_dupes_key, only_noloc_key = "collection_only_duplicates", "collection_only_no_location"
+cv.register_filter_key(only_dupes_key)
+cv.register_filter_key(only_noloc_key)
+if st.sidebar.toggle(
+    "Duplicate names only", key=only_dupes_key, disabled=_edit_mode_active,
+    help="Only cards whose name appears on more than one lot in the collection.",
+):
+    filtered = filtered[filtered["name"].isin(full_df["name"][full_df["name"].duplicated(keep=False)])]
+if st.sidebar.toggle(
+    "No location only", key=only_noloc_key, disabled=_edit_mode_active,
+    help="Only lots with no Location recorded (blank/empty).",
+):
+    filtered = filtered[filtered["location"].isna() | (filtered["location"].astype(str).str.strip() == "")]
 
 column_config = cv.base_column_config()
 column_config.update(

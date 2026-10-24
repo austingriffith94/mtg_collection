@@ -223,14 +223,14 @@ export default function (component) {
 
   const layout = el("div", "layout");
   const stacksEl = el("div", "stacks");
-  // One sticky right rail: the Shortlist (its own scroll, capped height) on
-  // top, the preview under it. A separate Shortlist column beside the
-  // preview took ~470px from the stacks and halved how many fit per row.
+  // One sticky right rail: the preview on top (so a long Shortlist can't push
+  // it out of view), the Shortlist (its own scroll, capped height) under it.
+  // A separate Shortlist column beside the preview took ~470px from the stacks and halved how many fit per row.
   const rail = el("div", "rail");
   const preview = el("aside", "preview");
   const shortlistEl = el("aside", "shortlist");
-  if (shortlist.length || leaving.length) rail.append(shortlistEl);
   rail.append(preview);
+  if (shortlist.length || leaving.length) rail.append(shortlistEl);
   layout.append(stacksEl, rail);
   root.appendChild(layout);
 
@@ -457,7 +457,17 @@ export default function (component) {
       const stack = el("section", "stack");
       const head = el("header", "stack-head");
       head.appendChild(el("span", "stack-title", group.label));
-      head.appendChild(el("span", "stack-count", String(qtyOf(group.cards))));
+      const count = el("span", "stack-count", String(qtyOf(group.cards)));
+      if (groupBy === "Type" && group.label === "Land") {
+        // Land-side MDFCs sit in their front-face stack (Instant, Creature...)
+        // but still count toward the land total; the cards stay where they are.
+        const mdfc = qtyOf(cards.filter(c => c.is_land && c.type !== "Land" && c.type !== "Commander"));
+        if (mdfc) {
+          count.textContent = qtyOf(group.cards) + " + " + mdfc;
+          count.title = qtyOf(group.cards) + " lands + " + mdfc + " MDFC with a land side";
+        }
+      }
+      head.appendChild(count);
       stack.appendChild(head);
       const col = el("div", "stack-cards");
       group.cards.forEach((c, i) => col.appendChild(cardNode(c, i === group.cards.length - 1)));

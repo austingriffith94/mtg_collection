@@ -439,10 +439,12 @@ def list_decks_with_covers(conn):
     commander_* columns being maxed, so this doesn't average or pick
     among several candidates."""
     return pd.read_sql_query(
-        """SELECT d.deck_id, d.name, d.representative, d.commander,
+        f"""SELECT d.deck_id, d.name, d.representative, d.commander,
                   d.cover_image_path,
-                  MAX(c.image_uri) AS commander_image_uri,
-                  MAX(c.local_image_path) AS commander_local_image_path
+                  MAX({_sleeved_art_sql("image_uri", "d.deck_id", "c.name", "c.image_uri")})
+                      AS commander_image_uri,
+                  MAX({_sleeved_art_sql("local_image_path", "d.deck_id", "c.name", "c.local_image_path")})
+                      AS commander_local_image_path
            FROM decks d
            LEFT JOIN deck_cards dc ON dc.deck_id = d.deck_id
            LEFT JOIN cards c ON c.scryfall_id = dc.scryfall_id AND c.name = d.commander
@@ -837,12 +839,37 @@ def owned_card_quantities(conn):
     return out
 
 
+def _sleeved_art_sql(col, deck_id_expr, name_expr, fallback_expr):
+    """SQL scalar subquery: column `col` (image_uri / local_image_path) of the
+    printing of `name_expr` actually sleeved in the deck (a collection lot
+    whose Location is the deck's name), else `fallback_expr`. deck_cards holds
+    one printing per card NAME, so two decks running different printings of
+    the same card (extended-art vs regular) would otherwise both show
+    whichever printing deck_cards happens to hold. The deck's own printing
+    wins when it is owned in the deck; otherwise the first lot."""
+    return f"""COALESCE((SELECT c2.{col} FROM collection col2
+                 JOIN cards c2 ON c2.scryfall_id = col2.scryfall_id
+                 JOIN decks d2 ON d2.name = col2.location
+                WHERE d2.deck_id = {deck_id_expr} AND c2.name = {name_expr}
+                ORDER BY (c2.scryfall_id = c.scryfall_id) DESC, col2.collection_id
+                LIMIT 1), {fallback_expr})"""
+
+
 def deck_cards_dataframe(conn, deck_id):
     """One row per mainboard card, with quantity and any strategy tag(s)
     (comma-joined — schema supports multiple tags per card-in-deck even
-    though today's data only populates one)."""
+    though today's data only populates one). Card art is the printing
+    sleeved in this deck (see _sleeved_art_sql), not just deck_cards'."""
+    columns = CARD_COLUMNS.replace(
+        "c.image_uri,",
+        _sleeved_art_sql("image_uri", "dc.deck_id", "c.name", "c.image_uri") + " AS image_uri,",
+    ).replace(
+        "c.local_image_path,",
+        _sleeved_art_sql("local_image_path", "dc.deck_id", "c.name", "c.local_image_path")
+        + " AS local_image_path,",
+    )
     return pd.read_sql_query(
-        f"""SELECT {CARD_COLUMNS}, dc.quantity,
+        f"""SELECT {columns}, dc.quantity,
                    GROUP_CONCAT(DISTINCT t.label) AS strategy_tags
             FROM deck_cards dc
             JOIN cards c ON c.scryfall_id = dc.scryfall_id
@@ -2394,7 +2421,9 @@ def free_lots(conn, scryfall_id, location=None):
     """Lots of a card (any printing) that are free to take: sleeved in no
     deck, unlocated ones included, with copies in them. Biggest lot first —
     the order plan_availability() allocates in and sleeve_into_deck() takes
-    in, so the copy the Workbench promised is the one that moves.
+    in, so the copy the Workbench promised is the one that moves. The exact
+    printing asked for sorts ahead of other printings of the same card, so
+    typing RNA 157 takes the RNA copy, not an older-id AFC one.
     `location` narrows it to one storage Location (same_location()).
     [(collection_id, quantity, location, scryfall_id), ...]"""
     deck_names = deck_name_set(conn)
@@ -2402,7 +2431,7 @@ def free_lots(conn, scryfall_id, location=None):
             if (lot[2] or "").strip() not in deck_names and lot[1] > 0]
     if location is not None:
         lots = [lot for lot in lots if same_location(lot[2], location)]
-    return sorted(lots, key=lambda lot: (-lot[1], lot[0]))
+    return sorted(lots, key=lambda lot: (lot[3] != scryfall_id, -lot[1], lot[0]))
 
 
 def card_sources(conn, scryfall_id, deck_id):

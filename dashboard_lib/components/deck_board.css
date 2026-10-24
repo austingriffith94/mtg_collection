@@ -37,7 +37,7 @@
 .layout { display: flex; gap: 16px; align-items: flex-start; }
 .stacks { flex: 1; display: flex; flex-wrap: wrap; gap: 18px 14px; align-items: flex-start; min-width: 0; }
 
-/* Right rail: Shortlist above, preview below; sticks while the stacks scroll. */
+/* Right rail: preview above, Shortlist below; sticks while the stacks scroll. */
 .rail {
   position: sticky;
   top: 60px;
@@ -102,12 +102,11 @@
 .b-no { background: #7a1f1f; }
 .b-buy { background: #1f4f7a; }
 
-/* Narrow screens: preview drops below the stacks. */
 /* Narrow screens: the rail goes ABOVE the stacks with the preview first (as
    in Phase A — tap a card, see it without scrolling), Shortlist under it. */
 @media (max-width: 760px) {
   .layout { flex-direction: column-reverse; }
-  .rail { position: static; width: 100%; flex-direction: column-reverse; }
+  .rail { position: static; width: 100%; }
 }
 
 /* ---- edit menu (Phase B) ---- */
@@ -137,7 +136,7 @@
 }
 
 /* ---- Shortlist column + pick mode (Phase C) ---- */
-/* Capped so the ~480px preview below stays on screen (rail sticks at 60px);
+/* Capped so the ~480px preview above leaves it room on screen (rail sticks at 60px);
    scrolls on its own. Never under 160px, so two or three rows always show. */
 .shortlist {
   max-height: max(160px, calc(100vh - 560px)); overflow-y: auto; box-sizing: border-box; padding-right: 4px;

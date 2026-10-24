@@ -145,8 +145,9 @@ it stays regardless of how you manage dependencies.
 You don't need to touch a terminal for day-to-day use — just make sure
 your environment is activated first. Double-click:
 
-- **Windows:** `run.bat` (activate your conda/venv env in the same
-  terminal first if you're not using a global install)
+- **Windows:** `run.bat` (uses the `mtg1` conda env's python directly at
+  `%USERPROFILE%\miniconda3\envs\mtg1\python.exe`; no PATH or activation
+  needed. Edit `MTG_PY` in the file if your env lives elsewhere)
 - **Mac:** `run.command` (first time, right-click → Open, since it's
   unsigned — macOS will ask you to confirm once)
 - **Linux:** `run.sh` from a terminal (`./run.sh`), or just `python3 run.py`

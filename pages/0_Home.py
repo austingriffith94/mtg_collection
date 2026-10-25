@@ -118,7 +118,7 @@ with st.expander("📊 Compare all decks"):
             "ideas": st.column_config.NumberColumn("Ideas", format="%d"),
             "build_pct": st.column_config.NumberColumn(
                 "Built", format="%.0f%%",
-                help="Share of the non-basic mainboard physically located in this deck (Workbench -> Reconcile).",
+                help="Share of the non-basic mainboard physically located in this deck (Workbench -> Physical).",
             ),
         },
         hide_index=True, width="stretch",

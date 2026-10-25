@@ -395,39 +395,53 @@ jump to the same deck's other views.
   name is new as of Phase 2 — games logged before it existed simply don't
   count toward anything scoped to player (by-player win rate, ELO,
   head-to-head).
-- **Workbench** — every deck's pending shortlist work in one place. The
-  Deck Editor's Shortlist tab answers "what's planned for *this* deck";
-  nothing answered "what's planned at all", so swaps staged across ten
-  decks sat invisible behind pick-a-deck. Sections, in order:
-  - **Conflicts** first, because they're the rows that *can't all*
-    succeed: two or more open changes wanting one card, between them
-    wanting more copies than are free in storage. Each shows who's
-    competing and what each would get; tick **Keep** on the deck that
-    wins and the rest are dropped (kept in History, restorable).
-  - **Planned changes, by deck** — the same table as the Shortlist tab,
-    with Apply checked / Apply all per deck. Quantity is read-only here
-    on purpose: changing how many cards a swap cuts wants the Shortlist
-    tab's mainboard context to decide safely.
-  - **Ideas needing a decision** — every idea flagged for review, across
-    all decks, so the decisions happen in one sitting.
-  - **Contention** (Phase 3) — demand vs. supply per card, counting
-    *mainboard* usage (`deck_cards`) as well as the shortlist queue, so a
-    card that's simply over-subscribed across decks — no idea or planned
-    row needed at all — still surfaces. "Drop from deck N" removes it from
-    that deck's real mainboard on the spot (logged to history like any
-    hand edit, via the existing `writes.remove_deck_card`).
-  - **Buy list** (Phase 3, Phase 4) — one row per card, grouped across
-    decks so wanting one card on three shortlists prices it once, under the
-    most specific of four reasons: on a deck's list from a **Buy** add with
-    no copy sleeved yet (*awaiting*), a Shortlist row marked **Buy**
-    (*chosen*), a Contention shortfall, or an open idea with zero owned
-    copies. Each row's deck gets a **Bought** button (see *Planned buys*
-    below). Exportable as plain text.
-  - **Reconcile** (Phase 4) — unlocated lots (editable, bulk-assignable,
-    priciest first) and each deck's list-vs-physical diff in both
-    directions: *to pull* (in the mainboard, no lot located to the deck) and
-    *to put away* (a lot located to the deck that the mainboard no longer
-    runs). "Sleeved here" splits a lot when only some copies move.
+- **Workbench** — every deck's pending work in one place. The Deck
+  Editor's Shortlist tab answers "what's planned for *this* deck"; nothing
+  answered "what's planned at all", so swaps staged across ten decks sat
+  invisible behind pick-a-deck. A selector at the top picks one of four
+  sections, each label carrying its live count (only the chosen section
+  renders, and it stays chosen after a save):
+  - **📋 Shortlist**
+    - **Conflicts** (shown only when there are some), because they're the
+      rows that *can't all* succeed: two or more open changes wanting one
+      card, between them wanting more copies than are free in storage.
+      Tick **Keep** on the deck that wins and the rest are dropped (kept in
+      History, restorable).
+    - **Planned changes, by deck** — the same table as the Shortlist tab,
+      with Apply checked / Apply all per deck. Quantity is read-only here
+      on purpose: changing how many cards a swap cuts wants the Shortlist
+      tab's mainboard context to decide safely.
+    - **Ideas needing a decision** — every idea flagged for review, across
+      all decks, so the decisions happen in one sitting.
+  - **🛒 Supply & buy**
+    - **Contention** — demand vs. supply per card, counting *mainboard*
+      usage (`deck_cards`) as well as the shortlist queue, so a card that's
+      simply over-subscribed across decks still surfaces. "Drop from deck
+      N" removes it from that deck's real mainboard (logged to history like
+      any hand edit, via `writes.remove_deck_card`).
+    - **Buy list** — one row per card, grouped across decks so wanting one
+      card on three shortlists prices it once, under the most specific of
+      four reasons: on a deck's list from a **Buy** add with no copy
+      sleeved yet (*awaiting*), a Shortlist row marked **Buy** (*chosen*), a
+      Contention shortfall, or an open idea with zero owned copies. Each
+      row's deck gets a **Bought** button (see *Planned buys* below).
+      Exportable as plain text.
+  - **📦 Physical**
+    - **Unlocated lots** — editable, priciest first. Pick a Location per
+      row, or tick rows and choose one Location for all of them; one Save.
+    - **Decks: list vs. physical** — every deck's gaps in one cross-deck
+      table (filter by deck; brewing / dismantled decks hidden unless
+      toggled on): *Missing* (in the mainboard, no copy sleeved in the deck)
+      and *Extra* (sleeved in the deck, not on its list), each saying where
+      the copies actually are (a box, another deck, no location, not
+      owned). Tick **Fix** to move them — Missing pulls copies in the order
+      listed (storage before another deck, splitting a lot when only some
+      copies move), Extra goes to **Put away in** (blank = Lands for a land,
+      otherwise Box). Lot-only moves; no list changes. A collapsed **Build
+      status by deck** table shows each deck's % sleeved.
+  - **🏷️ Tags** — non-basic mainboard cards with no card tag of any type,
+    one deck at a time (most untagged first). The Tags cell is a dropdown
+    of the tags that deck already uses, and accepts new ones.
 
   The availability column here is **queue-aware**: one allocation pass
   over every open change claims your actual copies in a fixed order

@@ -18,23 +18,34 @@ storage" — true of either alone, impossible together.
 Applying happens through the same writes.apply_changes() the Shortlist tab
 uses, so a swap applied here lands in history identically.
 
-Phase 3 adds Contention (demand vs. supply per card, counting mainboard
-usage too — not just the shortlist queue plan_availability() sees) and the
-cross-deck Buy list. Phase 4 adds Reconcile: unlocated lots, each deck's
-list-vs-physical diff, and per-deck build status.
+Layout: one section selector (a segmented control, so only the chosen
+section renders, and it survives the rerun after a write because its
+values are stable keys while its labels carry live counts):
+
+  📋 Shortlist      Conflicts, planned changes by deck, flagged ideas.
+  🛒 Supply & buy   Contention (demand vs. supply, counting mainboard
+                    usage too — not just the queue) and the Buy list.
+  📦 Physical       Unlocated lots, then every deck's list-vs-physical gap
+                    in ONE cross-deck table you fix from directly
+                    (queries.location_mismatches over deck_reconciliation;
+                    writes.fix_location_mismatch), with build status per
+                    deck. This replaced the per-deck Reconcile expanders,
+                    which showed the same gaps one deck at a time.
+  🏷️ Tags           Untagged mainboard cards, one deck at a time, with a
+                    dropdown of the tags that deck already uses.
 
 UI plan Phase 4: each deck's planned-changes block is an st.fragment
 (_planned_block), so ticking its checkboxes doesn't recompute the whole
 page; every write still ends in a full-app rerun via _refresh().
 
 docs/archive/EDIT_FLOW_PLAN.md Phase 1: applying, the contention "Drop", and
-Reconcile's "Sleeved here" / "Put away" all report the copies they moved
-through the shared pop-up (card_view.show_moves).
+the Physical fixes all report the copies they moved through the shared
+pop-up (card_view.show_moves).
 
 docs/archive/EDIT_FLOW_PLAN.md Phase 6: assigning unlocated lots to a Location can put
 copies into a deck's sleeves, so those saves ask whether the deck's list
-should follow (card_view.show_deck_sync). Reconcile's own moves are logged
-as "reconcile" in the move log.
+should follow (card_view.show_deck_sync). The Physical fixes are logged as
+"reconcile" in the move log.
 
 docs/archive/EDIT_FLOW_PLAN.md Phase 3: a card taken from another deck is a linked pair
 (a removal on the donor, an add on the receiver). Planned changes shows it
@@ -96,15 +107,18 @@ def _apply(change_ids, label="Applied"):
 
 
 # ------------------------------------------------------------------
-# The queue. Loaded once, for every deck, and allocated in ONE pass —
-# planned rows plus open ideas, because an idea competes for a physical
-# card just as much as a staged swap does. plan_availability() walks them
-# in (planned_at, change_id) order, so a planned swap staged last month
-# outranks an idea jotted yesterday.
+# Everything the section counts need, loaded once. The queue is planned
+# rows plus open ideas, allocated in ONE pass, because an idea competes
+# for a physical card just as much as a staged swap does.
+# plan_availability() walks them in (planned_at, change_id) order, so a
+# planned swap staged last month outranks an idea jotted yesterday. None
+# of this is cached: contention and the physical diff count mainboard and
+# lot state, so a write earlier in this run must show immediately.
 # ------------------------------------------------------------------
 open_df = loaders.load_open_changes_df(conn, ("planned", "idea"))
 planned_df = open_df[open_df["status"] == "planned"] if not open_df.empty else open_df
 ideas_df = open_df[open_df["status"] == "idea"] if not open_df.empty else open_df
+flagged = ideas_df[ideas_df["review_flag"] == 1] if not ideas_df.empty else ideas_df
 
 availability = q.plan_availability(conn, open_df)
 conflicts = q.plan_conflicts(conn, open_df, availability)
@@ -112,34 +126,28 @@ conflicts = q.plan_conflicts(conn, open_df, availability)
 # rows) counting once — see queries.collapse_linked_pairs().
 planned_entries = q.collapse_linked_pairs(planned_df) if not planned_df.empty else []
 unlocated = loaders.load_unlocated_lot_summary(conn)
-# Not cached, like plan_availability above: contention counts mainboard
-# usage too, so an apply or a hand edit made earlier in this same page run
-# must be reflected immediately, not after the next cache-clearing rerun.
 contention = q.contention_table(conn)
 buy = q.buy_list(conn, contention=contention)
+recon = q.deck_reconciliation(conn)
+mismatches = q.location_mismatches(conn, recon)
+untagged = q.untagged_deck_cards(conn)
 
-deck_count = len({e["group_deck_id"] for e in planned_entries})
-st.caption(
-    f"**{len(planned_entries)}** planned change(s) across **{deck_count}** deck(s) · "
-    f"**{len(conflicts)}** conflict(s) · "
-    f"**{len(contention)}** card(s) in contention · "
-    f"**{unlocated['lots']}** lot(s) with no location (${unlocated['value']:,.0f})"
+# ------------------------------------------------------------------
+# Section selector. Values are stable keys and the counts live in
+# format_func, so the chosen section survives a write's rerun even though
+# its label changes.
+# ------------------------------------------------------------------
+SECTIONS = {
+    "plan": lambda: (f"📋 Shortlist · {len(planned_entries) + len(flagged)}"
+                     + (f" · ⚠️ {len(conflicts)}" if conflicts else "")),
+    "supply": lambda: f"🛒 Supply & buy · {len(buy['rows'])}",
+    "physical": lambda: f"📦 Physical · {unlocated['lots'] + len(mismatches)}",
+    "tags": lambda: f"🏷️ Tags · {len(untagged)}",
+}
+view = st.segmented_control(
+    "Section", list(SECTIONS), format_func=lambda k: SECTIONS[k](), default="plan",
+    required=True, key="workbench_view", label_visibility="collapsed",
 )
-
-# Contention can be non-empty with an EMPTY shortlist queue — a card run
-# in 4 mainboards with 3 copies owned needs no idea/planned row to be real
-# demand — so an empty open_df no longer stops the page outright, only
-# the sections that actually depend on it.
-if open_df.empty and not contention and not unlocated["lots"]:
-    st.info("Nothing pending anywhere right now — no shortlist activity, no card "
-            "in contention, and every lot has a location.")
-    st.stop()
-
-if open_df.empty:
-    st.info(
-        "Nothing on any shortlist. Add ideas from a deck's **Shortlist** tab in "
-        "the Deck Editor, or from a card's tile on the **Decks** page."
-    )
 
 
 def _verdict_cell(change_id):
@@ -152,81 +160,6 @@ def _verdict_cell(change_id):
     }.get(verdict.get("verdict"), "")
     return f"{icon} {verdict.get('text', '')}".strip()
 
-
-# ------------------------------------------------------------------
-# Conflicts — first, because these are the rows that cannot all succeed.
-# Everything below this is just a to-do list.
-# ------------------------------------------------------------------
-st.header(
-    f"⚠️ Conflicts ({len(conflicts)})",
-    help=(
-        "Two or more open changes want one card, and between them want more copies than "
-        "are free in storage. Applying them in order gives the card to the earliest; the "
-        "rest will fail or buy a copy. Pick which deck keeps it and drop the others."
-    ),
-)
-if not conflicts:
-    st.success("No two plans want the same physical card. Everything below can be applied as it stands.")
-else:
-    for group in conflicts:
-        free = group["available_qty"] or 0
-        with st.container(border=True):
-            promised = (f", {group['promised_qty']} promised from another deck"
-                        if group.get("promised_qty") else "")
-            st.markdown(
-                f"**{group['card']}** — {group['owned_qty']} owned, {free} free in storage{promised}, "
-                f"{group['wanted_qty']} wanted (short {group['shortfall']})"
-            )
-            rows = [{
-                "change_id": w["change_id"],
-                "Deck": w["deck_name"],
-                "Status": w["status"],
-                "Qty": w["quantity"],
-                "Gets it?": _verdict_cell(w["change_id"]),
-                "Keep": False,
-                "Drop": False,
-            } for w in group["wanters"]]
-            edited = st.data_editor(
-                pd.DataFrame(rows),
-                column_config={
-                    "Deck": st.column_config.TextColumn("Deck", disabled=True),
-                    "Status": st.column_config.TextColumn("Status", disabled=True),
-                    "Qty": st.column_config.NumberColumn("Qty", disabled=True, width="small"),
-                    "Gets it?": st.column_config.TextColumn("Gets it?", disabled=True),
-                    "Keep": st.column_config.CheckboxColumn(
-                        "Keep", width="small",
-                        help="Tick the one deck that keeps this card, then press Resolve — "
-                             "the others are dropped."),
-                    "Drop": st.column_config.CheckboxColumn(
-                        "Drop", width="small", help="Drop just this row, keeping the rest."),
-                },
-                column_order=["Deck", "Status", "Qty", "Gets it?", "Keep", "Drop"],
-                hide_index=True, width="stretch",
-                key=f"workbench_conflict_{group['card']}_{ver}",
-            )
-            if st.button("Resolve", key=f"workbench_conflict_resolve_{group['card']}_{ver}"):
-                keep = [int(r["change_id"]) for _, r in edited.iterrows() if r["Keep"]]
-                drop = [int(r["change_id"]) for _, r in edited.iterrows() if r["Drop"]]
-                if len(keep) > 1:
-                    st.warning("Tick **Keep** on at most one row — that's the point of resolving.")
-                elif not keep and not drop:
-                    st.warning("Tick **Keep** on the row that wins, or **Drop** on the ones that don't.")
-                else:
-                    # The keep-drops-the-rest rule lives in writes, not here
-                    # — see writes.resolve_contention().
-                    try:
-                        outcome = writes.resolve_contention(
-                            conn, [int(r["change_id"]) for _, r in edited.iterrows()],
-                            keep_change_id=keep[0] if keep else None,
-                            drop_change_ids=drop,
-                        )
-                    except ValueError as exc:
-                        st.warning(str(exc))
-                    else:
-                        lines = [f"❌ change #{cid}: {msg}" for cid, msg in outcome["errors"]]
-                        lines.insert(0, f"✅ Dropped {len(outcome['dropped'])} competing "
-                                        f"row(s) for {group['card']}.")
-                        _refresh(lines)
 
 def _entry_cells(entry):
     """(Add, Availability, Replaces) for one planned_entries item. A take
@@ -320,46 +253,113 @@ def _planned_block(deck_id, deck_name, entries):
             _refresh(lines)
 
 
-# ------------------------------------------------------------------
-# Planned changes, by deck — the same table the Shortlist tab shows,
-# with the queue-aware verdict instead of the per-row one. A take from
-# another deck is one row, under the deck receiving the card.
-# ------------------------------------------------------------------
-st.header(f"📋 Planned changes ({len(planned_entries)})")
-if not planned_entries:
-    nav.render_empty_state(
-        "Nothing staged yet. Promote an idea on a deck's **Shortlist** tab to stage it.",
-        "Deck_Editor", "✏️ Open the Deck Editor",
-    )
-else:
-    blocked = sum(
-        1 for e in planned_entries
-        if availability.get(e["change_id"], {}).get("verdict") in (
-            "claimed_by", "not_owned", "in_other_deck", "wrong_location")
-    )
-    if blocked:
-        st.caption(
-            f"{blocked} of these can't be sourced from storage right now — they'll buy a copy "
-            "(creating a starter collection lot) or need a card unsleeved first."
+# ==================================================================
+# 📋 Shortlist — conflicts, planned changes, flagged ideas
+# ==================================================================
+def _render_plan():
+    # Conflicts first: the only rows that can't all succeed. Shown only
+    # when there are some — an empty "no conflicts" box is just noise.
+    if conflicts:
+        st.subheader(
+            f"⚠️ Conflicts ({len(conflicts)})",
+            help=(
+                "Two or more open changes want one card, and between them want more copies than "
+                "are free in storage. Applying them in order gives the card to the earliest; the "
+                "rest will fail or buy a copy. Pick which deck keeps it and drop the others."
+            ),
         )
-    by_deck = {}
-    for e in planned_entries:
-        by_deck.setdefault((e["group_deck_id"], e["group_deck_name"]), []).append(e)
-    for (group_id, group_name), entries in by_deck.items():
-        _planned_block(group_id, group_name, entries)
+        for group in conflicts:
+            free = group["available_qty"] or 0
+            with st.container(border=True):
+                promised = (f", {group['promised_qty']} promised from another deck"
+                            if group.get("promised_qty") else "")
+                st.markdown(
+                    f"**{group['card']}** — {group['owned_qty']} owned, {free} free in storage{promised}, "
+                    f"{group['wanted_qty']} wanted (short {group['shortfall']})"
+                )
+                rows = [{
+                    "change_id": w["change_id"],
+                    "Deck": w["deck_name"],
+                    "Status": w["status"],
+                    "Qty": w["quantity"],
+                    "Gets it?": _verdict_cell(w["change_id"]),
+                    "Keep": False,
+                    "Drop": False,
+                } for w in group["wanters"]]
+                edited = st.data_editor(
+                    pd.DataFrame(rows),
+                    column_config={
+                        "Deck": st.column_config.TextColumn("Deck", disabled=True),
+                        "Status": st.column_config.TextColumn("Status", disabled=True),
+                        "Qty": st.column_config.NumberColumn("Qty", disabled=True, width="small"),
+                        "Gets it?": st.column_config.TextColumn("Gets it?", disabled=True),
+                        "Keep": st.column_config.CheckboxColumn(
+                            "Keep", width="small",
+                            help="Tick the one deck that keeps this card, then press Resolve — "
+                                 "the others are dropped."),
+                        "Drop": st.column_config.CheckboxColumn(
+                            "Drop", width="small", help="Drop just this row, keeping the rest."),
+                    },
+                    column_order=["Deck", "Status", "Qty", "Gets it?", "Keep", "Drop"],
+                    hide_index=True, width="stretch",
+                    key=f"workbench_conflict_{group['card']}_{ver}",
+                )
+                if st.button("Resolve", key=f"workbench_conflict_resolve_{group['card']}_{ver}"):
+                    keep = [int(r["change_id"]) for _, r in edited.iterrows() if r["Keep"]]
+                    drop = [int(r["change_id"]) for _, r in edited.iterrows() if r["Drop"]]
+                    if len(keep) > 1:
+                        st.warning("Tick **Keep** on at most one row — that's the point of resolving.")
+                    elif not keep and not drop:
+                        st.warning("Tick **Keep** on the row that wins, or **Drop** on the ones that don't.")
+                    else:
+                        # The keep-drops-the-rest rule lives in writes, not here
+                        # — see writes.resolve_contention().
+                        try:
+                            outcome = writes.resolve_contention(
+                                conn, [int(r["change_id"]) for _, r in edited.iterrows()],
+                                keep_change_id=keep[0] if keep else None,
+                                drop_change_ids=drop,
+                            )
+                        except ValueError as exc:
+                            st.warning(str(exc))
+                        else:
+                            lines = [f"❌ change #{cid}: {msg}" for cid, msg in outcome["errors"]]
+                            lines.insert(0, f"✅ Dropped {len(outcome['dropped'])} competing "
+                                            f"row(s) for {group['card']}.")
+                            _refresh(lines)
 
-# ------------------------------------------------------------------
-# Ideas flagged for review — the ones you marked "decide on this",
-# gathered from every deck so the decisions happen in one sitting.
-# ------------------------------------------------------------------
-flagged = ideas_df[ideas_df["review_flag"] == 1] if not ideas_df.empty else ideas_df
-st.header(f"🚩 Ideas needing a decision ({len(flagged)})")
-if flagged.empty:
-    nav.render_empty_state(
-        "No ideas are flagged. Tick **Review** on an idea in a deck's Shortlist tab to gather it here.",
-        "Deck_Editor", "✏️ Open the Deck Editor",
-    )
-else:
+    # Planned changes, by deck — the Shortlist tab's table with the
+    # queue-aware verdict. A take from another deck is one row, under the
+    # deck receiving the card.
+    st.subheader(f"📋 Planned changes ({len(planned_entries)})")
+    if not planned_entries:
+        nav.render_empty_state(
+            "Nothing staged yet. Promote an idea on a deck's **Shortlist** tab to stage it.",
+            "Deck_Editor", "✏️ Open the Deck Editor",
+        )
+    else:
+        blocked = sum(
+            1 for e in planned_entries
+            if availability.get(e["change_id"], {}).get("verdict") in (
+                "claimed_by", "not_owned", "in_other_deck", "wrong_location")
+        )
+        if blocked:
+            st.caption(
+                f"{blocked} of these can't be sourced from storage right now — they'll buy a copy "
+                "(creating a starter collection lot) or need a card unsleeved first."
+            )
+        by_deck = {}
+        for e in planned_entries:
+            by_deck.setdefault((e["group_deck_id"], e["group_deck_name"]), []).append(e)
+        for (group_id, group_name), entries in by_deck.items():
+            _planned_block(group_id, group_name, entries)
+
+    # Ideas flagged for review, gathered from every deck so the decisions
+    # happen in one sitting.
+    st.subheader(f"🚩 Ideas needing a decision ({len(flagged)})")
+    if flagged.empty:
+        st.caption("None flagged. Tick **Review** on an idea in a deck's Shortlist tab to gather it here.")
+        return
     st.caption("Promote and pair on the deck's own Shortlist tab; drop and un-flag work here.")
     table = [{
         "change_id": int(r["change_id"]),
@@ -401,26 +401,26 @@ else:
         lines.insert(0, f"✅ Cleared {cleared} flag(s), dropped {dropped}.")
         _refresh(lines)
 
-# ------------------------------------------------------------------
-# Contention (Phase 3) — demand vs. supply per card, counting mainboard
-# usage in deck_cards as well as the shortlist queue, so a card with no
-# idea or planned row at all (just over-subscribed mainboards, e.g. War
-# Room in 4 decks on 3 copies) still surfaces here. The per-row shortlist
-# check above can't see this; it only ever looks at open deck_changes.
-# ------------------------------------------------------------------
-st.header(
-    f"📊 Contention ({len(contention)})",
-    help=(
-        "Demand = decks running this card mainboard + decks with an open idea/planned add "
-        "for it. Shortfall = demand minus copies owned. Buying the shortfall is already "
-        "reflected in the Buy list below; dropping it from a deck here removes it from that "
-        "deck's mainboard immediately (logged to its history like any hand edit) and puts its "
-        f"sleeved copy away in {writes.DEFAULT_LOCATION}."
-    ),
-)
-if not contention:
-    st.success("No card is shorter than its total demand across mainboards and shortlists.")
-else:
+
+# ==================================================================
+# 🛒 Supply & buy — contention, then the buy list it feeds
+# ==================================================================
+def _render_supply():
+    # Contention (Phase 3) counts mainboard usage in deck_cards as well as
+    # the shortlist queue, so an over-subscribed card with no idea or
+    # planned row at all (War Room in 4 decks on 3 copies) still shows.
+    st.subheader(
+        f"📊 Contention ({len(contention)})",
+        help=(
+            "Demand = decks running this card mainboard + decks with an open idea/planned add "
+            "for it. Shortfall = demand minus copies owned. Buying the shortfall is already "
+            "reflected in the Buy list below; dropping it from a deck here removes it from that "
+            "deck's mainboard immediately (logged to its history like any hand edit) and puts its "
+            f"sleeved copy away in {writes.DEFAULT_LOCATION} ({writes.LANDS_LOCATION} for a land)."
+        ),
+    )
+    if not contention:
+        st.caption("✅ No card is shorter than its total demand across mainboards and shortlists.")
     for row in contention:
         with st.container(border=True):
             mb = ", ".join(row["mainboard_decks"]) or "—"
@@ -446,23 +446,22 @@ else:
                         moves = writes.remove_deck_card(conn, deck_id, sid)
                         _refresh([f"✅ Dropped {row['card']} from {drop_choice}."], moves=moves)
 
-# ------------------------------------------------------------------
-# Buy list (Phase 3, Phase 4) — one row per card, grouped across decks and
-# priced once: cards already on a deck's list from a Buy add (awaiting), open
-# rows marked Buy (chosen), contention shortfalls, and unowned ideas. A card
-# with several reasons shows once, under the most specific.
-# ------------------------------------------------------------------
-st.header(
-    f"🛒 Buy list ({len(buy['rows'])}) — ${buy['total']:,.2f}",
-    help=(
-        "Cards on a deck's list that you chose to buy and don't have a copy of yet, shortlist rows "
-        "marked Buy, ideas with zero owned copies (grouped across decks, priced once), and contention "
-        "rows where buying the shortfall resolves it."
-    ),
-)
-if not buy["rows"]:
-    st.caption("Nothing to buy — nothing is marked Buy, every open idea is already owned, and nothing is short.")
-else:
+    # Buy list (Phase 3, Phase 4) — one row per card, grouped across decks
+    # and priced once: cards already on a deck's list from a Buy add
+    # (awaiting), open rows marked Buy (chosen), contention shortfalls, and
+    # unowned ideas. A card with several reasons shows once, under the most
+    # specific.
+    st.subheader(
+        f"🛒 Buy list ({len(buy['rows'])}) — ${buy['total']:,.2f}",
+        help=(
+            "Cards on a deck's list that you chose to buy and don't have a copy of yet, shortlist rows "
+            "marked Buy, ideas with zero owned copies (grouped across decks, priced once), and contention "
+            "rows where buying the shortfall resolves it."
+        ),
+    )
+    if not buy["rows"]:
+        st.caption("Nothing to buy — nothing is marked Buy, every open idea is already owned, and nothing is short.")
+        return
     buy_table = pd.DataFrame([{
         "Card": r["card"],
         "Qty": r["quantity"],
@@ -514,128 +513,213 @@ else:
                     else:
                         _refresh([f"✅ Sleeved {r['card']} ×{int(got)} into {t['deck_name']}."], moves=moves)
 
-# ------------------------------------------------------------------
-# Reconcile (Phase 4) — the physical gaps: lots with no location, and each
-# deck's list vs. the lots actually sleeved in it. Uncached like the
-# sections above, since every action here edits the collection.
-# ------------------------------------------------------------------
-st.header("🧹 Reconcile")
-locations = q.location_options(conn)
 
-# --- 1. Unlocated lots ---------------------------------------------
-unloc = q.unlocated_lots(conn)
-st.subheader(
-    f"📍 Unlocated lots ({len(unloc)}) — ${unlocated['value']:,.2f}",
-    help=(
-        "Lots with no Location, most valuable first. Pick a Location per row, or tick rows and "
-        "assign them all at once — these likely came in as a batch."
-    ),
-)
-if not unloc:
-    st.success("Every lot has a location.")
-else:
-    unloc_df = pd.DataFrame([{
-        "collection_id": r["collection_id"], "Card": r["card"], "Set": r["set_code"].upper(),
-        "Qty": r["quantity"], "Foil": r["foil"], "Value": r["value"], "Source": r["source"],
-        "Location": None, "Select": False,
-    } for r in unloc])
-    unloc_edited = st.data_editor(
-        unloc_df,
+# ==================================================================
+# 📦 Physical — unlocated lots, then every deck's list vs. its sleeves
+# ==================================================================
+def _render_physical():
+    locations = q.location_options(conn)
+
+    # --- Unlocated lots ------------------------------------------------
+    unloc = q.unlocated_lots(conn)
+    st.subheader(
+        f"📍 Unlocated lots ({len(unloc)}) — ${unlocated['value']:,.2f}",
+        help=(
+            "Lots with no Location, most valuable first. Pick a Location per row, and/or tick rows "
+            "and choose one Location for all of them — these likely came in as a batch."
+        ),
+    )
+    if not unloc:
+        st.caption("✅ Every lot has a location.")
+    else:
+        unloc_edited = st.data_editor(
+            pd.DataFrame([{
+                "collection_id": r["collection_id"], "Card": r["card"], "Set": r["set_code"].upper(),
+                "Qty": r["quantity"], "Foil": r["foil"], "Value": r["value"], "Source": r["source"],
+                "Location": None, "Select": False,
+            } for r in unloc]),
+            column_config={
+                "Card": st.column_config.TextColumn("Card", disabled=True),
+                "Set": st.column_config.TextColumn("Set", disabled=True, width="small"),
+                "Qty": st.column_config.NumberColumn("Qty", disabled=True, width="small"),
+                "Foil": st.column_config.CheckboxColumn("Foil", disabled=True, width="small"),
+                "Value": st.column_config.NumberColumn("Value", format="$%.2f", disabled=True),
+                "Source": st.column_config.TextColumn("Source", disabled=True),
+                "Location": st.column_config.SelectboxColumn("Location", options=locations),
+                "Select": st.column_config.CheckboxColumn(
+                    "Select", width="small", help="Gets the location chosen below the table."),
+            },
+            column_order=["Card", "Set", "Qty", "Foil", "Value", "Source", "Location", "Select"],
+            hide_index=True, width="stretch", height=350,
+            key=f"workbench_unlocated_{ver}",
+        )
+        u1, u2 = st.columns([3, 1], vertical_alignment="bottom")
+        bulk_loc = u1.selectbox("Selected rows go to", locations, index=None,
+                                placeholder="Choose a location…", key=f"workbench_unloc_bulk_{ver}")
+        if u2.button("💾 Save locations", key=f"workbench_unloc_save_{ver}", width="stretch"):
+            # A row's own Location wins; a ticked row without one takes the bulk pick.
+            edits = {}
+            for _, r in unloc_edited.iterrows():
+                loc = r["Location"] if isinstance(r["Location"], str) and r["Location"] else (
+                    bulk_loc if r["Select"] else None)
+                if loc:
+                    edits[int(r["collection_id"])] = {"location": loc}
+            if not edits:
+                st.warning("Pick a **Location** on a row, or tick **Select** and choose one above.")
+            else:
+                mark = q.last_move_id(conn)
+                writes.bulk_update_collection(conn, edits)
+                _refresh([f"✅ Located {len(edits)} lot(s)."], collection=True,
+                         deck_sync=q.deck_sync_offers(conn, mark))
+
+    # --- Decks: list vs. physical --------------------------------------
+    st.subheader(
+        f"📦 Decks: list vs. physical ({len(mismatches)})",
+        help=(
+            "**Missing** = in the mainboard but no copy is sleeved in the deck. **Extra** = a copy is "
+            "sleeved in the deck that the mainboard doesn't run. Basics are ignored. Fixing moves "
+            "copies only — no deck list changes."
+        ),
+    )
+    with st.expander("🏗️ Build status by deck"):
+        st.dataframe(
+            pd.DataFrame([{
+                "Deck": d["deck_name"],
+                "Built": d["build"]["pct"],
+                "Sleeved": f"{d['build']['located']}/{d['build']['needed']}",
+                "Missing": len(d["to_pull"]),
+                "Extra": len(d["to_put_away"]),
+            } for d in sorted(recon, key=lambda d: (d["build"]["pct"] is None, d["build"]["pct"] or 0))]),
+            column_config={
+                "Built": st.column_config.ProgressColumn("Built", format="%.0f%%", min_value=0, max_value=100),
+            },
+            hide_index=True, width="stretch",
+        )
+    if not mismatches:
+        st.caption("✅ Every deck's list matches what's sleeved in it.")
+        return
+
+    f1, f2 = st.columns([3, 1], vertical_alignment="bottom")
+    deck_pick = f1.multiselect("Decks", sorted({m["deck_name"] for m in mismatches}, key=str.casefold),
+                               placeholder="All decks", key="workbench_mismatch_decks")
+    show_inactive = f2.toggle("Brewing / dismantled", value=False, key="workbench_mismatch_inactive",
+                              help="Their cards are expected to be elsewhere, so they're hidden by default.")
+    rows = [m for m in mismatches if (show_inactive or not m["build_state"])
+            and (not deck_pick or m["deck_name"] in deck_pick)]
+    if not rows:
+        st.caption("Nothing for these decks.")
+        return
+    st.caption("Tick **Fix** and save. *Missing* pulls copies in the order listed (storage before "
+               "another deck — taking one leaves that deck missing it); *Extra* goes to **Put away in** "
+               f"— blank picks Lands for lands, else {writes.DEFAULT_LOCATION}. To use a specific copy, "
+               "set its Location on the Collection page.")
+    deck_names = q.deck_name_set(conn)
+    # The editor keeps ticks by ROW POSITION, so the filter is part of its
+    # key: changing it must start a fresh table, not replay ticks onto the
+    # rows that slid into those positions.
+    filter_key = abs(hash((tuple(sorted(deck_pick)), show_inactive)))
+    mismatch_edited = st.data_editor(
+        pd.DataFrame([{
+            "i": i, "Deck": m["deck_name"], "Card": m["card"],
+            "Issue": "❓ Missing" if m["kind"] == "missing" else "📤 Extra",
+            "Qty": m["qty"], "Copies are": m["where"], "Put away in": None, "Fix": False,
+        } for i, m in enumerate(rows)]),
+        column_config={
+            "Deck": st.column_config.TextColumn("Deck", disabled=True),
+            "Card": st.column_config.TextColumn("Card", disabled=True),
+            "Issue": st.column_config.TextColumn("Issue", disabled=True, width="small"),
+            "Qty": st.column_config.NumberColumn("Qty", disabled=True, width="small"),
+            "Copies are": st.column_config.TextColumn("Copies are", disabled=True, width="large"),
+            "Put away in": st.column_config.SelectboxColumn(
+                "Put away in", options=[l for l in locations if l not in deck_names],
+                help="Extra rows only. Blank = Lands for a land, otherwise Box."),
+            "Fix": st.column_config.CheckboxColumn("Fix", width="small"),
+        },
+        column_order=["Deck", "Card", "Issue", "Qty", "Copies are", "Put away in", "Fix"],
+        hide_index=True, width="stretch", height=400,
+        key=f"workbench_mismatch_{ver}" + (f"_{filter_key}" if deck_pick or show_inactive else ""),
+    )
+    if st.button("💾 Fix checked", key=f"workbench_mismatch_fix_{ver}"):
+        lines, moves = [], []
+        for _, r in mismatch_edited.iterrows():
+            if not r["Fix"]:
+                continue
+            m = rows[int(r["i"])]
+            dest = r["Put away in"] if isinstance(r["Put away in"], str) and r["Put away in"] else None
+            try:
+                moved = writes.fix_location_mismatch(conn, m, dest)
+            except ValueError as exc:
+                lines.append(f"❌ {exc}")
+                continue
+            moves += moved
+            # Taking from another deck fixes this row but opens one there — say so.
+            raided = sorted({mv["from"] for mv in moved if mv.get("from") in deck_names})
+            if m["kind"] == "extra":
+                lines.append(f"✅ {m['card']} put away from {m['deck_name']}.")
+            elif raided:
+                lines.append(f"✅ {m['card']} sleeved into {m['deck_name']} — taken from "
+                             f"{', '.join(raided)}, which is now missing it.")
+            else:
+                lines.append(f"✅ {m['card']} sleeved into {m['deck_name']}.")
+        if not lines:
+            st.warning("Tick **Fix** on at least one row first.")
+        else:
+            _refresh(lines, moves=moves)
+
+
+# ==================================================================
+# 🏷️ Tags — untagged mainboard cards, one deck at a time
+# ==================================================================
+def _render_tags():
+    st.subheader(
+        f"🏷️ Untagged cards ({len(untagged)})",
+        help="Non-basic mainboard cards with no card tag of any type in that deck.",
+    )
+    if not untagged:
+        st.caption("✅ Every mainboard card carries at least one tag.")
+        return
+    per_deck = {}
+    for r in untagged:
+        per_deck.setdefault((r["deck_id"], r["deck_name"]), []).append(r)
+    # Most untagged first: that's where the work is.
+    decks = sorted(per_deck, key=lambda k: (-len(per_deck[k]), k[1].casefold()))
+    tag_types = sorted(set(writes.list_tag_types(conn)) | {"strategy"})
+
+    t1, t2 = st.columns([3, 1])
+    deck_key = t1.selectbox("Deck", decks, format_func=lambda k: f"{k[1]} — {len(per_deck[k])} untagged",
+                            key="workbench_tags_deck")
+    # One tag type is the norm; the picker only appears once there are more.
+    tag_type = (t2.selectbox("Tag type", tag_types, index=tag_types.index("strategy"),
+                             key="workbench_tags_type")
+                if len(tag_types) > 1 else "strategy")
+    deck_id, deck_name = deck_key
+    options = q.deck_tag_labels(conn, tag_type).get(deck_id, [])
+    st.caption((f"{len(options)} {tag_type} tag(s) in use in {deck_name} — pick from the list, "
+                "or type a new one." if options else
+                f"No {tag_type} tags in {deck_name} yet — type new ones in the Tags cell."))
+    rows = per_deck[deck_key]
+    edited = st.data_editor(
+        pd.DataFrame([{"scryfall_id": r["scryfall_id"], "Card": r["card"], "Type": r["type_line"],
+                       "Tags": []} for r in rows]),
         column_config={
             "Card": st.column_config.TextColumn("Card", disabled=True),
-            "Set": st.column_config.TextColumn("Set", disabled=True, width="small"),
-            "Qty": st.column_config.NumberColumn("Qty", disabled=True, width="small"),
-            "Foil": st.column_config.CheckboxColumn("Foil", disabled=True, width="small"),
-            "Value": st.column_config.NumberColumn("Value", format="$%.2f", disabled=True),
-            "Source": st.column_config.TextColumn("Source", disabled=True),
-            "Location": st.column_config.SelectboxColumn("Location", options=locations),
-            "Select": st.column_config.CheckboxColumn("Select", width="small"),
+            "Type": st.column_config.TextColumn("Type", disabled=True),
+            "Tags": st.column_config.MultiselectColumn(
+                f"{tag_type.capitalize()} tags", options=options, accept_new_options=True, width="large"),
         },
-        column_order=["Card", "Set", "Qty", "Foil", "Value", "Source", "Location", "Select"],
-        hide_index=True, width="stretch", height=400,
-        key=f"workbench_unlocated_{ver}",
+        column_order=["Card", "Type", "Tags"],
+        hide_index=True, width="stretch", height=min(400, 38 + 35 * len(rows)),
+        key=f"workbench_untagged_{deck_id}_{tag_type}_{ver}",
     )
-    u1, u2, u3 = st.columns([2, 1, 1])
-    bulk_loc = u1.selectbox("Assign selected to", locations, index=None,
-                            placeholder="Choose a location…", key=f"workbench_unloc_bulk_{ver}")
-    if u2.button("Assign selected", key=f"workbench_unloc_assign_{ver}"):
-        picked = [int(r["collection_id"]) for _, r in unloc_edited.iterrows() if r["Select"]]
-        if not picked or not bulk_loc:
-            st.warning("Tick **Select** on at least one row and choose a location first.")
-        else:
-            mark = q.last_move_id(conn)
-            writes.bulk_update_collection(conn, {cid: {"location": bulk_loc} for cid in picked})
-            _refresh([f"✅ Assigned {len(picked)} lot(s) to {bulk_loc}."], collection=True,
-                     deck_sync=q.deck_sync_offers(conn, mark))
-    if u3.button("💾 Save row locations", key=f"workbench_unloc_save_{ver}"):
-        edits = {int(r["collection_id"]): {"location": r["Location"]}
-                 for _, r in unloc_edited.iterrows() if isinstance(r["Location"], str) and r["Location"]}
+    if st.button("💾 Save tags", key=f"workbench_untagged_save_{ver}"):
+        edits = {r["scryfall_id"]: [str(t) for t in r["Tags"]]
+                 for _, r in edited.iterrows() if isinstance(r["Tags"], list) and r["Tags"]}
         if not edits:
-            st.warning("Choose a **Location** on at least one row first.")
+            st.warning("Pick a tag on at least one row first.")
         else:
-            mark = q.last_move_id(conn)
-            writes.bulk_update_collection(conn, edits)
-            _refresh([f"✅ Located {len(edits)} lot(s)."], collection=True,
-                     deck_sync=q.deck_sync_offers(conn, mark))
+            tagged = writes.bulk_set_card_tags(conn, deck_id, tag_type, edits)
+            _refresh([f"✅ Tagged {tagged} card(s) in {deck_name}."])
 
-# --- 2 + 3. Per-deck list vs. physical, with build status ----------
-recon = q.deck_reconciliation(conn)
-st.subheader(
-    "📦 Decks: list vs. physical",
-    help=(
-        "**To pull** = in the mainboard but no copy is sleeved in the deck. **To put away** = a copy "
-        "is sleeved in the deck that the mainboard no longer runs. Basics are ignored. Build % is the "
-        "share of non-basic mainboard cards physically in the deck."
-    ),
-)
-for deck in recon:
-    b = deck["build"]
-    pct = "—" if b["pct"] is None else f"{b['pct']:.0f}%"
-    label = (f"{deck['deck_name']} — built {pct} ({b['located']}/{b['needed']}) · "
-             f"{len(deck['to_pull'])} to pull · {len(deck['to_put_away'])} to put away")
-    gaps = deck["to_pull"] or deck["to_put_away"]
-    with st.expander(label, expanded=False):
-        if not gaps:
-            st.success("List and physical deck agree.")
-            continue
-        dk = deck["deck_id"]
-        if deck["to_pull"]:
-            st.markdown("**To pull**")
-        for row in deck["to_pull"]:
-            c1, c2, c3, c4 = st.columns([3, 4, 2, 2])
-            c1.markdown(f"{row['card']} ×{row['short']}")
-            opts = {
-                f"#{c['collection_id']} · ×{c['quantity']} · "
-                f"{c['location'] or '(no location)'}{' (in a deck)' if c['in_deck'] else ''}": c
-                for c in row["candidates"]
-            }
-            if not opts:
-                c2.caption("No owned copy — see the Buy list.")
-                continue
-            choice = c2.selectbox("Copy", list(opts), key=f"wb_pull_pick_{dk}_{row['oracle_id']}_{ver}",
-                                  label_visibility="collapsed")
-            if c3.button("Sleeved here", key=f"wb_pull_{dk}_{row['oracle_id']}_{ver}"):
-                lot = opts[choice]
-                moves = writes.move_copies(conn, lot["collection_id"], deck["deck_name"],
-                                           quantity=min(row["short"], lot["quantity"]))
-                _refresh([f"✅ {row['card']} located to {deck['deck_name']}."], moves=moves)
-            c4.caption("It's elsewhere → set its Location on the Collection page.")
-        if deck["to_put_away"]:
-            st.markdown("**To put away**")
-        for row in deck["to_put_away"]:
-            c1, c2, c3 = st.columns([3, 4, 2])
-            c1.markdown(f"{row['card']} ×{row['surplus']}")
-            dest = c2.selectbox("Put away in", locations,
-                                index=locations.index(writes.DEFAULT_LOCATION)
-                                if writes.DEFAULT_LOCATION in locations else None,
-                                key=f"wb_away_pick_{dk}_{row['oracle_id']}_{ver}",
-                                label_visibility="collapsed")
-            if c3.button("Put away", key=f"wb_away_{dk}_{row['oracle_id']}_{ver}") and dest:
-                remaining, moves = row["surplus"], []
-                for lot in row["lots"]:
-                    if remaining <= 0:
-                        break
-                    take = min(remaining, lot["quantity"])
-                    moves += writes.move_copies(conn, lot["collection_id"], dest, quantity=take)
-                    remaining -= take
-                _refresh([f"✅ {row['card']} put away in {dest}."], moves=moves)
+
+{"plan": _render_plan, "supply": _render_supply,
+ "physical": _render_physical, "tags": _render_tags}[view]()

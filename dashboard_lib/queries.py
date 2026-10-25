@@ -1767,6 +1767,84 @@ def deck_reconciliation(conn, deck_id=None):
 
 
 # ------------------------------------------------------------------
+# Deck flags (Workbench) — two cross-deck checklists: mainboard cards with
+# no tag at all, and every list-vs-physical gap flattened into one table.
+# ------------------------------------------------------------------
+def untagged_deck_cards(conn):
+    """Non-basic mainboard cards carrying no card_tags row of ANY tag_type
+    in their deck. Matched on (deck_id, scryfall_id), the same key the Deck
+    Editor's Card Tags tab reads, so a card counted here also shows blank
+    there. Returns [{deck_id, deck_name, build_state, scryfall_id, card,
+    type_line}], ordered by deck then card name."""
+    rows = conn.execute(
+        """SELECT d.deck_id, d.name, d.build_state, dc.scryfall_id, c.name, c.type_line
+           FROM deck_cards dc
+           JOIN decks d ON d.deck_id = dc.deck_id
+           JOIN cards c ON c.scryfall_id = dc.scryfall_id
+           WHERE COALESCE(c.is_basic_land, 0) = 0
+             AND NOT EXISTS (SELECT 1 FROM card_tags ct
+                             WHERE ct.deck_id = dc.deck_id AND ct.scryfall_id = dc.scryfall_id)"""
+    ).fetchall()
+    out = [{"deck_id": r[0], "deck_name": r[1], "build_state": r[2], "scryfall_id": r[3],
+            "card": r[4], "type_line": r[5] or ""} for r in rows]
+    out.sort(key=lambda r: (r["deck_name"].casefold(), r["card"].casefold()))
+    return out
+
+
+def location_mismatches(conn, recon=None):
+    """deck_reconciliation() flattened to one row per gap across every deck,
+    each saying where the copies actually are:
+
+      {deck_id, deck_name, build_state, oracle_id, card, scryfall_id, kind,
+       qty, where, lots}
+
+    kind "missing" — on the list, not sleeved here (`qty` = short); `where`
+    names the card's other lots ("Box ×2", "deck: Gisa ×1", "no location
+    ×1"), or "not owned", and `lots` are those lots in the order a fix
+    should take them (free first — deck_reconciliation's candidates).
+    kind "extra" — sleeved here, not on the list (or more copies than it
+    runs); `where` is the deck itself and `lots` the lots sleeved here.
+    `scryfall_id` is the mainboard printing for "missing" and the first
+    sleeved lot's printing for "extra" (what a put-away's default
+    destination is chosen from). Pass `recon` to reuse a
+    deck_reconciliation() result already computed."""
+    recon = deck_reconciliation(conn) if recon is None else recon
+    states = {d[0]: d[1] for d in conn.execute("SELECT deck_id, build_state FROM decks")}
+    lot_sid = {r[0]: r[1] for r in conn.execute("SELECT collection_id, scryfall_id FROM collection")}
+    out = []
+    for deck in recon:
+        base = {"deck_id": deck["deck_id"], "deck_name": deck["deck_name"],
+                "build_state": states.get(deck["deck_id"])}
+        for row in deck["to_pull"]:
+            spots = [
+                f"{'deck: ' if c['in_deck'] else ''}{c['location'] or 'no location'} ×{c['quantity']}"
+                for c in row["candidates"]
+            ]
+            out.append({**base, "oracle_id": row["oracle_id"], "card": row["card"],
+                        "scryfall_id": row["scryfall_id"], "kind": "missing", "qty": row["short"],
+                        "where": ", ".join(spots) or "not owned", "lots": row["candidates"]})
+        for row in deck["to_put_away"]:
+            out.append({**base, "oracle_id": row["oracle_id"], "card": row["card"],
+                        "scryfall_id": lot_sid.get(row["lots"][0]["collection_id"]) if row["lots"] else None,
+                        "kind": "extra", "qty": row["surplus"],
+                        "where": f"sleeved in {deck['deck_name']}, list runs {row['needed']}",
+                        "lots": row["lots"]})
+    return out
+
+
+def deck_tag_labels(conn, tag_type=None):
+    """{deck_id: [label, ...]} — every tag label used in each deck (of
+    `tag_type`, or any type when None), sorted. What the Workbench's
+    untagged-card dropdown offers for that deck."""
+    sql = ("SELECT DISTINCT ct.deck_id, t.label FROM card_tags ct JOIN tags t ON t.tag_id = ct.tag_id"
+           + (" WHERE t.tag_type = ?" if tag_type else ""))
+    out = {}
+    for did, label in conn.execute(sql, (tag_type,) if tag_type else ()):
+        out.setdefault(did, []).append(label)
+    return {d: sorted(ls, key=str.casefold) for d, ls in out.items()}
+
+
+# ------------------------------------------------------------------
 # Deck lifecycle: brewing + dismantling (Phase 6)
 #
 # deck_reconciliation() above already answers "what is missing from this

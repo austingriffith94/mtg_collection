@@ -619,6 +619,7 @@ def test_workbench_contention_drop_writes_and_shows_message(smoke_db_path, tmp_p
         at = AppTest.from_file(os.path.join(PAGES_DIR, "8_Workbench.py"), default_timeout=15)
         at.run()
         assert not at.exception
+        at.button_group(key="workbench_view").set_value("supply").run()
         at.selectbox(key="workbench_contention_drop_pick_oracle-sol-ring_0").set_value("Second Deck")
         at.button(key="workbench_contention_drop_btn_oracle-sol-ring_0").click().run()
         assert not at.exception
@@ -808,7 +809,7 @@ def test_build_it_dialog_can_mark_built_and_says_what_is_still_to_pull(smoke_db_
     # with no take planned, so one card can't be pulled. "I'll sleeve them
     # myself" (inside the Build it dialog) still clears the flag, and says so.
     path = _brewing_deck_2_db(smoke_db_path, tmp_path, monkeypatch)
-    note = "1 card(s) are still to pull. They'll stay on Reconcile until you sleeve them."
+    note = "1 card(s) are still to pull. They'll stay on the Workbench's Physical section until you sleeve them."
     try:
         at = AppTest.from_file(os.path.join(PAGES_DIR, "2_Decks.py"), default_timeout=15)
         at.session_state["current_deck_id"] = 2
@@ -881,10 +882,19 @@ def test_board_shows_build_it_for_a_brewing_deck_and_builds(smoke_db_path, tmp_p
         st.cache_data.clear()
 
 
-def test_workbench_sleeved_here_reports_the_move(smoke_db_path, tmp_path, monkeypatch):
-    # Reconcile's "Sleeved here" is a lot-only move (no list change), and it
-    # reports through finish_edit() like a deck edit: deck 2 is short Sol Ring,
-    # whose one copy sits in deck 1.
+@pytest.mark.parametrize("section", ["plan", "supply", "physical", "tags"])
+def test_workbench_every_section_renders(section):
+    at = AppTest.from_file(os.path.join(PAGES_DIR, "8_Workbench.py"), default_timeout=15)
+    at.run()
+    at.button_group(key="workbench_view").set_value(section).run()
+    assert not at.exception
+    assert at.session_state["workbench_view"] == section
+
+
+def test_workbench_mismatch_fix_reports_the_move(smoke_db_path, tmp_path, monkeypatch):
+    # The Physical section's "Fix" on a Missing row is a lot-only move (no
+    # list change), and it reports through finish_edit() like a deck edit:
+    # deck 2 is short Sol Ring, whose one copy sits in deck 1.
     from dashboard_lib import db
 
     path = str(tmp_path / "mtg_collection.db")
@@ -895,11 +905,19 @@ def test_workbench_sleeved_here_reports_the_move(smoke_db_path, tmp_path, monkey
     try:
         at = AppTest.from_file(os.path.join(PAGES_DIR, "8_Workbench.py"), default_timeout=15)
         at.run()
-        at.button(key="wb_pull_2_oracle-sol-ring_0").click().run()
+        at.button_group(key="workbench_view").set_value("physical").run()
+        assert not at.exception
+        table = at.dataframe[-1].value  # the mismatch editor
+        row = table.index[(table["Deck"] == "Second Deck") & (table["Card"] == "Sol Ring")][0]
+        at.session_state["workbench_mismatch_0"] = {
+            "edited_rows": {str(row): {"Fix": True}}, "added_rows": [], "deleted_rows": []}
+        at.button(key="workbench_mismatch_fix_0").click().run()
         assert not at.exception
         assert _location_of(path, "sol-ring-cmd-1") == ["Second Deck"]
         assert [t.body for t in at.toast] == [
-            "Sol Ring located to Second Deck.", "Sol Ring: Smoke Test Deck → Second Deck"]
+            "Sol Ring sleeved into Second Deck — taken from Smoke Test Deck, which is now missing it.",
+            "Sol Ring: Smoke Test Deck → Second Deck"]
+        assert at.session_state["workbench_view"] == "physical"  # still on the section after the write
     finally:
         st.cache_resource.clear()
         st.cache_data.clear()
@@ -1331,9 +1349,8 @@ def test_workbench_shows_a_take_as_one_row_and_applies_the_pair(smoke_db_path, t
         at = AppTest.from_file(os.path.join(PAGES_DIR, "8_Workbench.py"), default_timeout=15)
         at.run()
         assert not at.exception
-        assert "📋 Planned changes (1)" in [h.value for h in at.header]
-        # One block, under the receiving deck — not one per half. (Reconcile's
-        # per-deck expanders start with the deck name too, hence the match.)
+        assert "📋 Planned changes (1)" in [h.value for h in at.subheader]
+        # One block, under the receiving deck — not one per half.
         planned_blocks = [e.label for e in at.expander
                           if re.fullmatch(r"(Empty Deck|Smoke Test Deck) \(\d+\)", e.label)]
         assert planned_blocks == ["Empty Deck (1)"]
@@ -1447,6 +1464,7 @@ def test_workbench_buy_list_bought_sleeves_a_lot_into_the_deck(smoke_db_path, tm
         at = AppTest.from_file(os.path.join(PAGES_DIR, "8_Workbench.py"), default_timeout=15)
         at.run()
         assert not at.exception
+        at.button_group(key="workbench_view").set_value("supply").run()
         at.button(key="workbench_bought_btn_3_arcane-sign-1_None_0").click().run()
         assert not at.exception
         assert sorted(_location_of(path, "arcane-sign-1")) == ["Box", "Empty Deck"]

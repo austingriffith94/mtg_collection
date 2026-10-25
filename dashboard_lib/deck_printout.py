@@ -667,7 +667,7 @@ _PULL_GROUPS = (
 _PULL_GROUP_NOTES = {
     "box": "Work these in location order — that's how they're sorted.",
     "unlocated": "You own these but no box is recorded. Find them, then set the location "
-                 "on the Workbench's Reconcile tab so next time they're a box pull.",
+                 "in the Workbench's Physical section so next time they're a box pull.",
     "other_deck": "Each of these is the ONLY copy you own, currently sleeved in another "
                   "deck. Pulling one leaves that deck short.",
     "not_owned": "Not owned — buy or proxy before this deck can be finished.",

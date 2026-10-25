@@ -290,13 +290,13 @@ def _build_dialog_body(deck_id, deck_name):
     left = sum(r["quantity"] for r in plan["to_pull"]) + sum(
         m["quantity"] for m in plan["moves"] if m["kind"] in ("move", "new"))
     if st.button("I'll sleeve them myself", key=f"{flag}_manual",
-                 help="Clears the brewing flag without moving anything. Reconcile's \"to pull\" "
-                      "keeps listing the cards until they're sleeved."):
+                 help="Clears the brewing flag without moving anything. The Workbench's Physical "
+                      "section keeps listing the cards as Missing until they're sleeved."):
         close_dialog(flag)
         writes.set_build_state(conn, deck_id, None)
         finish_edit({"message": "Marked as built.",
-                     "warnings": [f"{left} card(s) are still to pull. They'll stay on Reconcile "
-                                  "until you sleeve them."] if left else []})
+                     "warnings": [f"{left} card(s) are still to pull. They'll stay on the Workbench's "
+                                  "Physical section until you sleeve them."] if left else []})
 
 
 def show_build_dialog(deck_id, deck_name):
@@ -345,8 +345,8 @@ def show_pending_feedback():
 # save that moved copies into or out of a deck has already happened — the
 # lots are changed and in the move log. This asks, per deck, whether the
 # deck's LIST should follow. There is no silent default: closing the dialog
-# without answering leaves "just the collection", and Workbench Reconcile
-# shows the gap as "to pull" / "to put away" as it always has.
+# without answering leaves "just the collection", and the Workbench's
+# Physical section shows the gap as "Missing" / "Extra".
 #
 # The offers wait in session state and the dialog body reads them from
 # there, not from its arguments: a click inside a dialog reruns only the

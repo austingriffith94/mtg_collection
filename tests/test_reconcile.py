@@ -149,3 +149,121 @@ def test_move_lot_whole_lot_keeps_id(conn, add_card):
     assert writes.move_lot(conn, lot, "Raktres", quantity=2) == lot
     assert writes.move_lot(conn, lot, "Box") == lot
     assert conn.execute("SELECT COUNT(*), location FROM collection").fetchone()[:] == (1, "Box")
+
+
+# --- Deck flags (Workbench): untagged cards + flattened location gaps ---
+
+def test_untagged_lists_only_cards_with_no_tag_in_that_deck(conn, add_card):
+    a, b = _deck(conn, "Raktres"), _deck(conn, "Gisa")
+    sol, crypt = add_card("Sol Ring"), add_card("Blood Crypt")
+    swamp = _basic(conn, add_card)
+    for d in (a, b):
+        _main(conn, d, sol)
+    _main(conn, a, crypt)
+    _main(conn, a, swamp)
+    writes.set_card_tags(conn, a, sol, "rule0", ["fast mana"])  # any tag type counts
+    got = [(r["deck_name"], r["card"]) for r in q.untagged_deck_cards(conn)]
+    # Tags are deck-scoped: Sol Ring tagged in Raktres is still untagged in Gisa.
+    assert got == [("Gisa", "Sol Ring"), ("Raktres", "Blood Crypt")]
+
+
+def test_location_mismatches_say_where_the_copies_are(conn, add_card):
+    a, b = _deck(conn, "Raktres"), _deck(conn, "Gisa")
+    sol, crypt, blade, bolt = (add_card(n) for n in
+                               ("Sol Ring", "Blood Crypt", "Heirloom Blade", "Lightning Bolt"))
+    _main(conn, a, sol)
+    _lot(conn, sol, location="Gisa")
+    _main(conn, a, crypt)
+    _lot(conn, crypt, location="Box", quantity=2)
+    _main(conn, a, bolt)                       # never owned
+    _lot(conn, blade, location="Raktres")      # sleeved, not on the list
+    got = {(r["card"], r["kind"]): (r["qty"], r["where"]) for r in q.location_mismatches(conn)
+           if r["deck_id"] == a}
+    assert got == {
+        ("Blood Crypt", "missing"): (1, "Box ×2"),
+        ("Heirloom Blade", "extra"): (1, "sleeved in Raktres, list runs 0"),
+        ("Lightning Bolt", "missing"): (1, "not owned"),
+        ("Sol Ring", "missing"): (1, "deck: Gisa ×1"),
+    }
+    # Gisa's stray Sol Ring is its own "extra" row.
+    assert [(r["card"], r["kind"]) for r in q.location_mismatches(conn) if r["deck_id"] == b] == [
+        ("Sol Ring", "extra")]
+
+
+def test_deck_tag_labels_are_per_deck_and_per_type(conn, add_card):
+    a, b = _deck(conn, "Raktres"), _deck(conn, "Gisa")
+    sol, crypt = add_card("Sol Ring"), add_card("Blood Crypt")
+    writes.set_card_tags(conn, a, sol, "strategy", ["Ramp", "artifact"])
+    writes.set_card_tags(conn, a, crypt, "strategy", ["Ramp"])
+    writes.set_card_tags(conn, a, crypt, "rule0", ["fast mana"])
+    writes.set_card_tags(conn, b, sol, "strategy", ["Tokens"])
+    assert q.deck_tag_labels(conn, "strategy") == {a: ["artifact", "Ramp"], b: ["Tokens"]}
+    assert q.deck_tag_labels(conn)[a] == ["artifact", "fast mana", "Ramp"]
+
+
+def _mismatch(conn, deck_id, card):
+    return next(m for m in q.location_mismatches(conn) if m["deck_id"] == deck_id and m["card"] == card)
+
+
+def test_fixing_a_missing_row_pulls_storage_before_another_deck(conn, add_card):
+    a, _b = _deck(conn, "Raktres"), _deck(conn, "Gisa")
+    sol = add_card("Sol Ring")
+    _main(conn, a, sol)
+    _lot(conn, sol, location="Gisa")
+    _lot(conn, sol, location="Box")
+    writes.fix_location_mismatch(conn, _mismatch(conn, a, "Sol Ring"))  # short 1: the Box copy
+    got = sorted(tuple(r) for r in conn.execute("SELECT location, quantity FROM collection"))
+    assert got == [("Gisa", 1), ("Raktres", 1)]
+    assert not [m for m in q.location_mismatches(conn) if m["deck_id"] == a]
+
+
+def test_fixing_a_missing_row_takes_from_several_lots_until_covered(conn, add_card):
+    a = _deck(conn, "Raktres")
+    sol = add_card("Sol Ring")
+    _main(conn, a, sol, quantity=3)
+    _lot(conn, sol, location="Box", quantity=2)
+    _lot(conn, sol, location="Binder", quantity=2)
+    writes.fix_location_mismatch(conn, _mismatch(conn, a, "Sol Ring"))
+    here = conn.execute("SELECT SUM(quantity) FROM collection WHERE location='Raktres'").fetchone()[0]
+    total = conn.execute("SELECT SUM(quantity) FROM collection").fetchone()[0]
+    assert (here, total) == (3, 4)
+
+
+def test_fixing_an_extra_row_puts_only_the_surplus_away(conn, add_card):
+    a = _deck(conn, "Raktres")
+    blade = add_card("Heirloom Blade")
+    _main(conn, a, blade)
+    _lot(conn, blade, location="Raktres", quantity=3)
+    writes.fix_location_mismatch(conn, _mismatch(conn, a, "Heirloom Blade"), dest="Binder")
+    got = sorted(tuple(r) for r in conn.execute("SELECT location, quantity FROM collection"))
+    assert got == [("Binder", 2), ("Raktres", 1)]
+
+
+def test_fixing_an_unowned_card_says_buy_it(conn, add_card):
+    a = _deck(conn, "Raktres")
+    _main(conn, a, add_card("Lightning Bolt"))
+    try:
+        writes.fix_location_mismatch(conn, _mismatch(conn, a, "Lightning Bolt"))
+    except ValueError as exc:
+        assert "Buy list" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_two_rows_sharing_one_lot_move_it_once(conn, add_card):
+    # Both decks are missing Sol Ring and both rows list the one Box copy.
+    # Fixed in one batch, the second must not pull it back out of the first.
+    a, b = _deck(conn, "Raktres"), _deck(conn, "Gisa")
+    sol = add_card("Sol Ring")
+    _main(conn, a, sol)
+    _main(conn, b, sol)
+    _lot(conn, sol, location="Box")
+    rows = [m for m in q.location_mismatches(conn) if m["card"] == "Sol Ring"]
+    writes.fix_location_mismatch(conn, rows[0])
+    try:
+        writes.fix_location_mismatch(conn, rows[1])
+    except ValueError as exc:
+        assert "moved since" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+    assert [tuple(r) for r in conn.execute("SELECT location FROM collection")] == [(rows[0]["deck_name"],)]

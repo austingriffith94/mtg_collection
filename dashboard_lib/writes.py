@@ -19,6 +19,7 @@ import os
 import sqlite3
 
 from . import backup
+from . import formatting as fmt
 from . import queries as q
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,27 @@ logger = logging.getLogger(__name__)
 # comment), so a row reassigned here always resolves to a real,
 # selectable option.
 DEFAULT_LOCATION = "Box"
+
+# Where a (non-basic) land goes when it comes out of a deck and no storage
+# Location was picked: lands live in their own box, not the general one.
+# Added to the location catalog the first time a land is put away.
+LANDS_LOCATION = "Lands"
+
+
+def default_dest_for(conn, scryfall_id, dest=None):
+    """The storage Location a copy leaving a deck goes to. An explicit `dest`
+    other than the generic default wins; otherwise a land (any land face,
+    so MDFCs count) goes to LANDS_LOCATION and everything else to
+    DEFAULT_LOCATION. Callers default `dest` to "Box" before it gets here,
+    so "Box" is treated as "no choice made"."""
+    if dest and dest != DEFAULT_LOCATION:
+        return dest
+    row = conn.execute("SELECT type_line FROM cards WHERE scryfall_id = ?", (scryfall_id,)).fetchone()
+    if row and fmt.has_land_face(row[0]):
+        # Make sure the Location dropdowns offer it once something lives there.
+        conn.execute("INSERT OR IGNORE INTO location_catalog (location) VALUES (?)", (LANDS_LOCATION,))
+        return LANDS_LOCATION
+    return DEFAULT_LOCATION
 
 
 def get_or_create_tag(conn, tag_type, label):
@@ -1200,7 +1222,7 @@ def unsleeve_from_deck(conn, deck_id, scryfall_id, quantity=None, dest=None, for
 
     `reason` / `change_id` as for sleeve_into_deck()."""
     deck_name, state = _deck_name_and_state(conn, deck_id)
-    dest = dest or DEFAULT_LOCATION
+    dest = default_dest_for(conn, scryfall_id, dest)
     card = _card_name(conn, scryfall_id) or scryfall_id
     if q.is_basic_land(conn, scryfall_id=scryfall_id):
         count = int(quantity or 0)
@@ -1244,6 +1266,39 @@ def move_copies(conn, collection_id, location, quantity=None, reason="reconcile"
     moved_id = move_lot(conn, collection_id, location, quantity=quantity, reason=reason)
     moved = have if quantity is None or have is None else min(int(quantity), have)
     return [_move(card or "(unknown card)", moved, "move", moved_id, old_location, location)]
+
+
+def fix_location_mismatch(conn, mismatch, dest=None):
+    """Close one queries.location_mismatches() row with lot-only moves (no
+    list change — the Workbench's Physical view). "missing": sleeve copies
+    into the deck from `mismatch["lots"]` in their listed order (free lots
+    before ones in another deck) until `qty` is covered. "extra": move the
+    surplus out to `dest` — default_dest_for() picks Lands / Box when it's
+    None. Returns [move]; raises ValueError when there's no copy to move.
+
+    Each lot is re-read before it moves: several rows fixed in one batch
+    can list the same lot (two decks both missing the one Box copy), and an
+    earlier fix may already have moved, merged or shrunk it. A lot no
+    longer where the row saw it is skipped rather than moved a second
+    time."""
+    if not mismatch["lots"]:
+        raise ValueError(f"{mismatch['card']}: no copy owned — it's on the Buy list.")
+    target = (mismatch["deck_name"] if mismatch["kind"] == "missing"
+              else default_dest_for(conn, mismatch["scryfall_id"], dest))
+    remaining, moves = mismatch["qty"], []
+    for lot in mismatch["lots"]:
+        if remaining <= 0:
+            break
+        now = conn.execute("SELECT location, COALESCE(quantity, 1) FROM collection WHERE collection_id=?",
+                           (lot["collection_id"],)).fetchone()
+        if now is None or (now[0] or "").strip() != (lot["location"] or ""):
+            continue
+        take = min(remaining, int(now[1]))
+        moves += move_copies(conn, lot["collection_id"], target, quantity=take)
+        remaining -= take
+    if not moves:
+        raise ValueError(f"{mismatch['card']}: its copies moved since the table loaded — nothing left to move.")
+    return moves
 
 
 def revert_moves(conn, moves):
@@ -2094,7 +2149,7 @@ def _check_deck_stock(conn, deck_id, scryfall_id, list_after, donor_name, donor_
         raise ValueError(
             f"{card}: {donor_name} has no copy to hand over — its list runs ×{listed} and only "
             f"{sleeved} {'is' if sleeved == 1 else 'are'} recorded as sleeved there. Mark the copy as "
-            f"sleeved in {donor_name} (Workbench → Reconcile) first, or take it from storage."
+            f"sleeved in {donor_name} (Workbench → Physical) first, or take it from storage."
         )
 
 
@@ -3102,7 +3157,7 @@ def _build_run(conn, deck_id, oracle_ids):
                 raise ValueError(
                     f"{donor} has no copy of {card} to hand over — its list runs ×{listed} and only "
                     f"{sleeved} {'is' if sleeved == 1 else 'are'} recorded as sleeved there. Mark it "
-                    f"sleeved in {donor} (Workbench → Reconcile) first.")
+                    f"sleeved in {donor} (Workbench → Physical) first.")
             outcome = apply_change(conn, take["donor_change_id"])
         except ValueError as exc:
             failed_donors[key] = str(exc)
@@ -3359,7 +3414,11 @@ def move_dismantle_strays(conn, deck_id, dest_location=None, collection_ids=None
         for lot in card["lots"]:
             if allow is not None and lot["collection_id"] not in allow:
                 continue
-            moves += move_copies(conn, lot["collection_id"], dest_location, reason="dismantle")
+            sid = conn.execute("SELECT scryfall_id FROM collection WHERE collection_id=?",
+                               (lot["collection_id"],)).fetchone()
+            moves += move_copies(conn, lot["collection_id"],
+                                 default_dest_for(conn, sid[0] if sid else None, dest_location),
+                                 reason="dismantle")
     logger.info("Moved %d stray lot(s) out of deck_id=%d to %r", len(moves), deck_id, dest_location)
     return moves
 

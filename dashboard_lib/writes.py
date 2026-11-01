@@ -3050,11 +3050,22 @@ PURCHASE_LOT_SOURCE = "Purchase (buy list)"
 
 
 def record_purchase(conn, deck_id, scryfall_id, quantity=1, price_paid=None, change_id=None,
-                    collection_id=None):
+                    collection_id=None, *, printing_id=None, foil=False, location=None):
     """A bought copy lands in a deck's sleeves. With `collection_id` (a lot
     that arrived by order import) that many copies move into the deck;
     without, a new lot is made there at `price_paid` per copy (the unit
     price, as an order import records it). Returns the moves.
+
+    A new lot is for the printing you actually bought, never assumed to be
+    the listed one: `printing_id` (default `scryfall_id`, the deck's listed
+    printing) must be another printing of the same card, else ValueError.
+    `foil` is its finish and `location` where it goes (blank: the deck,
+    where a bought card lands; otherwise a storage Location, such as "Box").
+    When the lot lands in the deck with a printing the list doesn't have, the
+    list entry follows it through use_sleeved_printing() (the one-printing-
+    each case Reconcile calls fixable), and an open row's add printing too,
+    so the purchase doesn't show up as a printing mismatch straight away.
+    Ignored with `collection_id`: that lot is already a particular printing.
 
     `change_id` is the open Shortlist row the purchase answers: a row marked
     Buy goes back to Auto once its copies are bought, so applying it later
@@ -3077,12 +3088,18 @@ def record_purchase(conn, deck_id, scryfall_id, quantity=1, price_paid=None, cha
         moves = move_copies(conn, collection_id, deck_name, quantity=quantity, reason="purchase")
     else:
         card = _card_name(conn, scryfall_id) or scryfall_id
+        bought_id = printing_id or scryfall_id
+        if bought_id != scryfall_id and _oracle_of(conn, bought_id) != _oracle_of(conn, scryfall_id):
+            raise ValueError(f"That printing isn't {card} — pick another printing of it.")
+        lot_location = deck_name if _loc(location) in ("", deck_name) else normalize_dest(conn, location)
         lot_id = add_collection_lot(
-            conn, scryfall_id, quantity=quantity, foil=False, location=deck_name,
+            conn, bought_id, quantity=quantity, foil=foil, location=lot_location,
             date_acquired=datetime.date.today().isoformat(), price_paid=price_paid,
             source=PURCHASE_LOT_SOURCE, reason="purchase", change_id=change_id,
         )
-        moves = [_move(card, quantity, "new", lot_id, None, deck_name)]
+        moves = [_move(card, quantity, "new", lot_id, None, lot_location)]
+        if bought_id != scryfall_id:
+            _follow_bought_printing(conn, deck_id, deck_name, card, lot_location, change_id, bought_id)
     if change_id is not None:
         row = get_change(conn, change_id)
         if (row and row["status"] in OPEN_CHANGE_STATUSES and row["source"] == "buy"
@@ -3091,6 +3108,29 @@ def record_purchase(conn, deck_id, scryfall_id, quantity=1, price_paid=None, cha
                          (change_id,))
             conn.commit()
     return moves
+
+
+def _oracle_of(conn, scryfall_id):
+    """A printing's oracle_id, or its name when it has none."""
+    row = conn.execute("SELECT oracle_id, name FROM cards WHERE scryfall_id=?", (scryfall_id,)).fetchone()
+    return (row[0] or row[1].casefold()) if row else None
+
+
+def _follow_bought_printing(conn, deck_id, deck_name, card, lot_location, change_id, bought_id):
+    """record_purchase()'s second half for a printing other than the listed
+    one: an open Shortlist row's add printing follows, and, if the lot went
+    into the deck, so does the list entry (when it is the simple case
+    use_sleeved_printing() can swap — a wider split is left to Reconcile)."""
+    if change_id is not None:
+        row = get_change(conn, change_id)
+        if row and row["status"] in OPEN_CHANGE_STATUSES and row["add_scryfall_id"] != bought_id:
+            update_change(conn, change_id, add_scryfall_id=bought_id)
+    if lot_location != deck_name:
+        return
+    for m in q.printing_mismatches(conn):
+        if m["deck_id"] == deck_id and m["card"] == card and m["fixable"]:
+            use_sleeved_printing(conn, deck_id, [p["scryfall_id"] for p in m["listed"]],
+                                 [(p["scryfall_id"], p["qty"]) for p in m["sleeved"]])
 
 
 def sleeve_purchases(conn, offers):

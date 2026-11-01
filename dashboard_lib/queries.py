@@ -2938,6 +2938,10 @@ def deck_sync_offers(conn, since_move_id):
 
 
 BUY_REASONS = ("awaiting", "chosen", "contention", "idea")   # most specific first
+# The Workbench shows the buy list in two parts (docs/UNOWNED_LOTS_PLAN.md
+# Phase 2): what decks need, and ideas, which are maybes. A card marked Buy is
+# a decision, so `chosen` counts as needed.
+BUY_IDEA_REASONS = ("idea",)
 
 
 def awaiting_buys(conn, deck_id=None):
@@ -3032,7 +3036,11 @@ def buy_list(conn, contention=None):
     when it is the larger figure. `targets` is what "Bought" can act on:
     [{deck_id, deck_name, scryfall_id, quantity, kind: awaiting | chosen |
     idea, change_id (None for awaiting)}] — a contention shortfall belongs to
-    no one deck, so it adds none."""
+    no one deck, so it adds none.
+
+    The result also splits the same rows in two, each {"rows", "total"}:
+    "needed" (every reason but `idea`) and "ideas", so the page can total
+    what decks need without the maybes."""
     if contention is None:
         contention = contention_table(conn)
 
@@ -3112,7 +3120,11 @@ def buy_list(conn, contention=None):
             "decks": sorted(g["decks"]), "targets": g["targets"],
             "reason": next(r for r in BUY_REASONS if r in g["reasons"]),
         })
-    return {"rows": rows, "total": total}
+    needed = [r for r in rows if r["reason"] not in BUY_IDEA_REASONS]
+    ideas = [r for r in rows if r["reason"] in BUY_IDEA_REASONS]
+    return {"rows": rows, "total": total,
+            "needed": {"rows": needed, "total": sum(r["subtotal"] for r in needed)},
+            "ideas": {"rows": ideas, "total": sum(r["subtotal"] for r in ideas)}}
 
 
 def buy_matches(conn, lots):

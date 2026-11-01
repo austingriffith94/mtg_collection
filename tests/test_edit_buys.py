@@ -314,6 +314,80 @@ def test_bought_refuses_a_dismantled_deck_a_basic_and_zero(c):
     assert _lots(c) == []
 
 
+def _second_printing(c, card=LOTUS, sid="lotus-sld", oracle=None):
+    c.execute("INSERT INTO cards (scryfall_id, name, set_code, collector_number, oracle_id, current_price_usd)"
+              " VALUES (?,?,'sld','9',?,5.0)", (sid, card, oracle or f"oracle-{card}"))
+    c.commit()
+    return sid
+
+
+def test_bought_makes_the_lot_in_the_printing_you_chose_and_the_list_follows(c):
+    other = _second_printing(c)
+    _buy(c, "Prosper", LOTUS)
+    (t,) = q.buy_list(c)["rows"][0]["targets"]
+    moves = writes.record_purchase(c, t["deck_id"], t["scryfall_id"], 1, price_paid=4.0,
+                                   printing_id=other, foil=True)
+    assert [(m["kind"], m["to"]) for m in moves] == [("new", "Prosper")]
+    assert _lots(c, LOTUS) == [] and _lots(c, other) == [("Prosper", 1)]
+    assert c.execute("SELECT foil FROM collection").fetchone()[0] == 1
+    # The list moved to the printing sleeved, so Reconcile has nothing to flag.
+    assert [r[0] for r in c.execute("SELECT scryfall_id FROM deck_cards")] == [other]
+    assert q.printing_mismatches(c) == [] and q.awaiting_buys(c) == []
+
+
+def test_bought_in_the_listed_printing_leaves_the_list_alone(c):
+    _second_printing(c)
+    _buy(c, "Prosper", LOTUS)
+    writes.record_purchase(c, _deck(c, "Prosper"), LOTUS, 1, printing_id=LOTUS)
+    assert [r[0] for r in c.execute("SELECT scryfall_id FROM deck_cards")] == [LOTUS]
+    assert _lots(c, LOTUS) == [("Prosper", 1)]
+
+
+def test_bought_into_storage_leaves_the_list_entry_alone(c):
+    other = _second_printing(c)
+    _buy(c, "Prosper", LOTUS)
+    (move,) = writes.record_purchase(c, _deck(c, "Prosper"), LOTUS, 1, printing_id=other, location="Box")
+    assert move["to"] == "Box" and _lots(c, other) == [("Box", 1)]
+    assert [r[0] for r in c.execute("SELECT scryfall_id FROM deck_cards")] == [LOTUS]
+
+
+def test_bought_refuses_another_card_and_a_deck_as_a_location(c):
+    with pytest.raises(ValueError, match="isn't Jeweled Lotus"):
+        writes.record_purchase(c, _deck(c, "Prosper"), LOTUS, 1, printing_id=RING)
+    with pytest.raises(ValueError, match="is a deck"):
+        writes.record_purchase(c, _deck(c, "Prosper"), LOTUS, 1, location="Gisa")
+    assert _lots(c, LOTUS) == [] and _lots(c, RING) == []
+
+
+def test_bought_with_a_different_printing_points_an_open_idea_at_it(c):
+    other = _second_printing(c)
+    cid = writes.add_change(c, _deck(c, "Gisa"), add_scryfall_id=LOTUS, add_name=LOTUS, source="buy")
+    writes.record_purchase(c, _deck(c, "Gisa"), LOTUS, 1, change_id=cid, printing_id=other)
+    row = writes.get_change(c, cid)
+    assert (row["add_scryfall_id"], row["source"]) == (other, None)
+    # Applying it later finds the sleeved copy: no second purchase.
+    writes.add_deck_card(c, _deck(c, "Gisa"), other, 1)
+    assert _lots(c, other) == [("Gisa", 1)]
+
+
+def test_the_buy_list_splits_what_decks_need_from_ideas(c):
+    _buy(c, "Prosper", LOTUS)                                                   # awaiting
+    writes.add_change(c, _deck(c, "Gisa"), add_scryfall_id=BLADE, add_name=BLADE)           # an unowned idea
+    writes.add_change(c, _deck(c, "Gisa"), add_scryfall_id=RING, add_name=RING, source="buy")  # marked Buy
+    buy = q.buy_list(c)
+    assert sorted(r["card"] for r in buy["needed"]["rows"]) == [LOTUS, RING]
+    assert [r["card"] for r in buy["ideas"]["rows"]] == [BLADE]
+    assert buy["needed"]["total"] == 4.0 and buy["ideas"]["total"] == 2.0 and buy["total"] == 6.0
+    assert len(buy["rows"]) == 3
+
+
+def test_the_text_export_totals_needs_and_ideas_apart(c):
+    _buy(c, "Prosper", LOTUS)
+    writes.add_change(c, _deck(c, "Gisa"), add_scryfall_id=BLADE, add_name=BLADE)
+    text = mox.export_buy_list_text(q.buy_list(c))
+    assert "Needed by decks: $2.00" in text and "Ideas: $2.00" in text and "Total: $4.00" in text
+
+
 # ------------------------------------------------------------------
 # Order import
 # ------------------------------------------------------------------

@@ -15,7 +15,7 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 
 - [x] **Phase 0** — Clean starting point.
 - [x] **Phase 1** — Stop creating lots for cards you don't own.
-- [ ] **Phase 2** — Buy list: split decks from ideas, Bought with a printing picker.
+- [x] **Phase 2** — Buy list: split decks from ideas, Bought with a printing picker.
 - [ ] **Phase 3** — Remove the blank lots (preview, backup, confirm).
 - [ ] **Phase 4** — Clean up checks and the "sleeved of N" caveat.
 - [ ] **Phase 5** — Docs and wrap-up.
@@ -185,6 +185,25 @@ mismatch in Reconcile straight away.
 
 The order import's buy-list offer (`buy_matches()`) keeps working with no change
 needed. No placeholder lots need filling in, because none exist.
+
+**As built:** 755 tests pass. On a copy of the live database with the 132 blank
+lots deleted, the page shows Needed by decks 69 rows, $185.03 and Ideas 85 rows,
+$1,157.19, as the plan expected, and the Workbench renders without error.
+
+- `buy_list()` keeps `rows` and `total` and adds `needed` and `ideas`, each
+  `{rows, total}`. `needed` is every reason but `idea`, so a row marked Buy
+  (`chosen`) counts as needed: it is a decision, not a maybe. The text export
+  lists every row and totals needs and ideas apart.
+- Bought is one form for a picked target instead of a row per target, since 154
+  rows of widgets would be unusable. Printing starts on the deck's listed one;
+  "Other printing…" takes a set and number through `resolve_exact_printing()`,
+  which never substitutes another printing of the same name.
+- `record_purchase()` gains keyword-only `printing_id`, `foil` and `location`
+  (blank means the deck). A printing of a different card is refused, as is a deck
+  name as the location. When the lot lands in the deck with another printing, the
+  list follows through `use_sleeved_printing()` (the one-printing-each case) and an
+  open Shortlist row's add printing follows too. Bought into storage leaves the
+  list alone. With `collection_id` (the order import) the new fields are ignored.
 
 ## Phase 3 — Remove the blank lots
 

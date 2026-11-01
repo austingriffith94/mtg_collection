@@ -637,6 +637,13 @@ BUY_REASON_LABELS = {
 }
 
 
+def printing_label(printing):
+    """A printing in a picker, from queries.card_printings_by_name():
+    "CMD #1 — $1.25"."""
+    return (f"{(printing['set_code'] or '?').upper()} #{printing['collector_number']} "
+            f"— {format_money(printing['current_price_usd'])}")
+
+
 def source_choices(sources, locations, decks=()):
     """[(label, source, source_location), ...] for the source picker, Auto
     first. With a known card (`sources` = queries.card_sources()) only the

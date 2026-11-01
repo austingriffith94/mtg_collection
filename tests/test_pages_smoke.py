@@ -1475,6 +1475,43 @@ def test_workbench_buy_list_bought_sleeves_a_lot_into_the_deck(smoke_db_path, tm
         st.cache_data.clear()
 
 
+def test_workbench_bought_records_the_printing_you_chose(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = _buy_world(smoke_db_path, tmp_path)
+    conn = sqlite3.connect(path)
+    conn.execute("INSERT INTO cards (scryfall_id, name, set_code, collector_number, oracle_id, type_line, cmc)"
+                 " VALUES ('arcane-sign-2', 'Arcane Signet', 'sld', '5', 'oracle-arcane', 'Artifact', 2)")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "8_Workbench.py"), default_timeout=15)
+        at.run()
+        at.button_group(key="workbench_view").set_value("supply").run()
+        assert not at.exception
+        # The buy list is split: a Needed-by-decks table, then a collapsed Ideas expander.
+        assert any("Needed by decks (" in s.value for s in at.subheader)
+        assert any(e.label.startswith("💡 Ideas (0)") for e in at.expander)
+        printing = at.selectbox(key="workbench_bought_printing_3_arcane-sign-1_None_0")
+        assert printing.value.startswith("CMD #2")                         # starts on the listed printing
+        printing.select(next(o for o in printing.options if o.startswith("SLD #5")))
+        at.checkbox(key="workbench_bought_foil_3_arcane-sign-1_None_0").check()
+        at.run()
+        at.button(key="workbench_bought_btn_3_arcane-sign-1_None_0").click().run()
+        assert not at.exception
+        lots = sqlite3.connect(path).execute(
+            "SELECT scryfall_id, foil, location FROM collection WHERE source=?", ("Purchase (buy list)",)).fetchall()
+        assert lots == [("arcane-sign-2", 1, "Empty Deck")]
+        assert sqlite3.connect(path).execute(
+            "SELECT scryfall_id FROM deck_cards WHERE deck_id=3").fetchall() == [("arcane-sign-2",)]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
 def test_collection_editor_offers_imported_copies_to_the_deck_waiting_on_them(smoke_db_path, tmp_path, monkeypatch):
     from dashboard_lib import db, queries, writes
 

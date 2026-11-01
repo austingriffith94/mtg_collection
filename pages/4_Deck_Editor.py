@@ -211,10 +211,40 @@ def _add_card_to_deck(deck_id, name, set_code, number, qty, source=None, source_
     )
 
 
-def _render_add_card_form(deck_id, key_prefix, on_added=None):
+def _add_idea_to_deck_shortlist(deck_id, name, set_code, number, qty, source=None, source_location=None):
+    """Stage a card as a Shortlist idea (no card to cut) — the add bar's
+    second button. Returns (message, error); the same resolve-or-fetch and
+    add_change() the Shortlist tab's form uses, minus its Replaces / Notes
+    fields (set those in the Shortlist tab or the Board's rail)."""
+    if not name and not (set_code and number):
+        return None, "Enter a card name, or a set code + collector number."
+    sid, was_new, err = card_resolver.resolve_or_fetch_card(
+        conn, name=name or None, set_code=set_code or None, collector_number=number or None,
+    )
+    if err:
+        return None, err
+    resolved_name = conn.execute("SELECT name FROM cards WHERE scryfall_id=?", (sid,)).fetchone()[0]
+    try:
+        writes.add_change(
+            conn, deck_id, add_scryfall_id=sid, add_name=resolved_name, quantity=qty,
+            source=source, source_location=source_location,
+        )
+    except ValueError as exc:
+        return None, str(exc)
+    return (
+        f"Added {resolved_name}{f' ×{qty}' if qty > 1 else ''} to the shortlist"
+        + (" (fetched fresh from Scryfall)" if was_new else "")
+        + (f". {source_location}'s copy is promised to this deck until you apply or drop it."
+           if source == "deck" else "."),
+        None,
+    )
+
+
+def _render_add_card_form(deck_id, key_prefix, on_added=None, allow_shortlist=False):
     """The add-a-card row. `key_prefix` keeps each tab's widgets distinct;
     `on_added` runs after a successful add (the Board uses it to forget its
-    Undo, which can't reverse an add)."""
+    Undo, which can't reverse an add). `allow_shortlist` adds a second
+    button that stages the card as a Shortlist idea instead."""
     st.markdown(
         "**Add a card**",
         help="Set code + collector number picks an exact printing; leave them blank to match by name.",
@@ -255,7 +285,20 @@ def _render_add_card_form(deck_id, key_prefix, on_added=None):
                 on_added()
             cv.finish_edit({"message": message, "moves": moves})
 
-    if st.button("➕ Add to mainboard", key=f"{key_prefix}_add_btn"):
+    if allow_shortlist:
+        btn_main, btn_idea, _ = st.columns([1, 1, 3])
+        add_main = btn_main.button("➕ Add to mainboard", key=f"{key_prefix}_add_btn")
+        add_idea = btn_idea.button("💡 Add to shortlist", key=f"{key_prefix}_add_idea_btn")
+        if add_idea:
+            message, err = _add_idea_to_deck_shortlist(
+                deck_id, name.strip(), set_code.strip(), number.strip(), int(qty), source, source_location)
+            if err:
+                st.error(err)
+            else:
+                cv.finish_edit({"message": message})
+    else:
+        add_main = st.button("➕ Add to mainboard", key=f"{key_prefix}_add_btn")
+    if add_main:
         pending = (name.strip(), set_code.strip(), number.strip(), int(qty), source, source_location)
         brewing = loaders.load_deck_meta(conn, deck_id).get("build_state") == "brewing"
         if source == "deck" and not brewing:
@@ -308,7 +351,8 @@ def _board_fragment(deck_id):
         if cv.dialog_is_open(cv.build_dialog_flag(deck_id)):
             cv.show_build_dialog(deck_id, _meta.get("name") or "this deck")
 
-    _render_add_card_form(deck_id, key, on_added=lambda: deck_board.clear_board_undo(board_key))
+    _render_add_card_form(deck_id, key, on_added=lambda: deck_board.clear_board_undo(board_key),
+                          allow_shortlist=True)
 
     cards_df = loaders.load_deck_cards_df(conn, deck_id)
     stats = deck_board.board_stats(cards_df)

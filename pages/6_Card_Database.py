@@ -221,7 +221,7 @@ MT_CFG = {
     "attn_help": "Names with no card data (no art yet).",
 }
 
-tab_gc, tab_manatags, tab_carddata = st.tabs(["Game Changers", "Mana Tags", "Card Data"])
+tab_gc, tab_manatags, tab_carddata = st.tabs(["Game Changers", "Mana Tags", "Card Data"], key="carddb_tabs")
 
 # ------------------------------------------------------------------
 # Game Changers — card_name-keyed (NOT deck-scoped), across every card

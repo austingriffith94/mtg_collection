@@ -710,7 +710,8 @@ def _render_combos(conn, deck_id, meta):
         owned = loaders.load_owned_card_quantities(conn)
 
         in_deck_tab, one_away_tab = st.tabs(
-            [f"In this deck ({len(included_df)})", f"One card away ({len(almost_df)})"]
+            [f"In this deck ({len(included_df)})", f"One card away ({len(almost_df)})"],
+            key=f"deck_{deck_id}_combo_tabs",
         )
 
         # Shared with the printable deck sheet, which decodes the same stored
@@ -1016,7 +1017,8 @@ def _render_history(conn, deck_id):
 
 
 tab_overview, tab_mana, tab_combos, tab_cards, tab_history = st.tabs(
-    ["Overview", "Mana & Curve", "Combos", "Cards", "History"]
+    ["Overview", "Mana & Curve", "Combos", "Cards", "History"],
+    key=f"deck_{deck_id}_tabs",
 )
 with tab_overview:
     _render_overview(conn, deck_id, meta, deck_name, color_identity_raw)

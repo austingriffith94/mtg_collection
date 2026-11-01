@@ -214,6 +214,20 @@ _SCHEMA_TABLE_UPGRADES = [
         _seed_location_catalog,
     ),
     (
+        # Mismatches the user reviewed and chose to keep (printing_mismatches()).
+        # The printings are part of the key, so a later change to either side
+        # brings the row back for another look.
+        "printing_mismatch_ok",
+        """CREATE TABLE printing_mismatch_ok (
+               deck_id      INTEGER NOT NULL REFERENCES decks(deck_id),
+               card_name    TEXT NOT NULL,
+               listed_sids  TEXT NOT NULL,
+               sleeved_sids TEXT NOT NULL,
+               PRIMARY KEY (deck_id, card_name, listed_sids, sleeved_sids)
+           )""",
+        None,
+    ),
+    (
         "deck_swap_queue",
         """CREATE TABLE deck_swap_queue (
                queue_id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1799,6 +1813,61 @@ def untagged_deck_cards(conn):
             "card": r[4], "type_line": r[5] or ""} for r in rows]
     out.sort(key=lambda r: (r["deck_name"].casefold(), r["card"].casefold()))
     return out
+
+
+def printing_mismatches(conn, include_dismissed=False):
+    """Cards whose deck-list printing isn't the printing sleeved in that deck
+    — deck_reconciliation()/location_mismatches() match by oracle id, so they
+    can't see this. One dict per deck + card name:
+
+      {deck_id, deck_name, build_state, card, listed, sleeved, fixable, key}
+
+    `listed` / `sleeved` are [{scryfall_id, set_code, collector_number, qty,
+    price}, ...] (the mainboard's printings, and the lots sleeved in the deck
+    grouped by printing). A card is flagged when both sides exist and their
+    SETS of printings differ; a different quantity of the same printings is
+    the Missing/Extra check's business. Basic lands are skipped. `fixable`
+    is the simple one-printing-each case that writes.use_sleeved_printing()
+    can swap; anything wider (e.g. a 30-copy stack split over printings) is
+    reported for a manual look. `key` is the dismissal key, and dismissed rows
+    are left out unless `include_dismissed`."""
+    def side(rows):
+        by_name = {}
+        for deck_id, name, sid, set_code, number, qty, price in rows:
+            by_name.setdefault((deck_id, name), {}).setdefault(sid, {
+                "scryfall_id": sid, "set_code": set_code, "collector_number": number,
+                "qty": 0, "price": price})["qty"] += qty
+        return by_name
+
+    listed = side(conn.execute(
+        """SELECT dc.deck_id, c.name, c.scryfall_id, c.set_code, c.collector_number,
+                  dc.quantity, c.current_price_usd
+           FROM deck_cards dc JOIN cards c ON c.scryfall_id = dc.scryfall_id
+           WHERE COALESCE(c.is_basic_land, 0) = 0""").fetchall())
+    sleeved = side(conn.execute(
+        """SELECT d.deck_id, c.name, c.scryfall_id, c.set_code, c.collector_number,
+                  col.quantity, c.current_price_usd
+           FROM collection col
+           JOIN decks d ON d.name = col.location
+           JOIN cards c ON c.scryfall_id = col.scryfall_id
+           WHERE COALESCE(c.is_basic_land, 0) = 0 AND col.quantity > 0""").fetchall())
+    decks = {r[0]: (r[1], r[2]) for r in conn.execute("SELECT deck_id, name, build_state FROM decks")}
+    dismissed = set() if include_dismissed else {
+        tuple(r) for r in conn.execute(
+            "SELECT deck_id, card_name, listed_sids, sleeved_sids FROM printing_mismatch_ok")}
+    out = []
+    for (deck_id, name), have in listed.items():
+        got = sleeved.get((deck_id, name))
+        if not got or set(have) == set(got) or deck_id not in decks:
+            continue
+        key = (deck_id, name, ",".join(sorted(have)), ",".join(sorted(got)))
+        if key in dismissed:
+            continue
+        deck_name, build_state = decks[deck_id]
+        out.append({"deck_id": deck_id, "deck_name": deck_name, "build_state": build_state,
+                    "card": name, "listed": list(have.values()), "sleeved": list(got.values()),
+                    "fixable": len(have) == 1 and len(got) == 1, "key": key})
+    return sorted(out, key=lambda m: (m["deck_name"].casefold(), m["card"].casefold()))
 
 
 def location_mismatches(conn, recon=None):

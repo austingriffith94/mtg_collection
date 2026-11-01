@@ -667,6 +667,76 @@ def _render_physical():
             _refresh(lines, moves=moves)
 
 
+def _printing_label(printings):
+    """'SOA 63 ×1, KTK 173 ×2' for one side of a printing mismatch."""
+    return ", ".join(f"{p['set_code'].upper()} {p['collector_number']} ×{p['qty']}" for p in printings)
+
+
+def _render_printing_check():
+    """Cards whose list printing differs from the printing sleeved in the
+    deck (queries.printing_mismatches). Review-first: the user picks, per row,
+    to take the sleeved printing onto the list or to keep the difference."""
+    all_rows = q.printing_mismatches(conn)
+    st.subheader(
+        f"🖼️ Printing differs ({len(all_rows)})",
+        help=(
+            "The list runs one printing of a card while a different printing is sleeved in the deck, so "
+            "the deck page shows art you aren't holding. *Use sleeved* points the list at the sleeved "
+            "printing (no copies move). *Keep* marks it deliberate and hides it until either side changes. "
+            "A card split over several printings is re-split to match what is sleeved. Basics are ignored."
+        ),
+    )
+    show_inactive = st.toggle("Brewing / dismantled", value=False, key="workbench_printing_inactive",
+                              help="Their sleeved cards are often leftovers, so they're hidden by default.")
+    rows = [m for m in all_rows if show_inactive or not m["build_state"]]
+    if not rows:
+        st.caption("✅ Every list printing matches the printing sleeved in its deck."
+                   if not all_rows else "Nothing for the active decks.")
+        return
+    edited = st.data_editor(
+        pd.DataFrame([{
+            "i": i, "Deck": m["deck_name"], "Card": m["card"],
+            "On the list": _printing_label(m["listed"]), "Sleeved": _printing_label(m["sleeved"]),
+            "Action": None,
+        } for i, m in enumerate(rows)]),
+        column_config={
+            "Deck": st.column_config.TextColumn("Deck", disabled=True),
+            "Card": st.column_config.TextColumn("Card", disabled=True),
+            "On the list": st.column_config.TextColumn("On the list", disabled=True),
+            "Sleeved": st.column_config.TextColumn("Sleeved", disabled=True),
+            "Action": st.column_config.SelectboxColumn(
+                "Action", options=["Use sleeved", "Keep"],
+                help="Use sleeved: the list takes the sleeved printing. Keep: leave it, stop flagging it."),
+        },
+        column_order=["Deck", "Card", "On the list", "Sleeved", "Action"],
+        hide_index=True, width="stretch", height=400,
+        key=f"workbench_printing_{ver}_{int(show_inactive)}",
+    )
+    if st.button("💾 Apply choices", key=f"workbench_printing_apply_{ver}"):
+        lines = []
+        for _, r in edited.iterrows():
+            action = r["Action"]
+            if not isinstance(action, str) or not action:
+                continue
+            m = rows[int(r["i"])]
+            if action == "Keep":
+                writes.dismiss_printing_mismatch(conn, m["key"])
+                lines.append(f"✅ {m['card']} in {m['deck_name']}: kept as is.")
+            else:
+                try:
+                    writes.use_sleeved_printing(conn, m["deck_id"], [p["scryfall_id"] for p in m["listed"]],
+                                                [(p["scryfall_id"], p["qty"]) for p in m["sleeved"]])
+                except ValueError as exc:
+                    lines.append(f"❌ {exc}")
+                    continue
+                lines.append(f"✅ {m['card']} in {m['deck_name']}: list now runs "
+                             f"{_printing_label(m['sleeved'])}.")
+        if not lines:
+            st.warning("Pick an **Action** on at least one row first.")
+        else:
+            _refresh(lines)
+
+
 # ==================================================================
 # 🏷️ Tags — untagged mainboard cards, one deck at a time
 # ==================================================================
@@ -722,4 +792,4 @@ def _render_tags():
 
 
 {"plan": _render_plan, "supply": _render_supply,
- "physical": _render_physical, "tags": _render_tags}[view]()
+ "physical": lambda: (_render_physical(), _render_printing_check()), "tags": _render_tags}[view]()

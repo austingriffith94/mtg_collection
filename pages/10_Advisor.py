@@ -192,7 +192,7 @@ except ProviderError as e:
     st.stop()
 st.sidebar.caption(f"Model: {provider_choice} · {provider.model}")
 
-tab_analysis, tab_chat = st.tabs(["Analysis", "Chat"])
+tab_analysis, tab_chat = st.tabs(["Analysis", "Chat"], key="advisor_tabs")
 with tab_analysis:
     run_analysis_tab(conn, decks, provider)
 with tab_chat:

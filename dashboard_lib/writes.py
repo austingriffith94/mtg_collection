@@ -752,6 +752,47 @@ def _put_deck_card(conn, deck_id, scryfall_id, quantity):
     conn.commit()
 
 
+def use_sleeved_printing(conn, deck_id, listed_sids, sleeved):
+    """Re-point a deck's list entries for one card at the printings actually
+    sleeved in it (Workbench "printing differs" fix). `listed_sids` are the
+    list's current printings of the card; `sleeved` is [(scryfall_id, qty)]
+    for the lots sleeved in the deck. The list's TOTAL copies of the card are
+    kept: each sleeved printing gets the quantity sleeved (capped by what is
+    left), and any surplus lands on the first. Tags carry over to every new
+    printing. Touches only the list — no copy moves, nothing is logged as a
+    deck change, since the card itself is unchanged."""
+    quantities = {sid: _deck_card_quantity(conn, deck_id, sid) for sid in listed_sids}
+    if any(qty is None for qty in quantities.values()):
+        raise ValueError("That card is no longer on the list as shown — nothing changed.")
+    total = sum(quantities.values())
+    marks = ",".join("?" * len(quantities))
+    tag_ids = [r[0] for r in conn.execute(
+        f"SELECT DISTINCT tag_id FROM card_tags WHERE deck_id=? AND scryfall_id IN ({marks})",
+        (deck_id, *quantities))]
+    conn.execute(f"DELETE FROM card_tags WHERE deck_id=? AND scryfall_id IN ({marks})", (deck_id, *quantities))
+    conn.execute(f"DELETE FROM deck_cards WHERE deck_id=? AND scryfall_id IN ({marks})", (deck_id, *quantities))
+    left, placed = total, []
+    for sid, qty in sleeved:
+        take = min(qty, left)
+        left -= take
+        placed.append([sid, take])
+    placed[0][1] += left
+    for sid, qty in placed:
+        if qty > 0:
+            conn.execute("INSERT INTO deck_cards (deck_id, scryfall_id, quantity) VALUES (?,?,?)",
+                         (deck_id, sid, qty))
+            conn.executemany("INSERT OR IGNORE INTO card_tags (deck_id, scryfall_id, tag_id) VALUES (?,?,?)",
+                             [(deck_id, sid, t) for t in tag_ids])
+    conn.commit()
+
+
+def dismiss_printing_mismatch(conn, key):
+    """Keep a flagged printing difference on purpose; `key` is the row's
+    queries.printing_mismatches() key."""
+    conn.execute("INSERT OR IGNORE INTO printing_mismatch_ok VALUES (?,?,?,?)", key)
+    conn.commit()
+
+
 def _delete_deck_card(conn, deck_id, scryfall_id):
     conn.execute("DELETE FROM deck_cards WHERE deck_id=? AND scryfall_id=?", (deck_id, scryfall_id))
     conn.commit()

@@ -175,7 +175,12 @@ def _add_card_to_deck(deck_id, name, set_code, number, qty, source=None, source_
         # but Auto/storage sleeves a free copy of the printing you OWN. Put
         # that printing on the list so the previewer shows the card that is
         # actually going into the deck, not a different art.
-        lots = q.free_lots(conn, sid, location=source_location if source == "storage" else None)
+        # A copy already sleeved in this deck is used first (Auto counts it
+        # first), so it decides the printing before any free copy does.
+        deck_name = (loaders.load_deck_meta(conn, deck_id).get("name") or "").strip()
+        here = [lot for lot in q.card_lots(conn, sid) if (lot[2] or "").strip() == deck_name and lot[1] > 0]
+        lots = here if source is None and here else q.free_lots(
+            conn, sid, location=source_location if source == "storage" else None)
         if lots:
             sid = lots[0][3]
     existing = (q.deck_card_entry(conn, deck_id, sid) or {}).get("quantity") or 0
@@ -331,7 +336,8 @@ def _board_fragment(deck_id):
 
 
 (tab_board, tab_info, tab_themes, tab_cardtags, tab_main, tab_shortlist) = st.tabs(
-    ["🃏 Board", "Deck Info", "Themes", "Card Tags", "Mainboard", "Shortlist"]
+    ["🃏 Board", "Deck Info", "Themes", "Card Tags", "Mainboard", "Shortlist"],
+    key="deck_editor_tabs",
 )
 
 # ------------------------------------------------------------------

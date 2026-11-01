@@ -199,7 +199,7 @@ def _delete_game_dialog(games_df, game_ids):
         st.rerun()
 
 
-tab_log, tab_stats = st.tabs(["\U0001F4DD Log & manage games", "\U0001F4CA Player & deck stats"])
+tab_log, tab_stats = st.tabs(["\U0001F4DD Log & manage games", "\U0001F4CA Player & deck stats"], key="games_tabs")
 
 # ------------------------------------------------------------------
 # Tab 1: log a new game, game history, edit, delete

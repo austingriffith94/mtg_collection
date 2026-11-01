@@ -1117,7 +1117,7 @@ def _lots_for_card(conn, name=None, scryfall_id=None):
     every deck claim the same uncounted copy. One copy is the floor a NULL
     lot can mean, and counting it is what makes "can I grab it?"
     answerable for those lots at all. A card you don't own has no lot, so
-    it isn't counted (docs/UNOWNED_LOTS_PLAN.md)."""
+    it isn't counted (docs/archive/UNOWNED_LOTS_PLAN.md)."""
     oracle_ids = oracle_ids_for_card(conn, name=name, scryfall_id=scryfall_id)
     if oracle_ids:
         placeholders = ",".join("?" for _ in oracle_ids)
@@ -2940,7 +2940,7 @@ def deck_sync_offers(conn, since_move_id):
 
 
 BUY_REASONS = ("awaiting", "chosen", "contention", "idea")   # most specific first
-# The Workbench shows the buy list in two parts (docs/UNOWNED_LOTS_PLAN.md
+# The Workbench shows the buy list in two parts (docs/archive/UNOWNED_LOTS_PLAN.md
 # Phase 2): what decks need, and ideas, which are maybes. A card marked Buy is
 # a decision, so `chosen` counts as needed.
 BUY_IDEA_REASONS = ("idea",)
@@ -2952,7 +2952,7 @@ def awaiting_buys(conn, deck_id=None):
     is one when the list runs more copies than the deck's sleeves hold and
     either its latest applied add row on the deck is source='buy' (a direct
     add logs one; so does applying an idea) or no copy of it exists anywhere,
-    in any printing (docs/UNOWNED_LOTS_PLAN.md). A card owned elsewhere that
+    in any printing (docs/archive/UNOWNED_LOTS_PLAN.md). A card owned elsewhere that
     wasn't marked Buy is contention_table()'s, not this.
     A dismantled deck and an untracked basic land never are.
     `deck_id` narrows it to one deck. Each: {deck_id, deck_name, scryfall_id,
@@ -3412,7 +3412,7 @@ def deck_comparison(conn):
     df["build_pct"] = df["deck_id"].map({d: b["pct"] for d, b in builds.items()})
     # Beside "% built": how many copies are sleeved of how many needed, and how
     # many of the rest have no copy anywhere and have to be bought
-    # (docs/UNOWNED_LOTS_PLAN.md Phase 4).
+    # (docs/archive/UNOWNED_LOTS_PLAN.md Phase 4).
     df["build_located"] = df["deck_id"].map({d: b["located"] for d, b in builds.items()})
     df["build_needed"] = df["deck_id"].map({d: b["needed"] for d, b in builds.items()})
     to_buy = {}
@@ -3575,7 +3575,7 @@ def unreferenced_card_sql(conn):
     return " AND ".join(parts)
 
 
-# The one test for a blank lot (docs/UNOWNED_LOTS_PLAN.md): no quantity, no
+# The one test for a blank lot (docs/archive/UNOWNED_LOTS_PLAN.md): no quantity, no
 # Location, not a basic land. Written against `col` (collection) and `c` (cards).
 BLANK_LOT_SQL = """(col.quantity IS NULL OR col.quantity = 0)
                    AND (col.location IS NULL OR TRIM(col.location) = '')
@@ -3618,7 +3618,7 @@ def blank_lots(conn):
 
 def lots_missing_a_field(conn, field):
     """Lots a person has to look at, for two read-only Clean up checks
-    (docs/UNOWNED_LOTS_PLAN.md Phase 4): `field` "location" is a lot with a
+    (docs/archive/UNOWNED_LOTS_PLAN.md Phase 4): `field` "location" is a lot with a
     quantity and no Location, "quantity" one with a Location and no quantity.
     Basic lands are exempt from both, and a lot with neither is a blank lot,
     which has its own bucket. A DataFrame of collection_id, card, printing,

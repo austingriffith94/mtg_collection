@@ -381,6 +381,27 @@ def test_the_buy_list_splits_what_decks_need_from_ideas(c):
     assert len(buy["rows"]) == 3
 
 
+def test_an_unowned_card_goes_from_added_to_bought_without_ever_making_a_blank_lot(c):
+    """The whole story in one run: add, buy list, Bought as another printing, gone from the list."""
+    other = _second_printing(c)
+    writes.add_deck_card(c, _deck(c, "Prosper"), LOTUS, 1)                       # Auto: nothing owned
+    writes.add_change(c, _deck(c, "Gisa"), add_scryfall_id=BLADE, add_name=BLADE)  # an unowned idea
+    assert c.execute("SELECT COUNT(*) FROM collection").fetchone()[0] == 0        # no lot, ever
+    buy = q.buy_list(c)
+    assert [r["card"] for r in buy["needed"]["rows"]] == [LOTUS]
+    assert [r["card"] for r in buy["ideas"]["rows"]] == [BLADE]
+    row = q.deck_comparison(c).set_index("name").loc["Prosper"]
+    assert (row["build_located"], row["build_needed"], row["to_buy"]) == (0, 1, 1)
+    (t,) = buy["needed"]["rows"][0]["targets"]
+    writes.record_purchase(c, t["deck_id"], t["scryfall_id"], 1, printing_id=other, price_paid=4.5)
+    assert _lots(c, other) == [("Prosper", 1)] and _lots(c, LOTUS) == []
+    assert [r["card"] for r in q.buy_list(c)["needed"]["rows"]] == []
+    assert q.printing_mismatches(c) == []
+    assert q.orphan_report(c)["blank_lots"].empty
+    row = q.deck_comparison(c).set_index("name").loc["Prosper"]
+    assert (row["build_located"], row["to_buy"]) == (1, 0)
+
+
 def test_the_text_export_totals_needs_and_ideas_apart(c):
     _buy(c, "Prosper", LOTUS)
     writes.add_change(c, _deck(c, "Gisa"), add_scryfall_id=BLADE, add_name=BLADE)

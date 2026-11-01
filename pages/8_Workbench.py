@@ -450,7 +450,7 @@ def _render_supply():
     # and priced once: cards on a deck's list with no copy (awaiting), open
     # rows marked Buy (chosen), contention shortfalls, and unowned ideas. A
     # card with several reasons shows once, under the most specific.
-    # docs/UNOWNED_LOTS_PLAN.md Phase 2: what decks need comes first with its
+    # docs/archive/UNOWNED_LOTS_PLAN.md Phase 2: what decks need comes first with its
     # own total; ideas are maybes, so they sit collapsed after it, outside
     # that total.
     needed, ideas = buy["needed"], buy["ideas"]

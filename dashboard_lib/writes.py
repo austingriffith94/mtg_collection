@@ -1153,7 +1153,7 @@ def sleeve_into_deck(conn, deck_id, scryfall_id, quantity, source=None, source_l
          the order plan_availability() allocates in, so the copy the
          Workbench promised is the one that moves
       3. then one `buy` move for the remainder: no lot is made, because a
-         card you don't own has no collection row (docs/UNOWNED_LOTS_PLAN.md).
+         card you don't own has no collection row (docs/archive/UNOWNED_LOTS_PLAN.md).
          A card with no copy anywhere reaches the buy list through
          awaiting_buys(); one owned elsewhere, through contention_table()
 
@@ -2519,7 +2519,7 @@ def _log_collection_move(conn, collection_id, scryfall_id, quantity, frm, to, re
 
 def _lot_is_blank(quantity, location):
     """No quantity (blank or 0) and no Location: the mark of a card you don't
-    own (docs/UNOWNED_LOTS_PLAN.md). Either one filled in means a real copy."""
+    own (docs/archive/UNOWNED_LOTS_PLAN.md). Either one filled in means a real copy."""
     return not quantity and not _loc(location)
 
 
@@ -2557,7 +2557,7 @@ def _refuse_blanking(conn, scryfall_id, old_quantity, old_location, new_quantity
 
 def add_collection_lot(conn, scryfall_id, *, reason="collection_edit", change_id=None, **fields):
     """Add a lot, through fill_lot_fields() so it can't be blank. An order
-    import is left as it is (docs/UNOWNED_LOTS_PLAN.md): its lots always have
+    import is left as it is (docs/archive/UNOWNED_LOTS_PLAN.md): its lots always have
     a quantity, and with no Location chosen they stay unlocated, for the
     Workbench's panel."""
     fields = {k: fields.get(k) for k in COLLECTION_FIELDS}
@@ -2767,7 +2767,7 @@ def remove_collection_lot(conn, collection_id, *, reason="collection_edit", chan
 def prune_collection(conn):
     """Deletes every blank lot (queries.BLANK_LOT_SQL: no quantity, no
     Location, not a basic land). A card you don't own has no collection row
-    (docs/UNOWNED_LOTS_PLAN.md), whether or not a deck lists it or an idea
+    (docs/archive/UNOWNED_LOTS_PLAN.md), whether or not a deck lists it or an idea
     wants it, so there is nothing to protect.
 
     Called automatically as part of the Card Database page's Card Data
@@ -2797,7 +2797,7 @@ def _delete_lots(conn, ids):
 
 
 def delete_blank_lots(conn, collection_ids):
-    """The Clean up panel's Blank lots delete (docs/UNOWNED_LOTS_PLAN.md
+    """The Clean up panel's Blank lots delete (docs/archive/UNOWNED_LOTS_PLAN.md
     Phase 3): remove the lots listed, re-checking each is still blank, so a
     lot given a quantity since the preview stays. A backup comes first and
     is required: RuntimeError, nothing deleted, if it fails. No move-log rows,

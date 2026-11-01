@@ -41,6 +41,9 @@ plus pytest (`pip install -r requirements-dev.txt`):
   nothing physical, a transfer's lot moving source -> target without a stop
   at "Box", and the pure-add / pure-remove apply paths.
 
+- `test_edit_buys.py` and `test_collection_writes.py` also cover docs/archive/UNOWNED_LOTS_PLAN.md: no lot for an
+  unowned card, the buy list's needed / ideas split, Bought with another printing, a new lot's required fields,
+  blank-lot delete (backup first, re-check, no log), and the Clean up checks.
 - `test_pages_smoke.py` — `AppTest` smoke run of every page against a small
   temp database on disk (never the real one): each page through the
   `dashboard.py` router, and each page except Home on its own. Also checks

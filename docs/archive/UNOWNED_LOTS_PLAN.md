@@ -18,7 +18,7 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] **Phase 2** — Buy list: split decks from ideas, Bought with a printing picker.
 - [x] **Phase 3** — Remove the blank lots (preview, backup, confirm).
 - [x] **Phase 4** — Clean up checks and the "sleeved of N" caveat.
-- [ ] **Phase 5** — Docs and wrap-up.
+- [x] **Phase 5** — Docs and wrap-up.
 
 ## The design
 
@@ -287,6 +287,19 @@ and nothing with no location, and Grizzly's tile reads
   in `schema.sql` (comment only, no schema change).
 - Tick the phases, add an "As built" note to each, and move this file to
   `docs/archive/`.
+
+**As built:** 784 tests pass. Most of the new tests the plan named had already been
+written with their phases (Bought with a different printing, the Clean up checks, the
+caveat); the one added here is an end-to-end run in `test_edit_buys.py`: add an
+unowned card, see it on the buy list, record it bought as another printing, and
+confirm no blank lot appears at any step. `README.md` gets a "Cards you don't own"
+section and its starter-lot and prune lines corrected; `PROJECT_STATE.md` gets an
+"Unowned cards" entry; `schema.sql`'s `collection.quantity` comment is updated
+(comment only). The plan moved to `docs/archive/` and code comments now point there.
+The edit-flow entry in `PROJECT_STATE.md` and the archived `EDIT_FLOW_PLAN.md` still
+describe starter lots, as history, and say so. Not updated, as agreed:
+`scripts/migrate.py`, the order CSV import, and the offline harnesses under
+`scripts/` that mention starter lots.
 
 ## Not changing
 

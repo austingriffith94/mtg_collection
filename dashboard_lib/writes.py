@@ -1326,7 +1326,7 @@ def fix_location_mismatch(conn, mismatch, dest=None):
     for lot in mismatch["lots"]:
         if remaining <= 0:
             break
-        now = conn.execute("SELECT location, COALESCE(quantity, 1) FROM collection WHERE collection_id=?",
+        now = conn.execute("SELECT location, COALESCE(NULLIF(quantity, 0), 1) FROM collection WHERE collection_id=?",
                            (lot["collection_id"],)).fetchone()
         if now is None or (now[0] or "").strip() != (lot["location"] or ""):
             continue

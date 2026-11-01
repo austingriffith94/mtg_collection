@@ -200,6 +200,17 @@ def test_blank_lots_names_what_holds_each_one(conn, add_card, raw_lot):
     assert len(queries.orphan_report(conn)["blank_lots"]) == 3
 
 
+def test_a_zero_quantity_counts_like_no_quantity(conn, add_card, raw_lot):
+    """With a Location, no quantity (blank or 0) is one copy; with neither it is no copy."""
+    sid = add_card("Sol Ring")
+    blank, zero, none = raw_lot(sid, 0, "Box"), raw_lot(sid, 0, "Gisa"), raw_lot(sid, None, "Binder")
+    assert [(cid, qty) for cid, qty, _loc, _sid in queries.card_lots(conn, sid)] == [(blank, 1), (zero, 1), (none, 1)]
+    assert [qty for _cid, qty, _loc in queries._lots_for_card(conn, scryfall_id=sid)] == [1, 1, 1]
+    with pytest.raises(ValueError, match="quantity or a Location"):   # it can't lose its Location too
+        writes.update_collection_lot(conn, zero, location=None)
+    assert queries.lots_missing_a_field(conn, "quantity")["card"].tolist() == ["Sol Ring"] * 3
+
+
 def test_the_clean_up_checks_list_lots_missing_one_field(conn, add_card, raw_lot):
     raw_lot(add_card("Counted"), 2, None)
     raw_lot(add_card("Placed"), None, "Gisa")

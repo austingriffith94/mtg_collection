@@ -1107,7 +1107,9 @@ def _lots_for_card(conn, name=None, scryfall_id=None):
     face missed every copy you own, and two printings of one card that
     differ in name punctuation missed each other too.
 
-    `quantity` comes back COALESCEd to 1. collection.quantity is nullable
+    `quantity` comes back COALESCEd to 1, a 0 counting the same as NULL: a
+    lot with no quantity and a Location is one copy (a lot with neither is not
+    a copy at all, see BLANK_LOT_SQL). collection.quantity is nullable
     and NULL means "untracked / bulk" (see schema.sql), not zero — 183 of
     the 1,472 lots in the live database are NULL. The per-row check this
     feeds used to read that as `quantity or 0` and report a card sitting
@@ -1120,7 +1122,7 @@ def _lots_for_card(conn, name=None, scryfall_id=None):
     if oracle_ids:
         placeholders = ",".join("?" for _ in oracle_ids)
         return conn.execute(
-            f"""SELECT col.collection_id, COALESCE(col.quantity, 1), col.location
+            f"""SELECT col.collection_id, COALESCE(NULLIF(col.quantity, 0), 1), col.location
                 FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
                 WHERE c.oracle_id IN ({placeholders})""",
             tuple(oracle_ids),
@@ -1129,7 +1131,7 @@ def _lots_for_card(conn, name=None, scryfall_id=None):
     if not name:
         return []
     return conn.execute(
-        """SELECT col.collection_id, COALESCE(col.quantity, 1), col.location
+        """SELECT col.collection_id, COALESCE(NULLIF(col.quantity, 0), 1), col.location
            FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
            WHERE c.name = ? COLLATE NOCASE""",
         (name,),
@@ -1654,8 +1656,8 @@ def unlocated_lot_summary(conn):
     surfaced in the Workbench header so the number doesn't stay invisible
     until then. Returns {lots, copies, value}."""
     row = conn.execute(
-        """SELECT COUNT(*), COALESCE(SUM(COALESCE(col.quantity, 1)), 0),
-                  COALESCE(SUM(COALESCE(col.quantity, 1) * COALESCE(c.current_price_usd, 0)), 0)
+        """SELECT COUNT(*), COALESCE(SUM(COALESCE(NULLIF(col.quantity, 0), 1)), 0),
+                  COALESCE(SUM(COALESCE(NULLIF(col.quantity, 0), 1) * COALESCE(c.current_price_usd, 0)), 0)
            FROM collection col LEFT JOIN cards c ON c.scryfall_id = col.scryfall_id
            WHERE col.location IS NULL OR TRIM(col.location) = ''"""
     ).fetchone()
@@ -1681,7 +1683,7 @@ def unlocated_lots(conn):
     set_code, quantity (COALESCEd to 1), foil, price (unit), value
     (quantity x price), source, date_acquired."""
     rows = conn.execute(
-        """SELECT col.collection_id, c.name, c.set_code, COALESCE(col.quantity, 1),
+        """SELECT col.collection_id, c.name, c.set_code, COALESCE(NULLIF(col.quantity, 0), 1),
                   col.foil, COALESCE(c.current_price_usd, 0), col.source, col.date_acquired
            FROM collection col LEFT JOIN cards c ON c.scryfall_id = col.scryfall_id
            WHERE col.location IS NULL OR TRIM(col.location) = ''"""
@@ -1737,7 +1739,7 @@ def deck_reconciliation(conn, deck_id=None):
 
     lots = {}     # key -> [{collection_id, quantity, location, card}]
     for cid, k, name, qty, loc in conn.execute(
-        f"""SELECT col.collection_id, {key}, c.name, COALESCE(col.quantity, 1), col.location
+        f"""SELECT col.collection_id, {key}, c.name, COALESCE(NULLIF(col.quantity, 0), 1), col.location
             FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
             WHERE COALESCE(c.is_basic_land, 0) = 0"""
     ):
@@ -2042,7 +2044,7 @@ def deck_sourcing_plan(conn, deck_id):
     if needed:
         marks = ",".join("?" for _ in needed)
         for cid, k, qty, loc in conn.execute(
-            f"""SELECT col.collection_id, {key}, COALESCE(col.quantity, 1), col.location
+            f"""SELECT col.collection_id, {key}, COALESCE(NULLIF(col.quantity, 0), 1), col.location
                 FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
                 WHERE {key} IN ({marks})""",
             tuple(needed),
@@ -2261,7 +2263,7 @@ def deck_dismantle_plan(conn, deck_id, target_deck_id=None):
     value = 0.0
     for cid, k, name, sid, qty, type_line, price in conn.execute(
         f"""SELECT col.collection_id, {key}, c.name, c.scryfall_id,
-                   COALESCE(col.quantity, 1), c.type_line, c.current_price_usd
+                   COALESCE(NULLIF(col.quantity, 0), 1), c.type_line, c.current_price_usd
             FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
             WHERE col.location = ?
             ORDER BY col.collection_id""",
@@ -2286,7 +2288,7 @@ def deck_dismantle_plan(conn, deck_id, target_deck_id=None):
         target_list = mainboard(target[0], nonbasic_only=True)
         held = {}
         for k, qty in conn.execute(
-            f"""SELECT {key}, COALESCE(col.quantity, 1)
+            f"""SELECT {key}, COALESCE(NULLIF(col.quantity, 0), 1)
                 FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
                 WHERE col.location = ?""",
             (target_name,),
@@ -2434,7 +2436,7 @@ def contention_table(conn):
     owned = {
         r[0]: r[1] or 0
         for r in conn.execute(
-            """SELECT c.oracle_id, SUM(COALESCE(col.quantity, 1))
+            """SELECT c.oracle_id, SUM(COALESCE(NULLIF(col.quantity, 0), 1))
                FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
                WHERE c.oracle_id IS NOT NULL AND c.is_basic_land = 0
                GROUP BY c.oracle_id"""
@@ -2507,7 +2509,7 @@ def deck_card_entry(conn, deck_id, scryfall_id):
 def card_lots(conn, scryfall_id):
     """Every collection lot of a card, across printings:
     [(collection_id, quantity, location, scryfall_id), ...] in
-    collection_id order. `quantity` is COALESCEd to 1 (a NULL lot is at
+    collection_id order. `quantity` is COALESCEd to 1 (a NULL or 0 lot is at
     least one copy — see _lots_for_card); `location` is as stored, not
     stripped, so a move can be undone back to exactly where it was."""
     name_row = conn.execute("SELECT name FROM cards WHERE scryfall_id=?", (scryfall_id,)).fetchone()
@@ -2517,7 +2519,7 @@ def card_lots(conn, scryfall_id):
         return []
     marks = ",".join("?" for _ in ids)
     return [tuple(r) for r in conn.execute(
-        f"""SELECT collection_id, COALESCE(quantity, 1), location, scryfall_id
+        f"""SELECT collection_id, COALESCE(NULLIF(quantity, 0), 1), location, scryfall_id
             FROM collection WHERE collection_id IN ({marks}) ORDER BY collection_id""",
         ids,
     ).fetchall()]

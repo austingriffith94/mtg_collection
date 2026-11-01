@@ -1562,6 +1562,24 @@ def _lot_count(path):
     return sqlite3.connect(path).execute("SELECT COUNT(*) FROM collection").fetchone()[0]
 
 
+def test_decks_build_plan_says_how_many_are_still_to_buy(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = _buy_world(smoke_db_path, tmp_path)           # Empty Deck lists a card marked Buy
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "2_Decks.py"), default_timeout=15)
+        at.session_state["current_deck_id"] = 3
+        at.run()
+        assert not at.exception
+        assert [p.proto.text for p in at.get("progress")] == ["0 of 1 non-basics sleeved here · 1 to buy"]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
 def test_clean_up_lists_lots_missing_a_field_with_nothing_to_delete(smoke_db_path, tmp_path, monkeypatch):
     from dashboard_lib import db
 

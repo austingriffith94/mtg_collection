@@ -418,6 +418,20 @@ def get_card_tags_by_type(conn, deck_id, tag_type):
     return result
 
 
+def get_all_card_tags(conn, deck_id, scryfall_id):
+    """{tag_type: [label, ...]} for one card in this deck, every type.
+    What the Board's Undo of a removal carries, since removing the card
+    drops its tags."""
+    result = {}
+    for tag_type, label in conn.execute(
+        """SELECT t.tag_type, t.label FROM card_tags ct JOIN tags t ON t.tag_id = ct.tag_id
+           WHERE ct.deck_id=? AND ct.scryfall_id=? ORDER BY t.tag_type, t.label""",
+        (deck_id, scryfall_id),
+    ):
+        result.setdefault(tag_type, []).append(label)
+    return result
+
+
 def set_card_tags(conn, deck_id, scryfall_id, tag_type, labels):
     """Replace ALL of one card's tags of `tag_type` (within this deck)
     with exactly `labels` (list of strings; pass [] to clear)."""
@@ -794,6 +808,9 @@ def dismiss_printing_mismatch(conn, key):
 
 
 def _delete_deck_card(conn, deck_id, scryfall_id):
+    # Tags are deck-scoped to a listed card, so they go with it. (The Board's
+    # Undo of a removal restores them from what it carried.)
+    conn.execute("DELETE FROM card_tags WHERE deck_id=? AND scryfall_id=?", (deck_id, scryfall_id))
     conn.execute("DELETE FROM deck_cards WHERE deck_id=? AND scryfall_id=?", (deck_id, scryfall_id))
     conn.commit()
 

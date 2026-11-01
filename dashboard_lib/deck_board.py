@@ -455,6 +455,11 @@ def _validate_action(action):
     _validate_route(action)
     if op in UNDO_OPS:
         _positive_int(action.get("qty"), "quantity")
+        tags = action.get("tags", {})
+        if not isinstance(tags, dict) or not all(
+                isinstance(k, str) and isinstance(v, list) and all(isinstance(t, str) for t in v)
+                for k, v in tags.items()):
+            raise ValueError("That undo had a malformed tag list — nothing changed.")
     if op == "from_shortlist":
         _positive_int(action.get("change_id"), "Shortlist entry")
     return op, scryfall_id.strip()
@@ -529,25 +534,29 @@ def _apply_card_action(conn, deck_id, op, sid, action, with_moves):
         if qty <= 1:
             # bulk_update_deck_cards treats 0 as a removal (and logs it);
             # the inverse has to put the card back, which `inc` can't.
+            tags = writes.get_all_card_tags(conn, deck_id, sid)
             moves = set_qty(0)
-            return {"message": f"Removed {name}", "undo": {"op": "set_qty", "id": sid, "qty": qty},
-                    "moves": moves}
+            return {"message": f"Removed {name}",
+                    "undo": {"op": "set_qty", "id": sid, "qty": qty, "tags": tags}, "moves": moves}
         moves = set_qty(qty - 1)
         return {"message": f"{name} → ×{qty - 1}", "undo": {"op": "inc", "id": sid}, "moves": moves}
 
     if op == "remove":
+        tags = writes.get_all_card_tags(conn, deck_id, sid)
         moves = writes.remove_deck_card(conn, deck_id, sid, with_moves=with_moves, dest=dest)
         return {"message": f"Removed {_qty_label(name, qty)}",
-                "undo": {"op": "set_qty", "id": sid, "qty": qty}, "moves": moves}
+                "undo": {"op": "set_qty", "id": sid, "qty": qty, "tags": tags}, "moves": moves}
 
     if op == "to_shortlist":
         # Shortlist first: add_change refuses a duplicate open row, and
         # failing there leaves the card on the board untouched. The idea
         # keeps the old quantity so it can come back as it was.
         change_id = writes.add_change(conn, deck_id, add_scryfall_id=sid, add_name=name, quantity=qty)
+        tags = writes.get_all_card_tags(conn, deck_id, sid)
         moves = writes.remove_deck_card(conn, deck_id, sid, with_moves=with_moves, dest=dest)
         return {"message": f"Moved {_qty_label(name, qty)} to the Shortlist",
-                "undo": {"op": "from_shortlist", "id": sid, "qty": qty, "change_id": change_id},
+                "undo": {"op": "from_shortlist", "id": sid, "qty": qty, "change_id": change_id,
+                         "tags": tags},
                 "moves": moves}
 
     if op == "set_tags":
@@ -568,6 +577,7 @@ def _apply_card_action(conn, deck_id, op, sid, action, with_moves):
         if qty is None:
             # A genuine re-add: add_deck_card logs the applied add row.
             moves = writes.add_deck_card(conn, deck_id, sid, target, with_moves=with_moves)
+            _restore_tags(conn, deck_id, sid, action)
             return {"message": f"Put back {_qty_label(name, target)}", "undo": {"op": "remove", "id": sid},
                     "moves": moves}
         moves = set_qty(target)
@@ -584,8 +594,16 @@ def _apply_card_action(conn, deck_id, op, sid, action, with_moves):
             and change["status"] in writes.OPEN_CHANGE_STATUSES):
         writes.drop_change(conn, change_id)
     moves = writes.add_deck_card(conn, deck_id, sid, target, with_moves=with_moves) if qty is None else []
+    if qty is None:
+        _restore_tags(conn, deck_id, sid, action)
     return {"message": f"Moved {_qty_label(name, target)} back from the Shortlist",
             "undo": {"op": "to_shortlist", "id": sid}, "moves": moves}
+
+
+def _restore_tags(conn, deck_id, sid, action):
+    """Give an undone removal its tags back (removing a card drops them)."""
+    for tag_type, labels in (action.get("tags") or {}).items():
+        writes.set_card_tags(conn, deck_id, sid, tag_type, labels)
 
 
 def _route_of(action, change):

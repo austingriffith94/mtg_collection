@@ -156,7 +156,7 @@ def test_dec_from_one_removes_logs_and_undo_puts_it_back(conn, deck, ring):
     result = _act(conn, deck, op="dec", id=ring)
     assert _qty(conn, deck, ring) is None
     assert result["message"] == "Removed Sol Ring"
-    assert result["undo"] == {"op": "set_qty", "id": ring, "qty": 1}
+    assert result["undo"] == {"op": "set_qty", "id": ring, "qty": 1, "tags": {}}
     assert _history(conn, deck) == [("applied", None, ring, 1)]
 
     deck_board.apply_board_action(conn, deck, result["undo"])
@@ -169,13 +169,38 @@ def test_remove_logs_old_quantity_and_undo_restores_it_with_tags(conn, deck, rin
     writes.set_card_tags(conn, deck, ring, "strategy", ["Ramp"])
     result = _act(conn, deck, op="remove", id=ring)
     assert _qty(conn, deck, ring) is None
+    assert _tags(conn, deck, ring) == []  # leaving the list drops the tags...
     assert result["message"] == "Removed Sol Ring ×2"
     assert _history(conn, deck) == [("applied", None, ring, 2)]
 
     redo = deck_board.apply_board_action(conn, deck, result["undo"])
     assert _qty(conn, deck, ring) == 2
-    assert _tags(conn, deck, ring) == ["Ramp"]  # card_tags outlive the deck_cards row
+    assert _tags(conn, deck, ring) == ["Ramp"]  # ...and Undo carries them back
     assert redo["undo"] == {"op": "remove", "id": ring}
+
+
+def test_dec_to_zero_and_to_shortlist_undo_restore_tags_of_every_type(conn, deck, ring):
+    writes.set_card_tags(conn, deck, ring, "strategy", ["Ramp"])
+    writes.set_card_tags(conn, deck, ring, "function", ["Mana Rock"])
+    conn.execute("UPDATE deck_cards SET quantity=1 WHERE scryfall_id=?", (ring,))
+    conn.commit()
+    result = _act(conn, deck, op="dec", id=ring)
+    assert writes.get_all_card_tags(conn, deck, ring) == {}
+    deck_board.apply_board_action(conn, deck, result["undo"])
+    assert writes.get_all_card_tags(conn, deck, ring) == {"strategy": ["Ramp"], "function": ["Mana Rock"]}
+
+    result = _act(conn, deck, op="to_shortlist", id=ring)
+    assert writes.get_all_card_tags(conn, deck, ring) == {}
+    deck_board.apply_board_action(conn, deck, result["undo"])
+    assert writes.get_all_card_tags(conn, deck, ring) == {"strategy": ["Ramp"], "function": ["Mana Rock"]}
+
+
+def test_undo_with_a_malformed_tag_payload_is_refused(conn, deck, ring):
+    result = _act(conn, deck, op="remove", id=ring)
+    bad = {**result["undo"], "tags": {"strategy": "Ramp"}}
+    with pytest.raises(ValueError, match="malformed tag list"):
+        deck_board.apply_board_action(conn, deck, bad)
+    assert _qty(conn, deck, ring) is None
 
 
 def test_to_shortlist_removes_and_files_an_idea_and_undo_reverses_both(conn, deck, ring):

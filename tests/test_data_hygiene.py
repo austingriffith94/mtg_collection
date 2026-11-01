@@ -220,3 +220,15 @@ def test_card_database_page_lists_unlinked_names_and_cleans_up(tmp_path, monkeyp
     finally:
         st.cache_resource.clear()
         st.cache_data.clear()
+
+
+def test_removing_a_card_from_a_deck_drops_its_tags_but_not_other_decks(conn, add_card):
+    a = add_card("A")
+    _make_deck(conn)
+    conn.execute("INSERT INTO decks (name) VALUES ('Other')")
+    for deck_id in (1, 2):
+        conn.execute("INSERT INTO deck_cards (deck_id, scryfall_id, quantity) VALUES (?, ?, 1)", (deck_id, a))
+        writes.set_card_tags(conn, deck_id, a, "strategy", ["Ramp"])
+    writes.remove_deck_card(conn, 1, a)
+    assert [r[0] for r in conn.execute("SELECT deck_id FROM card_tags")] == [2]
+    assert queries.orphan_report(conn)["stale_card_tags"].empty

@@ -153,7 +153,7 @@ def test_move_lot_whole_lot_keeps_id(conn, add_card):
 
 # --- Deck flags (Workbench): untagged cards + flattened location gaps ---
 
-def test_untagged_lists_only_cards_with_no_tag_in_that_deck(conn, add_card):
+def test_untagged_lists_only_cards_with_no_tag_of_that_type_in_that_deck(conn, add_card):
     a, b = _deck(conn, "Raktres"), _deck(conn, "Gisa")
     sol, crypt = add_card("Sol Ring"), add_card("Blood Crypt")
     swamp = _basic(conn, add_card)
@@ -161,10 +161,13 @@ def test_untagged_lists_only_cards_with_no_tag_in_that_deck(conn, add_card):
         _main(conn, d, sol)
     _main(conn, a, crypt)
     _main(conn, a, swamp)
-    writes.set_card_tags(conn, a, sol, "rule0", ["fast mana"])  # any tag type counts
+    writes.set_card_tags(conn, a, sol, "strategy", ["Ramp"])
+    writes.set_card_tags(conn, a, crypt, "function", ["Fixing"])  # another layer doesn't count
     got = [(r["deck_name"], r["card"]) for r in q.untagged_deck_cards(conn)]
     # Tags are deck-scoped: Sol Ring tagged in Raktres is still untagged in Gisa.
     assert got == [("Gisa", "Sol Ring"), ("Raktres", "Blood Crypt")]
+    in_function = [(r["deck_name"], r["card"]) for r in q.untagged_deck_cards(conn, "function")]
+    assert in_function == [("Gisa", "Sol Ring"), ("Raktres", "Sol Ring")]
 
 
 def test_location_mismatches_say_where_the_copies_are(conn, add_card):

@@ -15,8 +15,9 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
   Wipe / Lord merges, 19 dead labels deleted, Removal / Interaction re-sorted
   deck by deck; 731 tags remain).
 - [x] **Phase 1a** — Tag order: primary and secondary tags (done 2026-11-01).
-- [ ] **Phase 1b** — Layer vocabularies and definitions (the model's allowed
-  list), and the one-time copy into `function`.
+- [x] **Phase 1b** — Layer vocabularies and definitions (the model's allowed
+  list), and the one-time copy into `function` (done 2026-11-01; 343 tags
+  copied to the live database).
 - [ ] **Phase 2** — Proposal engine: prompt, schema, guard, no database writes.
 - [ ] **Phase 3** — Backtest against your existing tags, before any UI.
 - [ ] **Phase 4** — Review panel in the Deck Editor, with Apply.
@@ -347,6 +348,22 @@ primary, and reordering in the tag box saves and moves it.
 
 The vocabulary editor waits for Phase 4, so no UI is built before the backtest
 shows the idea works. Definitions can be edited in the constant until then.
+
+**As built:** the menu and the list of copied labels are in
+`dashboard_lib/tag_vocab.py`. Reads are in `queries.py`, not `writes.py`, so the
+Advisor can use them without importing the write layer: `active_tag_vocab`, and
+`deck_tag_vocabulary`, whose `defined_only=True` is the list Phase 2 sends to the
+model. `writes.py` has `set_tag_vocab_label` and `delete_tag_vocab_label`.
+The Workbench's untagged list and its section count follow the Tag type picker,
+which now stays visible when the list is empty.
+
+The copy is `scripts/copy_function_tags.py`, which previews by default and copies
+with `--apply`. It was run on the live database on 2026-11-01: 343 tags (Card Adv
+110, Removal 92, Ramp 59, Protection 36, Interaction 27, Wipe 19), backup
+`backups/mtg_collection_manual_2026-11-01_172144.db`. The "fewer than 335"
+estimate was out of date, since labels had grown after that snapshot. Every
+count matched the live `strategy` labels. A later `strategy` tag is not mirrored
+automatically; re-running the script picks up new ones.
 
 ### Phase 2 — Proposal engine
 

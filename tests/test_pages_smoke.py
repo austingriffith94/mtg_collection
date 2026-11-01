@@ -322,6 +322,39 @@ def test_decks_page_stacks_view(smoke_db_path, tmp_path, monkeypatch):
         st.cache_data.clear()
 
 
+def test_workbench_untagged_list_follows_the_tag_type(smoke_db_path, tmp_path, monkeypatch):
+    # docs/TAG_SUGGESTIONS_PLAN.md Phase 1b: a card fully tagged in one layer
+    # leaves that layer's list only, and an empty list keeps the type picker.
+    from dashboard_lib import db, writes
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    conn = sqlite3.connect(path)
+    for deck_id, sid in conn.execute(
+            """SELECT dc.deck_id, dc.scryfall_id FROM deck_cards dc JOIN cards c USING (scryfall_id)
+               WHERE COALESCE(c.is_basic_land, 0) = 0""").fetchall():
+        writes.set_card_tags(conn, deck_id, sid, "function", ["Ramp"])
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "8_Workbench.py"), default_timeout=15)
+        at.run()
+        at.button_group(key="workbench_view").set_value("tags").run()
+        assert not at.exception
+        before = at.subheader[0].value
+        at.selectbox(key="workbench_tags_type").set_value("function").run()
+        assert not at.exception
+        assert at.subheader[0].value == "🏷️ Untagged cards (0)" != before
+        assert any("carries a function tag" in c.value for c in at.caption)
+        at.selectbox(key="workbench_tags_type").set_value("strategy").run()
+        assert at.subheader[0].value == before
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
 def test_decks_page_groups_a_two_tag_card_under_its_primary(smoke_db_path, tmp_path, monkeypatch):
     # docs/TAG_SUGGESTIONS_PLAN.md Phase 1a: the whole "Zebra,Apple" text must
     # not become a group of its own.

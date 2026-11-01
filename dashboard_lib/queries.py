@@ -9,6 +9,8 @@ import os
 import sqlite3
 import pandas as pd
 
+from . import tag_vocab
+
 # Shared column set for anything that joins in a `cards` row. Kept as one
 # constant so every card-bearing query (collection, deck_cards, shortlist)
 # returns the same shape and can flow through the same rendering helpers.
@@ -322,6 +324,19 @@ _SCHEMA_TABLE_UPGRADES = [
                reason          TEXT NOT NULL,
                change_id       INTEGER,
                moved_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+           )""",
+        None,
+    ),
+    # docs/TAG_SUGGESTIONS_PLAN.md Phase 1b. Nothing to seed: a deck's
+    # vocabulary already includes the labels on its cards.
+    (
+        "deck_tag_vocab",
+        """CREATE TABLE deck_tag_vocab (
+               deck_id     INTEGER NOT NULL REFERENCES decks(deck_id),
+               tag_type    TEXT NOT NULL,
+               label       TEXT NOT NULL,
+               definition  TEXT,
+               PRIMARY KEY (deck_id, tag_type, label)
            )""",
         None,
     ),
@@ -1803,9 +1818,10 @@ def deck_reconciliation(conn, deck_id=None):
 # Deck flags (Workbench) — two cross-deck checklists: mainboard cards with
 # no tag at all, and every list-vs-physical gap flattened into one table.
 # ------------------------------------------------------------------
-def untagged_deck_cards(conn):
-    """Non-basic mainboard cards carrying no card_tags row of ANY tag_type
-    in their deck. Matched on (deck_id, scryfall_id), the same key the Deck
+def untagged_deck_cards(conn, tag_type=tag_vocab.STRATEGY_LAYER):
+    """Non-basic mainboard cards carrying no tag of `tag_type` in their deck,
+    so a tag in another layer doesn't take a card off the list.
+    Matched on (deck_id, scryfall_id), the same key the Deck
     Editor's Card Tags tab reads, so a card counted here also shows blank
     there. Returns [{deck_id, deck_name, build_state, scryfall_id, card,
     type_line}], ordered by deck then card name."""
@@ -1816,7 +1832,10 @@ def untagged_deck_cards(conn):
            JOIN cards c ON c.scryfall_id = dc.scryfall_id
            WHERE COALESCE(c.is_basic_land, 0) = 0
              AND NOT EXISTS (SELECT 1 FROM card_tags ct
-                             WHERE ct.deck_id = dc.deck_id AND ct.scryfall_id = dc.scryfall_id)"""
+                             JOIN tags t ON t.tag_id = ct.tag_id
+                             WHERE ct.deck_id = dc.deck_id AND ct.scryfall_id = dc.scryfall_id
+                               AND t.tag_type = ?)""",
+        (tag_type,),
     ).fetchall()
     out = [{"deck_id": r[0], "deck_name": r[1], "build_state": r[2], "scryfall_id": r[3],
             "card": r[4], "type_line": r[5] or ""} for r in rows]
@@ -1930,6 +1949,55 @@ def deck_tag_labels(conn, tag_type=None):
     for did, label in conn.execute(sql, (tag_type,) if tag_type else ()):
         out.setdefault(did, []).append(label)
     return {d: sorted(ls, key=str.casefold) for d, ls in out.items()}
+
+
+def active_tag_vocab(conn, deck_id, tag_type):
+    """{label: definition or None} — the deck_tag_vocab rows for one deck and
+    tag type: its active labels, without the ones that are only on cards."""
+    return dict(conn.execute(
+        "SELECT label, definition FROM deck_tag_vocab WHERE deck_id=? AND tag_type=?",
+        (deck_id, tag_type)).fetchall())
+
+
+def deck_tag_vocabulary(conn, deck_id, tag_type, defined_only=False):
+    """[{"label", "definition"}, ...] — what the Advisor's model may use for
+    this deck and tag type, sorted by label. It is computed on read, from the
+    active labels plus the labels on the deck's cards right now, because the
+    Board and Workbench let a new label be typed at any time and a stored copy
+    would go stale. A saved definition wins, then the tag_vocab default.
+    `defined_only` leaves out labels with neither, which are the ones not
+    offered to the model."""
+    active = active_tag_vocab(conn, deck_id, tag_type)
+    defaults = tag_vocab.default_definitions(tag_type)
+    saved = {label.casefold(): definition for label, definition in active.items()}
+    # Keyed without case so "ramp" on a card and an active "Ramp" are one entry.
+    labels = {label.casefold(): label for label in deck_tag_labels(conn, tag_type).get(deck_id, [])}
+    labels.update({label.casefold(): label for label in active})
+    vocabulary = [{"label": label, "definition": saved.get(key) or defaults.get(key)}
+                  for key, label in sorted(labels.items())]
+    return [v for v in vocabulary if v["definition"]] if defined_only else vocabulary
+
+
+def pending_function_tag_copy(conn):
+    """[{deck_id, scryfall_id, label}, ...] — the tags the one-time copy into
+    the `function` layer would still add, primary first within a card. Only
+    cards on the deck's list count, and a tag already copied is left out, so
+    this is empty once the copy has run."""
+    marks = ",".join("?" * len(tag_vocab.COPIED_FUNCTION_LABELS))
+    rows = conn.execute(
+        f"""SELECT ct.deck_id, ct.scryfall_id, t.label
+            FROM card_tags ct
+            JOIN tags t ON t.tag_id = ct.tag_id
+            JOIN deck_cards dc ON dc.deck_id = ct.deck_id AND dc.scryfall_id = ct.scryfall_id
+            WHERE t.tag_type = ? AND t.label IN ({marks})
+              AND NOT EXISTS (SELECT 1 FROM card_tags f
+                              JOIN tags ft ON ft.tag_id = f.tag_id
+                              WHERE f.deck_id = ct.deck_id AND f.scryfall_id = ct.scryfall_id
+                                AND ft.tag_type = ? AND ft.label = t.label)
+            ORDER BY ct.deck_id, ct.scryfall_id, ct.position, t.label""",
+        (tag_vocab.STRATEGY_LAYER, *tag_vocab.COPIED_FUNCTION_LABELS, tag_vocab.FUNCTION_LAYER),
+    ).fetchall()
+    return [{"deck_id": r[0], "scryfall_id": r[1], "label": r[2]} for r in rows]
 
 
 # ------------------------------------------------------------------

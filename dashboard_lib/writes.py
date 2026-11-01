@@ -21,6 +21,7 @@ import sqlite3
 from . import backup
 from . import formatting as fmt
 from . import queries as q
+from . import tag_vocab
 
 logger = logging.getLogger(__name__)
 
@@ -484,6 +485,64 @@ def bulk_set_card_tags(conn, deck_id, tag_type, labels_by_scryfall_id):
 
 
 # ------------------------------------------------------------------
+# Tag vocabularies (docs/TAG_SUGGESTIONS_PLAN.md) — a deck's active labels in
+# a tag type and their definitions. Reads are queries.active_tag_vocab and
+# queries.deck_tag_vocabulary.
+# ------------------------------------------------------------------
+def set_tag_vocab_label(conn, deck_id, tag_type, label, definition=None):
+    """Activate `label` for this deck and tag type, with `definition` (blank
+    means use the default, if the label has one). A label already active in
+    another case is replaced rather than kept beside this one."""
+    label = (label or "").strip()
+    if not label:
+        return
+    conn.execute(
+        "DELETE FROM deck_tag_vocab WHERE deck_id=? AND tag_type=? AND label=? COLLATE NOCASE",
+        (deck_id, tag_type, label),
+    )
+    conn.execute(
+        "INSERT INTO deck_tag_vocab (deck_id, tag_type, label, definition) VALUES (?,?,?,?)",
+        (deck_id, tag_type, label, (definition or "").strip() or None),
+    )
+    conn.commit()
+
+
+def delete_tag_vocab_label(conn, deck_id, tag_type, label):
+    """Deactivate a label. Card tags are not touched, so a label still on a
+    card stays in the deck's vocabulary, now without a saved definition."""
+    conn.execute(
+        "DELETE FROM deck_tag_vocab WHERE deck_id=? AND tag_type=? AND label=? COLLATE NOCASE",
+        (deck_id, tag_type, (label or "").strip()),
+    )
+    conn.commit()
+
+
+def copy_strategy_tags_to_function(conn):
+    """The one-time copy: every queries.pending_function_tag_copy() row gets
+    the same label in the `function` layer. `strategy` is not touched and a
+    copied tag is never added twice, so a re-run adds only what is new. A card
+    with no function tag takes its earliest copied label as the primary; one
+    that already has function tags keeps its primary. All or nothing, after a
+    backup. Returns (backup_path, tags_copied)."""
+    rows = q.pending_function_tag_copy(conn)
+    if not rows:
+        return None, 0
+    backup_path = backup.required_snapshot(conn)
+    with conn:
+        for row in rows:
+            tag_id = get_or_create_tag(conn, tag_vocab.FUNCTION_LAYER, row["label"])
+            conn.execute(
+                """INSERT INTO card_tags (deck_id, scryfall_id, tag_id, position)
+                   SELECT :deck_id, :scryfall_id, :tag_id, COALESCE(MAX(ct.position) + 1, 0)
+                   FROM card_tags ct JOIN tags t ON t.tag_id = ct.tag_id
+                   WHERE ct.deck_id = :deck_id AND ct.scryfall_id = :scryfall_id AND t.tag_type = :tag_type""",
+                {**row, "tag_id": tag_id, "tag_type": tag_vocab.FUNCTION_LAYER},
+            )
+    logger.info("Copied %d strategy tag(s) into %s", len(rows), tag_vocab.FUNCTION_LAYER)
+    return backup_path, len(rows)
+
+
+# ------------------------------------------------------------------
 # Deck metadata (name + everything else on the decks row)
 # ------------------------------------------------------------------
 DECK_META_FIELDS = [
@@ -624,7 +683,7 @@ def rename_deck(conn, deck_id, new_name, update_collection_locations=True):
 # separately (detached, not deleted — see delete_deck) since a game
 # usually still has OTHER decks' results worth keeping.
 _DECK_SCOPED_TABLES = (
-    "deck_cards", "deck_changes", "card_tags",
+    "deck_cards", "deck_changes", "card_tags", "deck_tag_vocab",
     "deck_themes", "deck_win_conditions", "deck_strengths", "deck_weaknesses",
     # The two Commander Spellbook cache tables (deck_combos /
     # deck_combo_sync) carry a deck_id FK too, so they have to be cleared

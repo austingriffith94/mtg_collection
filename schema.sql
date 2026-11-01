@@ -387,6 +387,17 @@ CREATE TABLE card_tags (
     PRIMARY KEY (deck_id, scryfall_id, tag_id)
 );
 
+-- A deck's active labels in a tag type, and any definitions saved for them.
+-- The full vocabulary is these plus the labels on the deck's cards, computed
+-- on read (queries.deck_tag_vocabulary).
+CREATE TABLE deck_tag_vocab (
+    deck_id     INTEGER NOT NULL REFERENCES decks(deck_id),
+    tag_type    TEXT NOT NULL,
+    label       TEXT NOT NULL,
+    definition  TEXT,
+    PRIMARY KEY (deck_id, tag_type, label)
+);
+
 -- ------------------------------------------------------------
 -- Static reference lists (name-keyed, printing-agnostic — these
 -- describe the card itself, not a specific owned printing).

@@ -25,6 +25,8 @@ plus pytest (`pip install -r requirements-dev.txt`):
 - `test_contention.py` — contention table, buy list and Card Lookup (Phase 3).
 - `test_tag_order.py` — primary and secondary tags: `card_tags.position`
   surviving every read, compare and rewrite of a card's tags.
+- `test_tag_vocab.py` — tag vocabularies computed on read, definitions, and
+  the one-time copy into the `function` layer.
 - `test_reconcile.py` — reconciliation (Phase 4): unlocated lots, the
   per-deck list-vs-physical diff in both directions, build status, and
   `move_lot()` splitting a lot when only some copies move.

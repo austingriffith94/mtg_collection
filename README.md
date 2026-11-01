@@ -68,6 +68,7 @@ mtg_dashboard/
     ├── export_moxfield.py            # deck → Moxfield paste format (CLI; dashboard has this too)
     ├── export_moxfield_collection.py  # collection → Moxfield CSV import format (CLI; dashboard has this too)
     ├── refresh_card_data.py          # refresh Scryfall fields for existing cards (CLI; dashboard has this too)
+    ├── copy_function_tags.py         # copy functional labels from strategy tags into the function tag type
     ├── sync_images.py                 # local image cache: download + prune
     ├── move_image_cache.py            # one-time move of an old image_cache/ into static/ (run.py does it for you)
     └── _test_migrate_offline.py      # dev-only: validates logic with fake
@@ -110,6 +111,7 @@ tightly:
 | `export_moxfield.py` | — | — | — |
 | `export_moxfield_collection.py` | — | — | — |
 | `refresh_card_data.py` | — | ✅ (via `scryfall_lookup.py`) | — |
+| `copy_function_tags.py` | ✅ | — | — |
 | `dashboard.py` + `pages/*.py` | ✅ | optional* | ✅ |
 
 `pandas` is used by migration and the dashboard, but not image sync or

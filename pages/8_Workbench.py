@@ -130,7 +130,11 @@ contention = q.contention_table(conn)
 buy = q.buy_list(conn, contention=contention)
 recon = q.deck_reconciliation(conn)
 mismatches = q.location_mismatches(conn, recon)
-untagged = q.untagged_deck_cards(conn)
+# Untagged means "in the layer being worked on", and the section's count in
+# the selector below has to agree with it, so the picker's value is read here.
+tag_types = sorted(set(writes.list_tag_types(conn)) | {"strategy"})
+untagged_type = st.session_state.get("workbench_tags_type", "strategy")
+untagged = q.untagged_deck_cards(conn, untagged_type)
 
 # ------------------------------------------------------------------
 # Section selector. Values are stable keys and the counts live in
@@ -801,25 +805,26 @@ def _render_printing_check():
 def _render_tags():
     st.subheader(
         f"🏷️ Untagged cards ({len(untagged)})",
-        help="Non-basic mainboard cards with no card tag of any type in that deck.",
+        help="Non-basic mainboard cards with no tag of the chosen type in that deck.",
     )
+    t1, t2 = st.columns([3, 1])
+    # One tag type is the norm; the picker only appears once there are more.
+    # It comes before the early return, or an empty list would hide the way
+    # back to another type.
+    if len(tag_types) > 1:
+        t2.selectbox("Tag type", tag_types, index=tag_types.index("strategy"), key="workbench_tags_type")
+    tag_type = untagged_type
     if not untagged:
-        st.caption("✅ Every mainboard card carries at least one tag.")
+        st.caption(f"✅ Every mainboard card carries a {tag_type} tag.")
         return
     per_deck = {}
     for r in untagged:
         per_deck.setdefault((r["deck_id"], r["deck_name"]), []).append(r)
     # Most untagged first: that's where the work is.
     decks = sorted(per_deck, key=lambda k: (-len(per_deck[k]), k[1].casefold()))
-    tag_types = sorted(set(writes.list_tag_types(conn)) | {"strategy"})
 
-    t1, t2 = st.columns([3, 1])
     deck_key = t1.selectbox("Deck", decks, format_func=lambda k: f"{k[1]} — {len(per_deck[k])} untagged",
                             key="workbench_tags_deck")
-    # One tag type is the norm; the picker only appears once there are more.
-    tag_type = (t2.selectbox("Tag type", tag_types, index=tag_types.index("strategy"),
-                             key="workbench_tags_type")
-                if len(tag_types) > 1 else "strategy")
     deck_id, deck_name = deck_key
     options = q.deck_tag_labels(conn, tag_type).get(deck_id, [])
     st.caption((f"{len(options)} {tag_type} tag(s) in use in {deck_name} — pick from the list, "

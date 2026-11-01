@@ -15,6 +15,11 @@ Items with violations are kept but marked unverified; they are never
 dropped, so the UI can show them collapsed under a badge. `retry_prompt`
 turns the violations into the single corrective follow-up message.
 
+Warnings are a separate list: true facts about what a swap would do (breaks
+a combo, passes the bracket's Game Changer limit, adds a combo to a
+low-bracket deck). The suggestion can still be right, so a warning neither
+unverifies an item nor triggers the retry.
+
 `check_chat_answer` is the chat-mode (Phase 3) counterpart: no cut/add
 structure, no pre-filtered pool — name, quote and roles are all checked
 against the whole database via context.lookup_card_text instead of one
@@ -25,7 +30,7 @@ our miss, not the model's.
 import re
 from dataclasses import dataclass, field
 
-from .context import front_face, lookup_card_text, mechanical_roles
+from .context import GAME_CHANGER_LIMITS, front_face, lookup_card_text, mechanical_roles
 
 
 def _norm(text):
@@ -40,6 +45,7 @@ class CheckedItem:
     kind: str                     # "cut" | "add"
     data: dict                    # the model's raw item
     violations: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)
 
     @property
     def verified(self):
@@ -91,6 +97,42 @@ def _check_item(kind, item, primary, deck):
     return v
 
 
+def _combo_text(combo):
+    result = ", ".join(combo["produces"][:2])
+    return " + ".join(combo["uses"]) + (f" ({result})" if result else "")
+
+
+def _add_warnings(ctx, items):
+    """Attach warnings to checked items: combos a leaving card breaks, combos
+    an added card brings into a low-bracket deck, and Game Changers past the
+    bracket's limit. The Game Changer count runs across the adds in order,
+    because several suggestions can only pass the limit together."""
+    deck, cands = _index(ctx.cards), _index(ctx.candidates)
+    bracket = ctx.stats.get("bracket")
+    limit = GAME_CHANGER_LIMITS.get(bracket)
+    game_changers = ctx.stats.get("game_changers", 0)
+    for item in items:
+        leaving = item.data.get("card" if item.kind == "cut" else "replaces")
+        for combo in ctx.included_combos():
+            if front_face(leaving) in combo["uses_keys"]:
+                item.warnings.append(f"Breaks combo: {_combo_text(combo)}")
+        if item.kind != "add":
+            continue
+        added = cands.get(front_face(item.data.get("card")))
+        if added is None:
+            continue
+        if ctx.low_combo_bracket:
+            for combo in added.completes_combos:
+                item.warnings.append(f"Completes a combo in a bracket {bracket} deck: {_combo_text(combo)}")
+        rep = deck.get(front_face(leaving))
+        change = added.game_changer - bool(rep and rep.game_changer)
+        game_changers += change
+        # A one-for-one swap can't make an over-limit deck any worse.
+        if change > 0 and limit is not None and game_changers > limit:
+            item.warnings.append(f"{added.name} is a Game Changer: this makes {game_changers}, "
+                                 f"and bracket {bracket} allows {limit}")
+
+
 def check_analysis(parsed, ctx):
     """Validate a parsed analysis dict against `ctx`; never raises on bad
     model output (a malformed section just contributes no items)."""
@@ -104,6 +146,7 @@ def check_analysis(parsed, ctx):
         for raw in parsed.get(key) or []:
             if isinstance(raw, dict):
                 items.append(CheckedItem(kind, raw, _check_item(kind, raw, pool, deck)))
+    _add_warnings(ctx, items)
     return CheckedAnalysis(
         summary=str(parsed.get("summary") or ""),
         strengths=[str(s) for s in parsed.get("strengths") or []],

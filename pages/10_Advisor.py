@@ -50,6 +50,8 @@ def show_analysis_item(i, conn=None, deck_id=None, skill=None, key=None):
     st.caption(f"“{d.get('evidence_quote')}” · roles: {', '.join(d.get('roles') or []) or 'none'}")
     for v in i.violations:
         st.warning(v)
+    for w in i.warnings:
+        st.info(w, icon="⚠️")
     # Only a verified add can become an idea; a cut has nothing to add (it
     # shows up as the "Replaces" of the add it goes with).
     if i.verified and i.kind != "cut" and conn is not None and st.button(
@@ -81,6 +83,10 @@ def run_analysis_tab(conn, decks, provider):
     c3.metric("Avg CMC (nonland)", s["avg_cmc"])
     c4.metric("Candidates offered", len(ctx.candidates))
     st.caption("Role counts come from oracle-text heuristics, so treat them as a cross-check, not gospel.")
+    has_notes = any(ctx.goals.values())
+    st.caption(f"The model also sees {'your deck notes' if has_notes else 'no deck notes (none recorded)'} "
+               f"and {len(ctx.included_combos())} combo(s) in the deck. Candidates mix cards that fit this "
+               "deck with cards that fill a role.")
     st.json({k: s[k] for k in ("curve", "pips", "roles")}, expanded=False)
 
     if st.button("Analyse deck", type="primary"):

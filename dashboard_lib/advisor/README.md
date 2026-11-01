@@ -44,9 +44,9 @@ Gated off per provider: the page only offers the Chat tab when
 
 | File | Role |
 |---|---|
-| `context.py` | `build_deck_context`: deck cards, stats (curve, pips, role tallies), candidate pool. `mechanical_roles` = oracle-text heuristics for ramp/draw/removal/wipe/tutor/counter. `lookup_card_text`: front-face name resolution shared by `tools.get_card` and `guard.check_chat_answer`. |
+| `context.py` | `build_deck_context`: deck cards, stats (curve, pips, role tallies), the user's deck notes, cached combos, candidate pool. `mechanical_roles` = oracle-text heuristics for ramp/draw/removal/wipe/tutor/counter. `deck_profile`: words that mark a deck out from its pool, for ranking candidates. `lookup_card_text`: front-face name resolution shared by `tools.get_card` and `guard.check_chat_answer`. |
 | `schemas.py` | `analysis_schema(ctx)`: enum-constrained to one deck's pool. `chat_answer_schema()`: no enum, for the chat restate step. Both written in Gemini's response-schema dialect (uppercase types); `providers._gemini_schema_to_json_schema` translates for Claude. |
-| `guard.py` | `check_analysis`: name (front-face match)/quote (oracle-text substring)/role checks for analysis mode, `retry_prompt` for the corrective follow-up. `check_chat_answer`: the same name/quote/role checks for chat mentions, against the whole database instead of one deck's pool. |
+| `guard.py` | `check_analysis`: name (front-face match)/quote (oracle-text substring)/role checks for analysis mode, plus swap warnings (combo broken, Game Changer limit, combo added to a low bracket), `retry_prompt` for the corrective follow-up. `check_chat_answer`: the same name/quote/role checks for chat mentions, against the whole database instead of one deck's pool. |
 | `tools.py` | Chat-mode tools (`get_card`, `search_cards`, `list_decks`, `get_deck`) and `dispatch`, which never raises — a bad call becomes an `{"error": ...}` result the model sees. `TOOL_SPECS` is the Gemini-dialect function-declaration list. |
 | `providers.py` | `GeminiProvider` (REST, `x-goog-api-key` header, backoff on 429/5xx, function calling). `AnthropicProvider` (Phase 5; Messages API, forces a "respond" tool for schema output since Claude has no native schema param, caches the system prompt and tool definitions). `FakeProvider` for tests. |
 | `analysis.py` | Analysis mode: prompt building and the validate/retry loop. |
@@ -88,6 +88,24 @@ relying on cost comparisons, since both change.
 - **Candidate pool** = owned, commander-legal, colour-identity-legal cards not
   already in the deck, free copies first, capped at 60 (the cap keeps the enum
   and prompt small). Candidates sleeved in another deck are flagged, not hidden.
+  The 60 are chosen by `_select_candidates`: up to 10 cards one piece short of a
+  combo (none in brackets 1–2), then turns between best deck fit and the role
+  order. Fit is `deck_profile`, a word-frequency comparison in plain Python: a
+  relevance hint with no card knowledge, so it can miss a card or promote one
+  that only shares wording.
+- **Violations vs warnings.** A violation means a fact in the answer is wrong:
+  it unverifies the item and triggers the retry. A warning is a true fact about
+  what the swap does (breaks a combo, passes the Game Changer limit); the
+  suggestion can still be right, so it does neither.
+- **Bracket limits are advisory.** `decks.bracket` is the user's own score, and
+  `GAME_CHANGER_LIMITS` and `LOW_COMBO_BRACKETS` in `context.py` follow the
+  published bracket guidance as of 2026-11, taken from secondary guides. Change
+  them there if the rules or your table differ.
+- **Past rejections are deliberately not fed back.** Dropped Shortlist ideas stay
+  out of the prompt so the advice doesn't just reinforce old decisions; a card
+  rejected once can become right later.
+- **Deck notes are the user's intent, not verified facts,** and the prompt labels
+  them that way. Chat mode doesn't see them yet; only analysis mode does.
 - **Roles are heuristics.** A disagreement means "the card's text does not
   match the claimed role by our regexes", which can occasionally be our miss.
   Tune the regexes in `context.py`, not the guard.

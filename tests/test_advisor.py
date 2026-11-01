@@ -96,6 +96,115 @@ def test_candidate_pool_filters_and_ranks(deck):
     assert not sleeved.available and sleeved.locations == ["Other"]
 
 
+def _combo(conn, combo_id, category, uses, missing="", deck_id=1, popularity=10, tag="Spicy"):
+    conn.execute("INSERT INTO deck_combos (deck_id, combo_id, category, uses, missing, produces, popularity,"
+                 " bracket_tag, commander_legal) VALUES (?,?,?,?,?,'Infinite mana',?,?,1)",
+                 (deck_id, combo_id, category, "\n".join(uses), missing, popularity, tag))
+    conn.commit()
+
+
+def _pool_card(conn, add_card, name, text, type_line="Creature", ci="B", cmc=3):
+    sid = add_card(name)
+    conn.execute("UPDATE cards SET oracle_text=?, type_line=?, color_identity=?, cmc=?, commander_legal=1,"
+                 " is_basic_land=0 WHERE scryfall_id=?", (text, type_line, ci, cmc, sid))
+    conn.execute("INSERT INTO collection (scryfall_id, quantity, location) VALUES (?,1,'Box')", (sid,))
+    conn.commit()
+    return sid
+
+
+def test_deck_goals_and_combos_are_loaded_and_reach_the_prompt(conn, deck):
+    conn.execute("INSERT INTO deck_win_conditions VALUES (1,1,'Group Slug','Damage everyone')")
+    conn.execute("INSERT INTO deck_weaknesses (deck_id, rank, label) VALUES (1,1,'Weak to wipes')")
+    conn.execute("INSERT INTO deck_themes VALUES (1,'Burn','main')")
+    _combo(conn, "a", "included", ["Sol Ring", "Arcane Signet"])
+    ctx = context.build_deck_context(conn, 1)
+    assert ctx.goals["win_conditions"] == ["Group Slug: Damage everyone"]
+    assert ctx.goals["weaknesses"] == ["Weak to wipes"]
+    prompt = analysis.build_prompt(ctx)
+    assert "Group Slug: Damage everyone" in prompt and "Main themes: Burn" in prompt
+    assert "Sol Ring + Arcane Signet: Infinite mana [Spicy]" in prompt
+
+
+def test_prompt_without_notes_or_combos_has_no_empty_sections(deck):
+    prompt = analysis.build_prompt(deck)
+    assert "USER'S NOTES" not in prompt and "COMBOS" not in prompt
+
+
+def test_banned_and_illegal_combos_are_ignored(conn, deck):
+    _combo(conn, "a", "included", ["Sol Ring", "Arcane Signet"], tag="Banned")
+    _combo(conn, "b", "included", ["Sol Ring", "Lightning Bolt"])
+    conn.execute("UPDATE deck_combos SET commander_legal=0 WHERE combo_id='b'")
+    conn.commit()
+    assert context.deck_combo_facts(conn, 1) == []
+
+
+def test_deck_profile_rewards_deck_words_and_ignores_shared_ones(conn, add_card):
+    def fact(name, text, type_line="Creature — Zombie", **kw):
+        return context.CardFact(name, "", type_line, "", 1, text, **kw)
+    deck = [fact(f"Z{i}", "Other Zombies you control get +1/+1.") for i in range(4)]
+    pool = [fact(f"P{i}", "Target creature gets +1/+1.", "Creature — Elf") for i in range(20)]
+    profile = context.deck_profile(deck, pool)
+    assert "zombies" in profile and "zombie" in profile
+    assert "creature" not in profile                     # as common in the pool as in the deck
+
+
+def test_deck_profile_skips_lands_and_counts_commander_and_notes():
+    def fact(name, text, type_line="Sorcery", **kw):
+        c = context.CardFact(name, "", type_line, "", 1, text, **kw)
+        c.roles = context.mechanical_roles(text, type_line)
+        return c
+    deck = [fact("Cmdr", "Whenever a party forms.", is_commander=True),
+            fact("Vault", "Landword landword.", "Land"), fact("Vault2", "Landword.", "Land")]
+    pool = [fact(f"P{i}", "Draw a card.") for i in range(10)]
+    profile = context.deck_profile(deck, pool, {"main_themes": ["Goblins"]})
+    assert "party" in profile                            # one commander mention is enough
+    assert "goblins" in profile                          # so is a theme
+    assert "landword" not in profile
+
+
+def test_synergy_card_is_offered_over_a_cheaper_one_past_the_cap(conn, deck, add_card):
+    # Old behaviour ranked by mana value alone, so the expensive on-plan card
+    # never reached the model.
+    conn.execute("UPDATE cards SET oracle_text='Whenever you pillage, draw a card.' WHERE name='Rakdos'")
+    _pool_card(conn, add_card, "Pillager", "Whenever you pillage, you win.", cmc=7)
+    for i in range(5):
+        _pool_card(conn, add_card, f"Filler {i}", "Flying", cmc=1)
+    conn.commit()
+    names = context.build_deck_context(conn, 1, candidate_cap=3).candidate_names()
+    assert "Pillager" in names
+
+
+def test_role_cards_keep_slots_alongside_fit(conn, deck, add_card):
+    conn.execute("UPDATE cards SET oracle_text='Whenever you pillage, draw a card.' WHERE name='Rakdos'")
+    conn.commit()
+    for i in range(6):
+        _pool_card(conn, add_card, f"Pillager {i}", "Whenever you pillage, you win.", cmc=7)
+    names = context.build_deck_context(conn, 1, candidate_cap=4).candidate_names()
+    assert "Read the Bones" in names                     # fills draw, fits nothing
+
+
+def test_combo_completer_gets_a_slot_unless_the_bracket_is_low(conn, deck, add_card):
+    _pool_card(conn, add_card, "Combo Piece", "Flying", cmc=9)
+    for i in range(5):
+        _pool_card(conn, add_card, f"Filler {i}", "Flying", cmc=1)
+    _combo(conn, "a", "almost", ["Sol Ring", "Combo Piece"], "Combo Piece")
+    ctx = context.build_deck_context(conn, 1, candidate_cap=2)
+    assert "Combo Piece" in ctx.candidate_names()
+    assert "COMBOS ONE CANDIDATE AWAY" in analysis.build_prompt(ctx)
+    conn.execute("UPDATE decks SET bracket=2 WHERE deck_id=1")
+    conn.commit()
+    low = context.build_deck_context(conn, 1, candidate_cap=2)
+    assert "Combo Piece" not in low.candidate_names()
+    assert "COMBOS ONE CANDIDATE AWAY" not in analysis.build_prompt(low)
+
+
+def test_combo_two_cards_short_gets_no_slot(conn, deck, add_card):
+    _pool_card(conn, add_card, "Combo Piece", "Flying", cmc=9)
+    _combo(conn, "a", "almost", ["Sol Ring", "Combo Piece", "Other Piece"], "Combo Piece\nOther Piece")
+    ctx = context.build_deck_context(conn, 1)
+    assert not next(c for c in ctx.candidates if c.name == "Combo Piece").completes_combos
+
+
 def test_schema_enums_match_context(deck):
     props = analysis_schema(deck)["properties"]
     assert props["adds"]["items"]["properties"]["card"]["enum"] == deck.candidate_names()
@@ -161,6 +270,89 @@ def test_eval_multiple_violations_in_one_answer_are_all_reported(deck):
         _answer([_cut(card="Made Up Card")], [_add(card="Also Made Up")]), deck)
     assert len(checked.violations) == 2
     assert not any(i.verified for i in checked.items)
+
+
+# ---- warnings: true facts about a swap, not failures of the answer ----------
+
+def test_cutting_a_combo_piece_warns_without_unverifying(conn, deck):
+    _combo(conn, "a", "included", ["Sol Ring", "Arcane Signet"])
+    ctx = context.build_deck_context(conn, 1)
+    item = guard.check_analysis(_answer(cuts=[_cut()]), ctx).items[0]
+    assert item.verified and "Breaks combo: Sol Ring + Arcane Signet" in item.warnings[0]
+
+
+def test_replacing_a_combo_piece_warns_on_the_add(conn, deck):
+    _combo(conn, "a", "included", ["Lightning Bolt", "Sol Ring"])
+    ctx = context.build_deck_context(conn, 1)
+    item = guard.check_analysis(_answer(adds=[_add()]), ctx).items[0]
+    assert item.verified and item.warnings[0].startswith("Breaks combo:")
+
+
+def test_warnings_do_not_trigger_the_retry(conn, deck):
+    _combo(conn, "a", "included", ["Sol Ring", "Arcane Signet"])
+    ctx = context.build_deck_context(conn, 1)
+    p = FakeProvider([ProviderResponse(text="{}", parsed=_answer(cuts=[_cut()]))])
+    res = analysis.run_analysis(p, ctx)
+    assert not res.retried and res.checked.items[0].warnings
+
+
+def test_game_changer_over_the_bracket_limit_warns(conn, deck):
+    conn.execute("UPDATE cards SET is_game_changer=1 WHERE name='Read the Bones'")
+    conn.execute("UPDATE decks SET bracket=2 WHERE deck_id=1")
+    conn.commit()
+    ctx = context.build_deck_context(conn, 1)
+    item = guard.check_analysis(_answer(adds=[_add()]), ctx).items[0]
+    assert item.verified and "this makes 1, and bracket 2 allows 0" in item.warnings[0]
+
+
+def test_game_changer_within_limit_or_swapping_one_out_does_not_warn(conn, deck):
+    conn.execute("UPDATE cards SET is_game_changer=1 WHERE name IN ('Read the Bones', 'Lightning Bolt')")
+    conn.execute("UPDATE decks SET bracket=3 WHERE deck_id=1")
+    conn.commit()
+    assert not guard.check_analysis(_answer(adds=[_add()]), context.build_deck_context(conn, 1)).items[0].warnings
+    conn.execute("UPDATE decks SET bracket=2 WHERE deck_id=1")
+    conn.commit()
+    ctx = context.build_deck_context(conn, 1)
+    assert ctx.stats["game_changers"] == 1               # already over; a one-for-one is no worse
+    assert not guard.check_analysis(_answer(adds=[_add()]), ctx).items[0].warnings
+
+
+def test_game_changer_count_runs_across_adds(conn, deck, add_card):
+    conn.execute("UPDATE cards SET is_game_changer=1 WHERE name IN ('Sol Ring', 'Arcane Signet', 'Lightning Bolt')")
+    conn.execute("UPDATE cards SET is_game_changer=1 WHERE name IN ('Read the Bones', 'Sleeved Draw')")
+    conn.execute("UPDATE decks SET bracket=3 WHERE deck_id=1")
+    conn.commit()
+    ctx = context.build_deck_context(conn, 1)
+    assert ctx.stats["game_changers"] == 3
+    items = guard.check_analysis(_answer(adds=[
+        _add(replaces="Blood Crypt"),
+        _add("Sleeved Draw", "Lightning Bolt", "Draw a card"),
+    ]), ctx).items
+    assert "this makes 4, and bracket 3 allows 3" in items[0].warnings[0]
+    assert not items[1].warnings                         # swaps one Game Changer for another
+
+
+def test_no_bracket_means_no_game_changer_warning(conn, deck):
+    conn.execute("UPDATE cards SET is_game_changer=1 WHERE name='Read the Bones'")
+    conn.commit()
+    ctx = context.build_deck_context(conn, 1)
+    assert not guard.check_analysis(_answer(adds=[_add()]), ctx).items[0].warnings
+
+
+def test_low_bracket_add_that_completes_a_combo_warns(conn, deck):
+    _combo(conn, "a", "almost", ["Sol Ring", "Read the Bones"], "Read the Bones")
+    conn.execute("UPDATE decks SET bracket=2 WHERE deck_id=1")
+    conn.commit()
+    ctx = context.build_deck_context(conn, 1)
+    item = guard.check_analysis(_answer(adds=[_add()]), ctx).items[0]
+    assert item.verified and "Completes a combo in a bracket 2 deck" in item.warnings[0]
+
+
+def test_warnings_survive_an_unknown_card(conn, deck):
+    _combo(conn, "a", "included", ["Sol Ring", "Arcane Signet"])
+    ctx = context.build_deck_context(conn, 1)
+    item = guard.check_analysis(_answer(adds=[_add(card="Nope", replaces="Nope Either")]), ctx).items[0]
+    assert item.violations and not item.warnings
 
 
 def test_all_skills_load_and_restate_the_guardrail_rules():

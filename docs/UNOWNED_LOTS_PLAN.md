@@ -13,7 +13,7 @@ buy list is ready for the cards it receives.
 
 Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 
-- [ ] **Phase 0** — Clean starting point.
+- [x] **Phase 0** — Clean starting point.
 - [ ] **Phase 1** — Stop creating lots for cards you don't own.
 - [ ] **Phase 2** — Buy list: split decks from ideas, Bought with a printing picker.
 - [ ] **Phase 3** — Remove the blank lots (preview, backup, confirm).
@@ -51,20 +51,17 @@ Agreed 2026-11-01:
   caveat rather than changing the rule.
 - **`scripts/migrate.py` is out of scope.** It is not updated for this work.
 
-Waiting on your answer (the plan assumes the recommendation):
+Agreed later the same day:
 
-1. **Delete blank lots rather than hide them** (the design above). Recommended.
-2. **Ideas on the buy list.** The buy list already includes an open idea whose
-   card you own zero of; blank lots have been suppressing them. Recommended:
-   a separate collapsed Ideas section, left out of the main total.
-3. **Mark "A Refined Grizzly of Noble Heritage" as brewing.** It holds 54 of
-   the 58 on-list blank lots but is currently a normal built deck.
-   Recommended: yes.
-4. **Where the integrity checks live.** There is no Data Integrity page.
-   Recommended: Card Database → Card Data → Clean up.
-5. **Imports** (separate from this plan). The app has no Moxfield paste import
-   (only exports), and the order CSV import is still live on the Collection
-   Editor. Build one, remove the other, or leave both for a later change?
+- **Delete the blank lots rather than hide them** (the design above).
+- **Ideas on the buy list** go in a separate collapsed section, left out of the
+  main total.
+- **"A Refined Grizzly of Noble Heritage" and "Ayara, Blood Wine Mom" are marked
+  brewing.** Grizzly holds 54 of the 58 on-list blank lots; Ayara holds 2.
+- **The missing quantity/location checks live in Card Database → Card Data →
+  Clean up.** There is no separate Data Integrity page.
+- **Imports are out of scope** (no Moxfield paste import is built here, and the
+  order CSV import is left as it is).
 
 ## What the database holds today
 
@@ -107,6 +104,10 @@ The test suite passes today (719).
   button). Commit or set them aside so this work stays separate.
 - Work on a branch, `unowned-cards`, one commit per phase.
 - Run the suite and note the count.
+
+**As built:** The Deck Editor add-to-Shortlist change was already committed
+(`9d595c9`), so nothing needed setting aside; the only dirty file was this plan.
+Branch `unowned-cards` created from `main`. Baseline: 719 tests pass.
 
 ## Phase 1 — Stop creating lots for cards you don't own
 
@@ -181,7 +182,7 @@ needed. No placeholder lots need filling in, because none exist.
 Before running it on the real database: repeat the deletion on a copy, render
 every page (AppTest smoke tests), and check the deck board in headless Edge.
 
-If you mark Grizzly as brewing, do it here (one click, `set_build_state()`).
+Mark Grizzly and Ayara as brewing here (`set_build_state()`), after the lots are gone.
 
 Expected afterwards:
 

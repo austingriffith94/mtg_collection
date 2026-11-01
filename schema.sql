@@ -381,6 +381,9 @@ CREATE TABLE card_tags (
     deck_id      INTEGER NOT NULL REFERENCES decks(deck_id),
     scryfall_id  TEXT NOT NULL REFERENCES cards(scryfall_id),
     tag_id       INTEGER NOT NULL REFERENCES tags(tag_id),
+    -- Order within one card, deck and tag_type: the lowest is the primary
+    -- tag, the rest are secondary (docs/TAG_SUGGESTIONS_PLAN.md).
+    position     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (deck_id, scryfall_id, tag_id)
 );
 

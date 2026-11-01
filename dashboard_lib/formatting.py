@@ -716,3 +716,10 @@ def format_change_route(source=None, source_location=None, dest_location=None):
     if text(dest_location):
         parts.append(f"to {text(dest_location)}")
     return " ".join(parts)
+
+
+def primary_tag(strategy_tags):
+    """The first label of a comma-joined tag list (primary first, see
+    queries.deck_cards_dataframe), or None for a card with no tags."""
+    first = strategy_tags.split(",")[0].strip() if isinstance(strategy_tags, str) else ""
+    return first or None

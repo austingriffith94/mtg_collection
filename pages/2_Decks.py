@@ -883,6 +883,11 @@ def _render_cards(conn, deck_id):
     if working_df.empty:
         st.info(f"No cards in the {board_choice.lower()} for this deck.")
     else:
+        # Grouping files a card once, under its primary tag; the whole
+        # strategy_tags text would make "Ramp,Removal" a group of its own.
+        if "strategy_tags" in working_df.columns:
+            working_df = working_df.assign(primary_tag=working_df["strategy_tags"].map(fmt.primary_tag))
+
         filter_box = st.expander("🔍 Filters")
         multi_facets = [("color_identity", "Color Identity", "Colorless")]
         if "strategy_tags" in working_df.columns:
@@ -931,7 +936,7 @@ def _render_cards(conn, deck_id):
 
         group_options = [("card_type", "Type"), ("color_display", "Color Identity"), ("rarity", "Rarity")]
         if "strategy_tags" in working_df.columns:
-            group_options.append(("strategy_tags", "Strategy Tag"))
+            group_options.append(("primary_tag", "Strategy Tag"))
         if "board" in working_df.columns:
             group_options.append(("board", "Board"))
 

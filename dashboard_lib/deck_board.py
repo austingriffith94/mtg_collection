@@ -562,7 +562,7 @@ def _apply_card_action(conn, deck_id, op, sid, action, with_moves):
     if op == "set_tags":
         old = writes.get_card_tags_by_type(conn, deck_id, STRATEGY_TAG_TYPE).get(sid, [])
         new = action["tags"]
-        if {t.strip().lower() for t in old} == {t.strip().lower() for t in new if t.strip()}:
+        if writes.same_tags(old, new):
             return {"message": f"No tag changes on {name}", "undo": None, "changed": False}
         writes.set_card_tags(conn, deck_id, sid, STRATEGY_TAG_TYPE, new)
         labels = ", ".join(t.strip() for t in new if t.strip())

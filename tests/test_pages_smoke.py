@@ -322,6 +322,34 @@ def test_decks_page_stacks_view(smoke_db_path, tmp_path, monkeypatch):
         st.cache_data.clear()
 
 
+def test_decks_page_groups_a_two_tag_card_under_its_primary(smoke_db_path, tmp_path, monkeypatch):
+    # docs/TAG_SUGGESTIONS_PLAN.md Phase 1a: the whole "Zebra,Apple" text must
+    # not become a group of its own.
+    from dashboard_lib import db, writes
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    conn = sqlite3.connect(path)
+    sid = conn.execute("SELECT scryfall_id FROM deck_cards WHERE deck_id = 1").fetchone()[0]
+    writes.set_card_tags(conn, 1, sid, "strategy", ["Zebra", "Apple"])
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "2_Decks.py"), default_timeout=15)
+        at.session_state["current_deck_id"] = 1
+        at.run()
+        at.multiselect(key="deck_1_Mainboard_groupby").set_value(["Strategy Tag"]).run()
+        assert not at.exception
+        labels = [e.label for e in at.expander]
+        assert any(label.startswith("Strategy Tag: Zebra ") for label in labels), labels
+        assert not any("Apple" in label for label in labels), labels
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
 def test_deck_editor_board_tab(smoke_db_path, tmp_path, monkeypatch):
     # docs/archive/VISUAL_DECK_PLAN.md Phase B: the Deck Editor's first tab is the editable
     # Board. Renders for a deck with cards, an empty deck and (the no-deck

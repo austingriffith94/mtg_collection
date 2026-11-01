@@ -405,11 +405,12 @@ def remove_location_from_catalog(conn, location):
 # ------------------------------------------------------------------
 def get_card_tags_by_type(conn, deck_id, tag_type):
     """{scryfall_id: [label, ...]} for every card in this deck currently
-    carrying a tag of tag_type."""
+    carrying a tag of tag_type, primary first."""
     rows = conn.execute(
         """SELECT ct.scryfall_id, t.label
            FROM card_tags ct JOIN tags t ON t.tag_id = ct.tag_id
-           WHERE ct.deck_id=? AND t.tag_type=?""",
+           WHERE ct.deck_id=? AND t.tag_type=?
+           ORDER BY ct.position, t.label""",
         (deck_id, tag_type),
     ).fetchall()
     result = {}
@@ -419,22 +420,40 @@ def get_card_tags_by_type(conn, deck_id, tag_type):
 
 
 def get_all_card_tags(conn, deck_id, scryfall_id):
-    """{tag_type: [label, ...]} for one card in this deck, every type.
-    What the Board's Undo of a removal carries, since removing the card
-    drops its tags."""
+    """{tag_type: [label, ...]} for one card in this deck, every type,
+    primary first. What the Board's Undo of a removal carries, since
+    removing the card drops its tags."""
     result = {}
     for tag_type, label in conn.execute(
         """SELECT t.tag_type, t.label FROM card_tags ct JOIN tags t ON t.tag_id = ct.tag_id
-           WHERE ct.deck_id=? AND ct.scryfall_id=? ORDER BY t.tag_type, t.label""",
+           WHERE ct.deck_id=? AND ct.scryfall_id=? ORDER BY t.tag_type, ct.position, t.label""",
         (deck_id, scryfall_id),
     ):
         result.setdefault(tag_type, []).append(label)
     return result
 
 
+def _clean_tag_labels(labels):
+    """`labels` stripped, without blanks or repeats (ignoring case), in order."""
+    cleaned, seen = [], set()
+    for raw in labels:
+        label = (raw or "").strip()
+        if label and label.lower() not in seen:
+            seen.add(label.lower())
+            cleaned.append(label)
+    return cleaned
+
+
+def same_tags(old, new):
+    """True when two label lists match, ignoring case. Order counts: the
+    first label is the card's primary tag, so a reorder is a real change."""
+    return [l.lower() for l in _clean_tag_labels(old)] == [l.lower() for l in _clean_tag_labels(new)]
+
+
 def set_card_tags(conn, deck_id, scryfall_id, tag_type, labels):
     """Replace ALL of one card's tags of `tag_type` (within this deck)
-    with exactly `labels` (list of strings; pass [] to clear)."""
+    with exactly `labels` (list of strings; pass [] to clear), keeping their
+    order: the first is the primary tag."""
     conn.execute(
         """DELETE FROM card_tags
            WHERE deck_id=? AND scryfall_id=? AND tag_id IN (
@@ -442,29 +461,23 @@ def set_card_tags(conn, deck_id, scryfall_id, tag_type, labels):
            )""",
         (deck_id, scryfall_id, tag_type),
     )
-    seen = set()
-    for raw in labels:
-        label = (raw or "").strip()
-        if not label or label.lower() in seen:
-            continue
-        seen.add(label.lower())
+    for position, label in enumerate(_clean_tag_labels(labels)):
         tag_id = get_or_create_tag(conn, tag_type, label)
         conn.execute(
-            "INSERT OR IGNORE INTO card_tags (deck_id, scryfall_id, tag_id) VALUES (?,?,?)",
-            (deck_id, scryfall_id, tag_id),
+            "INSERT OR IGNORE INTO card_tags (deck_id, scryfall_id, tag_id, position) VALUES (?,?,?,?)",
+            (deck_id, scryfall_id, tag_id, position),
         )
     conn.commit()
 
 
 def bulk_set_card_tags(conn, deck_id, tag_type, labels_by_scryfall_id):
     """Apply set_card_tags() for many cards in one transaction. Returns
-    the number of cards actually touched (rows whose tag set changed)."""
+    the number of cards actually touched (rows whose tags or their order
+    changed)."""
     before = get_card_tags_by_type(conn, deck_id, tag_type)
     changed = 0
     for scryfall_id, labels in labels_by_scryfall_id.items():
-        new_set = {l.strip().lower() for l in labels if l and l.strip()}
-        old_set = {l.strip().lower() for l in before.get(scryfall_id, [])}
-        if new_set != old_set:
+        if not same_tags(before.get(scryfall_id, []), labels):
             set_card_tags(conn, deck_id, scryfall_id, tag_type, labels)
             changed += 1
     return changed
@@ -773,15 +786,17 @@ def use_sleeved_printing(conn, deck_id, listed_sids, sleeved):
     for the lots sleeved in the deck. The list's TOTAL copies of the card are
     kept: each sleeved printing gets the quantity sleeved (capped by what is
     left), and any surplus lands on the first. Tags carry over to every new
-    printing. Touches only the list — no copy moves, nothing is logged as a
+    printing, in their order. Touches only the list — no copy moves, nothing is logged as a
     deck change, since the card itself is unchanged."""
     quantities = {sid: _deck_card_quantity(conn, deck_id, sid) for sid in listed_sids}
     if any(qty is None for qty in quantities.values()):
         raise ValueError("That card is no longer on the list as shown — nothing changed.")
     total = sum(quantities.values())
     marks = ",".join("?" * len(quantities))
-    tag_ids = [r[0] for r in conn.execute(
-        f"SELECT DISTINCT tag_id FROM card_tags WHERE deck_id=? AND scryfall_id IN ({marks})",
+    # Two listed printings can hold the same tag; the earlier position wins.
+    tags = [(r[0], r[1]) for r in conn.execute(
+        f"""SELECT tag_id, MIN(position) FROM card_tags
+            WHERE deck_id=? AND scryfall_id IN ({marks}) GROUP BY tag_id""",
         (deck_id, *quantities))]
     conn.execute(f"DELETE FROM card_tags WHERE deck_id=? AND scryfall_id IN ({marks})", (deck_id, *quantities))
     conn.execute(f"DELETE FROM deck_cards WHERE deck_id=? AND scryfall_id IN ({marks})", (deck_id, *quantities))
@@ -795,8 +810,9 @@ def use_sleeved_printing(conn, deck_id, listed_sids, sleeved):
         if qty > 0:
             conn.execute("INSERT INTO deck_cards (deck_id, scryfall_id, quantity) VALUES (?,?,?)",
                          (deck_id, sid, qty))
-            conn.executemany("INSERT OR IGNORE INTO card_tags (deck_id, scryfall_id, tag_id) VALUES (?,?,?)",
-                             [(deck_id, sid, t) for t in tag_ids])
+            conn.executemany(
+                "INSERT OR IGNORE INTO card_tags (deck_id, scryfall_id, tag_id, position) VALUES (?,?,?,?)",
+                [(deck_id, sid, tag_id, position) for tag_id, position in tags])
     conn.commit()
 
 

@@ -74,6 +74,10 @@ _SCHEMA_UPGRADES = [
     # land supply" rather than "new copy record" / "deleted". Every earlier
     # row is a real lot's step, so the default 0 is right for them.
     ("collection_moves", "bulk", "ALTER TABLE collection_moves ADD COLUMN bulk INTEGER DEFAULT 0"),
+    # docs/TAG_SUGGESTIONS_PLAN.md Phase 1a: a card's tag order within a tag
+    # type; the lowest position is its primary tag. Every earlier row was the
+    # only tag of its type on that card, so the default 0 makes it the primary.
+    ("card_tags", "position", "ALTER TABLE card_tags ADD COLUMN position INTEGER NOT NULL DEFAULT 0"),
 ]
 
 # The values decks.build_state may hold. NULL (absent from this tuple) is
@@ -871,8 +875,7 @@ def _sleeved_art_sql(col, deck_id_expr, name_expr, fallback_expr):
 
 def deck_cards_dataframe(conn, deck_id):
     """One row per mainboard card, with quantity and any strategy tag(s)
-    (comma-joined — schema supports multiple tags per card-in-deck even
-    though today's data only populates one). Card art is the printing
+    (comma-joined, primary first). Card art is the printing
     deck_cards' own printing — what the user added (e.g. SCD 77) — wins;
     the printing sleeved in this deck (see _sleeved_art_sql) only fills in
     when that printing has no art, so the board and previewer never show a
@@ -893,15 +896,18 @@ def deck_cards_dataframe(conn, deck_id):
         + " ELSE c.local_image_path END AS local_image_path,",
     )
     return pd.read_sql_query(
+        # GROUP_CONCAT keeps its input order only when that input is a sorted
+        # subquery; the old joined form gave the labels in no set order.
         f"""SELECT {columns}, dc.quantity,
-                   GROUP_CONCAT(DISTINCT t.label) AS strategy_tags
+                   (SELECT GROUP_CONCAT(label) FROM (
+                        SELECT t.label FROM card_tags ct
+                        JOIN tags t ON t.tag_id = ct.tag_id
+                        WHERE ct.deck_id = dc.deck_id AND ct.scryfall_id = dc.scryfall_id
+                          AND t.tag_type = 'strategy'
+                        ORDER BY ct.position, t.label)) AS strategy_tags
             FROM deck_cards dc
             JOIN cards c ON c.scryfall_id = dc.scryfall_id
-            LEFT JOIN card_tags ct
-                   ON ct.deck_id = dc.deck_id AND ct.scryfall_id = dc.scryfall_id
-            LEFT JOIN tags t ON t.tag_id = ct.tag_id AND t.tag_type = 'strategy'
             WHERE dc.deck_id = ?
-            GROUP BY c.scryfall_id
             ORDER BY c.name COLLATE NOCASE""",
         conn,
         params=(deck_id,),

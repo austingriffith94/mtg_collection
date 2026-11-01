@@ -23,6 +23,8 @@ plus pytest (`pip install -r requirements-dev.txt`):
   answering each row in isolation, matching on `oracle_id`, and treating a
   NULL `collection.quantity` as one copy rather than none.
 - `test_contention.py` — contention table, buy list and Card Lookup (Phase 3).
+- `test_tag_order.py` — primary and secondary tags: `card_tags.position`
+  surviving every read, compare and rewrite of a card's tags.
 - `test_reconcile.py` — reconciliation (Phase 4): unlocated lots, the
   per-deck list-vs-physical diff in both directions, build status, and
   `move_lot()` splitting a lot when only some copies move.

@@ -16,7 +16,7 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] **Phase 0** — Clean starting point.
 - [x] **Phase 1** — Stop creating lots for cards you don't own.
 - [x] **Phase 2** — Buy list: split decks from ideas, Bought with a printing picker.
-- [~] **Phase 3** — Remove the blank lots (preview, backup, confirm).
+- [x] **Phase 3** — Remove the blank lots (preview, backup, confirm).
 - [ ] **Phase 4** — Clean up checks and the "sleeved of N" caveat.
 - [ ] **Phase 5** — Docs and wrap-up.
 
@@ -229,8 +229,10 @@ Expected afterwards:
   location only" toggle. They stay in the code; a real copy can still lack a
   location through an edit.
 
-**As built:** code done, 759 tests pass. Still to do on the real database: the
-delete in the Clean up panel, then marking Grizzly and Ayara brewing.
+**As built:** 759 tests pass. Run on the real database 2026-11-01: 132 blank lots
+deleted through `delete_blank_lots()` (1468 -> 1336 lots, backup
+`backups/mtg_collection_manual_2026-11-01_151400.db`), then Grizzly and Ayara marked
+brewing. The buy list read 69 / $185.03 needed and 85 / $1,157.19 ideas.
 
 - One test for a blank lot, `queries.BLANK_LOT_SQL`, shared by the preview,
   `writes.delete_blank_lots()` and `prune_collection()`. The preview is a bucket in

@@ -1,8 +1,13 @@
 """writes.* collection-lot behavior — the code behind the Collection
 page's Edit mode (bulk_update_collection) plus add/remove/prune."""
+import os
+import sqlite3
+
 import pytest
 
-from dashboard_lib import writes
+from dashboard_lib import backup, queries, writes
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _lot(conn, cid):
@@ -152,7 +157,7 @@ def test_bulk_update_empty_and_unknown_ids(conn):
     assert writes.bulk_update_collection(conn, {9999: {"_delete": True}}) == 0
 
 
-def test_prune_removes_only_unhomed_zero_qty_lots_not_in_a_deck(conn, add_card, raw_lot):
+def test_prune_removes_every_blank_lot_even_on_a_deck_list(conn, add_card, raw_lot):
     stale = raw_lot(add_card("Stale"), 0)
     blank_loc = raw_lot(add_card("BlankLoc"), None, "  ")
     located = raw_lot(add_card("Located"), 0, "Box")
@@ -165,9 +170,75 @@ def test_prune_removes_only_unhomed_zero_qty_lots_not_in_a_deck(conn, add_card, 
     conn.commit()
 
     removed = {cid for cid, _ in writes.prune_collection(conn)}
-    assert removed == {stale, blank_loc}
+    assert removed == {stale, blank_loc, in_deck}
     remaining = {r[0] for r in conn.execute("SELECT collection_id FROM collection")}
-    assert remaining == {located, owned, in_deck}
+    assert remaining == {located, owned}
+
+
+def test_prune_keeps_a_blank_basic_land(conn, add_card, raw_lot):
+    cid = raw_lot(_basic(conn, add_card))
+    assert writes.prune_collection(conn) == []
+    assert _lot(conn, cid) is not None
+
+
+def test_blank_lots_names_what_holds_each_one(conn, add_card, raw_lot):
+    listed, idea, loose = add_card("Listed"), add_card("Idea"), add_card("Loose")
+    reprint = add_card("Listed", set_code="sld", collector_number="9")
+    gisa = conn.execute("INSERT INTO decks (name) VALUES ('Gisa')").lastrowid
+    tuvasa = conn.execute("INSERT INTO decks (name) VALUES ('Tuvasa')").lastrowid
+    conn.execute("INSERT INTO deck_cards (deck_id, scryfall_id, quantity) VALUES (?,?,1)", (gisa, listed))
+    writes.add_change(conn, tuvasa, add_scryfall_id=idea)
+    writes.add_change(conn, tuvasa, add_scryfall_id=listed)
+    for sid in (reprint, idea, loose):
+        raw_lot(sid)
+    raw_lot(listed, 1, "Box")                                # a real copy: not blank
+    raw_lot(_basic(conn, add_card))                          # a basic: exempt
+    frame = queries.blank_lots(conn)
+    assert dict(zip(frame["card"], frame["held_by"])) == {
+        "Idea": "idea: Tuvasa", "Listed": "Gisa; idea: Tuvasa", "Loose": ""}
+    assert frame[frame["card"] == "Listed"]["printing"].tolist() == ["SLD #9"]
+    assert len(queries.orphan_report(conn)["blank_lots"]) == 3
+
+
+def test_delete_blank_lots_rechecks_each_lot_and_logs_nothing(conn, add_card, raw_lot):
+    gone, filled = raw_lot(add_card("Gone")), raw_lot(add_card("Filled"))
+    writes.update_collection_lot(conn, filled, location="Box")   # since the preview
+    conn.execute("DELETE FROM collection_moves")
+    conn.commit()
+    assert writes.delete_blank_lots(conn, [gone, filled]) == 1
+    assert [r[0] for r in conn.execute("SELECT collection_id FROM collection")] == [filled]
+    assert conn.execute("SELECT COUNT(*) FROM collection_moves").fetchone()[0] == 0
+    assert writes.delete_blank_lots(conn, []) == 0
+
+
+def _file_db_with_a_blank_lot(tmp_path):
+    path = str(tmp_path / "mtg_collection.db")
+    c = sqlite3.connect(path)
+    with open(os.path.join(ROOT, "schema.sql"), encoding="utf-8") as f:
+        c.executescript(f.read())
+    queries.ensure_schema(c)
+    c.execute("INSERT INTO cards (scryfall_id, name, set_code, collector_number) VALUES ('a','A','cmd','1')")
+    cid = c.execute("INSERT INTO collection (scryfall_id) VALUES ('a')").lastrowid
+    c.commit()
+    return path, c, cid
+
+
+def test_delete_blank_lots_refuses_to_run_if_the_backup_fails(tmp_path, monkeypatch):
+    path, c, cid = _file_db_with_a_blank_lot(tmp_path)
+    monkeypatch.setattr(backup, "snapshot", lambda *a, **k: None)
+    with pytest.raises(RuntimeError, match="backup failed"):
+        writes.delete_blank_lots(c, [cid])
+    assert c.execute("SELECT COUNT(*) FROM collection").fetchone()[0] == 1
+    c.close()
+
+
+def test_delete_blank_lots_writes_a_backup_of_the_lots_first(tmp_path):
+    path, c, cid = _file_db_with_a_blank_lot(tmp_path)
+    assert writes.delete_blank_lots(c, [cid]) == 1
+    c.close()
+    (saved,) = os.listdir(backup.backup_dir_for(path))
+    with sqlite3.connect(os.path.join(backup.backup_dir_for(path), saved)) as old:
+        assert old.execute("SELECT COUNT(*) FROM collection").fetchone()[0] == 1
 
 
 def test_consolidate_merges_interchangeable_lots_only(conn, add_card):

@@ -2489,7 +2489,7 @@ COLLECTION_FIELDS = ["quantity", "foil", "location", "date_acquired", "price_pai
 # rename_deck() logs nothing — a rename relabels, no copy moved.
 # ------------------------------------------------------------------
 MOVE_REASONS = ("deck_edit", "apply", "reconcile", "dismantle", "collection_edit",
-                "import", "prune", "deck_delete", "purchase", "build")
+                "import", "deck_delete", "purchase", "build")
 
 
 def _loc(value):
@@ -2765,51 +2765,57 @@ def remove_collection_lot(conn, collection_id, *, reason="collection_edit", chan
 
 
 def prune_collection(conn):
-    """Deletes any collection lot that meets ALL three conditions:
-      a) no assigned location (NULL or blank/whitespace-only)
-      b) a quantity of 0 or "none" (i.e. NULL)
-      c) not included in any existing deck list — checked against both
-         a deck's mainboard (deck_cards) and its open shortlist (ideas and
-         planned changes in deck_changes), so a card still under
-         consideration for a deck isn't swept away just because it isn't
-         physically located anywhere yet.
+    """Deletes every blank lot (queries.BLANK_LOT_SQL: no quantity, no
+    Location, not a basic land). A card you don't own has no collection row
+    (docs/UNOWNED_LOTS_PLAN.md), whether or not a deck lists it or an idea
+    wants it, so there is nothing to protect.
 
     Called automatically as part of the Card Database page's Card Data
-    "Refresh" action (see dashboard_lib/refresh.py) so stale collection rows for
-    cards you no longer own and aren't running anywhere get cleaned up
-    without a separate manual step. Returns a list of
-    (collection_id, card_name) tuples for whatever was removed, so
-    callers can report it."""
+    "Refresh" action (see dashboard_lib/refresh.py), so a blank lot that
+    appears later doesn't stay. Nothing goes in the move log: a blank lot was
+    never a physical copy, and Card Lookup's History shouldn't show one being
+    removed. Returns a list of (collection_id, card_name) tuples for whatever
+    was removed, so callers can report it."""
     rows = conn.execute(
-        """SELECT col.collection_id, c.name, col.scryfall_id, col.quantity
-           FROM collection col
-           JOIN cards c ON c.scryfall_id = col.scryfall_id
-           WHERE (col.location IS NULL OR TRIM(col.location) = '')
-             AND (col.quantity IS NULL OR col.quantity = 0)
-             AND col.scryfall_id NOT IN (SELECT scryfall_id FROM deck_cards)
-             -- add_scryfall_id is NULL for any idea/planned row not yet
-             -- linked to a printing (every backfilled swap-queue row, for
-             -- one). `x NOT IN (subquery containing a NULL)` is NULL, not
-             -- true, so without this filter a single unlinked row would make
-             -- the whole condition false and silently disable pruning.
-             AND col.scryfall_id NOT IN (
-                 SELECT add_scryfall_id FROM deck_changes
-                 WHERE status IN ('idea', 'planned') AND add_scryfall_id IS NOT NULL)
-           ORDER BY c.name COLLATE NOCASE"""
+        f"""SELECT col.collection_id, c.name
+            FROM collection col
+            JOIN cards c ON c.scryfall_id = col.scryfall_id
+            WHERE {q.BLANK_LOT_SQL}
+            ORDER BY c.name COLLATE NOCASE"""
     ).fetchall()
     if not rows:
         return []
-    ids = [r[0] for r in rows]
     backup.snapshot(conn, "before", "prune-collection")
-    placeholders = ",".join("?" for _ in ids)
-    # Phase 6: a pruned lot leaves a row in the move log (it had no Location,
-    # so it reads "no location → deleted") — these used to vanish silently.
-    for collection_id, _name, sid, qty in rows:
-        _log_collection_move(conn, collection_id, sid, qty, "", None, "prune")
-    conn.execute(f"DELETE FROM collection WHERE collection_id IN ({placeholders})", ids)
-    conn.commit()
+    _delete_lots(conn, [r[0] for r in rows])
     logger.info("Pruned %d collection lot(s): %s", len(rows), ", ".join(r[1] for r in rows))
     return [(r[0], r[1]) for r in rows]
+
+
+def _delete_lots(conn, ids):
+    conn.execute(f"DELETE FROM collection WHERE collection_id IN ({','.join('?' for _ in ids)})", ids)
+    conn.commit()
+
+
+def delete_blank_lots(conn, collection_ids):
+    """The Clean up panel's Blank lots delete (docs/UNOWNED_LOTS_PLAN.md
+    Phase 3): remove the lots listed, re-checking each is still blank, so a
+    lot given a quantity since the preview stays. A backup comes first and
+    is required: RuntimeError, nothing deleted, if it fails. No move-log rows,
+    as prune_collection(). Returns how many were deleted."""
+    marks = ",".join("?" for _ in collection_ids) or "NULL"
+    ids = [r[0] for r in conn.execute(
+        f"""SELECT col.collection_id
+            FROM collection col
+            JOIN cards c ON c.scryfall_id = col.scryfall_id
+            WHERE col.collection_id IN ({marks}) AND {q.BLANK_LOT_SQL}""",
+        list(collection_ids),
+    ).fetchall()]
+    if not ids:
+        return 0
+    backup.required_snapshot(conn)
+    _delete_lots(conn, ids)
+    logger.info("Deleted %d blank collection lot(s)", len(ids))
+    return len(ids)
 
 
 def _validate_game_participants(participants):

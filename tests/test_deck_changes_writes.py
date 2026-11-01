@@ -428,43 +428,23 @@ def test_bulk_update_deck_cards_logs_through_the_same_path(conn, deck, add_card)
 
 
 # ------------------------------------------------------------------
-# prune_collection must protect open shortlist cards — and survive NULLs
+# prune_collection: a blank lot goes, whatever wants the card
 # ------------------------------------------------------------------
 
 def _orphan_lot(conn, sid):
-    """A lot prune_collection would delete if nothing protected it: no
-    location, no quantity, not in any mainboard."""
+    """A lot prune_collection deletes: no location, no quantity."""
     conn.execute("INSERT INTO collection (scryfall_id) VALUES (?)", (sid,))
     conn.commit()
 
 
 @pytest.mark.parametrize("status", ["idea", "planned"])
-def test_prune_keeps_a_lot_an_open_change_depends_on(conn, deck, add_card, status):
+def test_prune_deletes_a_blank_lot_an_open_change_wants(conn, deck, add_card, status):
     keep, blade = add_card("Sol Ring"), add_card("Heirloom Blade")
     _orphan_lot(conn, keep)
     writes.add_change(
         conn, deck, add_scryfall_id=keep, remove_scryfall_id=blade if status == "planned" else None,
         status=status,
     )
-    assert writes.prune_collection(conn) == []
-
-
-def test_prune_deletes_a_lot_once_its_idea_is_dropped(conn, deck, add_card):
-    sid = add_card("Sol Ring")
-    _orphan_lot(conn, sid)
-    cid = writes.add_change(conn, deck, add_scryfall_id=sid)
-    writes.drop_change(conn, cid)
-    assert [name for _, name in writes.prune_collection(conn)] == ["Sol Ring"]
-
-
-def test_an_unlinked_change_does_not_switch_pruning_off(conn, deck, add_card):
-    """add_scryfall_id is NULL for every swap backfilled from the old queue.
-    `x NOT IN (subquery containing NULL)` is NULL rather than true, so
-    without the IS NOT NULL filter one such row would silently stop
-    prune_collection from ever deleting anything."""
-    doomed, blade = add_card("Sol Ring"), add_card("Heirloom Blade")
-    _orphan_lot(conn, doomed)
-    writes.add_change(conn, deck, add_name="Some Typed Name", remove_scryfall_id=blade, status="planned")
     assert [name for _, name in writes.prune_collection(conn)] == ["Sol Ring"]
 
 

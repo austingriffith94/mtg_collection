@@ -166,12 +166,11 @@ def test_deleting_a_deck_without_clearing_locations_logs_nothing_more(conn, worl
     assert len(_log(conn)) == 1
 
 
-def test_prune_logs_the_lots_it_deletes_by_name(conn, world, raw_lot):
+def test_prune_leaves_no_trace_in_the_move_log(conn, world, raw_lot):
     raw_lot(world["ring"], 0, None)
-    writes.add_collection_lot(conn, world["signet"], quantity=1, location="Box")
     pruned = writes.prune_collection(conn)
     assert [name for _, name in pruned] == ["Sol Ring"]
-    assert _log(conn)[1:] == [("Sol Ring", 0, "", None, "prune")]
+    assert _log(conn) == []
 
 
 # ------------------------------------------------------------------

@@ -1562,6 +1562,36 @@ def _lot_count(path):
     return sqlite3.connect(path).execute("SELECT COUNT(*) FROM collection").fetchone()[0]
 
 
+def test_clean_up_previews_and_deletes_blank_lots(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    conn = sqlite3.connect(path)
+    conn.execute("INSERT INTO collection (scryfall_id) VALUES ('sol-ring-cmd-1')")
+    conn.commit()
+    conn.close()
+    before = _lot_count(path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "6_Card_Database.py"), default_timeout=15)
+        at.run()
+        assert not at.exception
+        assert any(e.label == "Blank lots (1)" for e in at.expander)
+        assert at.button(key="carddb_clean_blank_lots_btn").disabled      # until confirmed
+        at.checkbox(key="carddb_clean_blank_lots_ok").check().run()
+        at.button(key="carddb_clean_blank_lots_btn").click().run()
+        assert not at.exception
+        assert _lot_count(path) == before - 1
+        assert os.listdir(os.path.join(tmp_path, "backups"))
+        assert not any(e.label.startswith("Blank lots") for e in at.expander)
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
 def test_add_form_says_what_it_filled_in(smoke_db_path, tmp_path, monkeypatch):
     before = _lot_count(smoke_db_path)
     at, path = _add_form(smoke_db_path, tmp_path, monkeypatch, 2)

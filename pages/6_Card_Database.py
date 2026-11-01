@@ -56,6 +56,7 @@ cv.how_it_works(
 db.refresh_data_button()
 
 ORPHAN_LABELS = {
+    "blank_lots": "blank lot(s)",
     "unreferenced_cards": "unreferenced card(s)",
     "stale_card_tags": "stale deck tag(s)",
     "orphan_image_files": "orphan image file(s)",
@@ -377,8 +378,9 @@ with tab_carddata:
             "updates its Reserved List flag, Game Changer flag, Showcase/Borderless flags, "
             "Commander legality, and current price. Doesn't touch your decklists or tags — safe "
             "to run anytime. Needs network access and the `requests` package. Afterward, it also "
-            "automatically prunes your collection: any lot with no assigned location, a quantity "
-            "of 0/none, and not present in any deck's mainboard or shortlist is deleted."
+            "automatically prunes your collection: any non-basic lot with no assigned location and "
+            "a quantity of 0/none is deleted, even if a deck lists the card. A card you don't own "
+            "needs no lot, and a deck's list keeps working without one."
         ),
     )
     total_cards = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
@@ -402,10 +404,8 @@ with tab_carddata:
             lines.append("Newly flagged Game Changer: " + ", ".join(summary["newly_game_changer"]))
         if summary["pruned_count"]:
             lines.append(
-                f"Pruned {summary['pruned_count']} collection lot(s) with no location, no "
-                f"quantity, and not in any deck's mainboard/shortlist (each is in the move log, "
-                f"shown on Card Lookup): "
-                + ", ".join(summary["pruned_cards"])
+                f"Pruned {summary['pruned_count']} collection lot(s) with no location and no "
+                f"quantity: " + ", ".join(summary["pruned_cards"])
             )
         _orphans = q.orphan_report(conn)
         lines.append(
@@ -430,10 +430,9 @@ with tab_carddata:
     st.markdown(
         "**Clean up**",
         help=(
-            "Stale rows nothing uses. Hidden by default and never deleted automatically — each "
-            "group lists exactly what will go and needs its confirm box ticked first. A card used "
-            "by a lot, deck, shortlist, tag or one of your Game Changer / Mana Tag lists is never "
-            "listed."
+            "Stale rows nothing uses. Hidden by default — each group lists exactly what will go "
+            "and needs its confirm box ticked first. Apart from blank lots, a card used by a lot, "
+            "deck, shortlist, tag or one of your Game Changer / Mana Tag lists is never listed."
         ),
     )
     orphans = q.orphan_report(conn)
@@ -450,9 +449,21 @@ with tab_carddata:
             st.dataframe(frame[cols], hide_index=True, width="stretch")
             ok = st.checkbox(f"Yes, delete these {len(frame)}", key=f"carddb_clean_{key}_ok")
             if st.button("🗑️ Delete", key=f"carddb_clean_{key}_btn", disabled=not ok):
-                n = action(frame)
-                cv.finish_edit({"message": f"Deleted {n}.", "reference": True, "collection": True})
+                try:
+                    n = action(frame)
+                except RuntimeError as exc:   # the backup failed; nothing was deleted
+                    st.error(str(exc))
+                else:
+                    cv.finish_edit({"message": f"Deleted {n}.", "reference": True, "collection": True})
 
+    _cleanup_bucket(
+        "blank_lots", "Blank lots",
+        "Lots with no quantity and no location, which aren't copies you own. Their cards stay on the "
+        "decks and ideas shown, and go on the buy list. A backup is taken first; nothing is added to "
+        "the move log.",
+        ["card", "printing", "held_by"],
+        lambda f: writes.delete_blank_lots(conn, f["collection_id"].tolist()),
+    )
     _cleanup_bucket(
         "unreferenced_cards", "Unreferenced cards",
         "Card rows with no lot, deck, shortlist, tag or list entry. Cheap to keep and re-fetchable, "

@@ -16,7 +16,7 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] **Phase 0** — Clean starting point.
 - [x] **Phase 1** — Stop creating lots for cards you don't own.
 - [x] **Phase 2** — Buy list: split decks from ideas, Bought with a printing picker.
-- [ ] **Phase 3** — Remove the blank lots (preview, backup, confirm).
+- [~] **Phase 3** — Remove the blank lots (preview, backup, confirm).
 - [ ] **Phase 4** — Clean up checks and the "sleeved of N" caveat.
 - [ ] **Phase 5** — Docs and wrap-up.
 
@@ -228,6 +228,28 @@ Expected afterwards:
   lot. The same goes for "Owned, location unknown" and the Collection's "No
   location only" toggle. They stay in the code; a real copy can still lack a
   location through an edit.
+
+**As built:** code done, 759 tests pass. Still to do on the real database: the
+delete in the Clean up panel, then marking Grizzly and Ayara brewing.
+
+- One test for a blank lot, `queries.BLANK_LOT_SQL`, shared by the preview,
+  `writes.delete_blank_lots()` and `prune_collection()`. The preview is a bucket in
+  `orphan_report()`, so it sits with the other Clean up groups.
+- `snapshot()` can skip or fail quietly, so the delete uses the new
+  `backup.required_snapshot()`, a manual snapshot that raises if it fails. Nothing
+  is deleted without a backup.
+- `delete_blank_lots()` re-checks each lot, so one filled in since the preview
+  stays. `"prune"` left `MOVE_REASONS`; its label stays for old log rows.
+- **`prune_collection()` no longer exempts decks or ideas, so a Card Data Refresh
+  run before the Clean up delete removes the blank lots with no preview.** Use
+  the Clean up panel first.
+
+Rehearsed on a copy of the live database: 132 previewed, every one held by a deck
+or idea, 132 deleted, 1336 lots left. Needed by decks 69 / $185.03, Ideas 85 /
+$1,157.19, total $1,342.22, no unlocated lots, and a prune afterwards finds nothing.
+Sleeved counts match on all 12 decks (Grizzly 3 / 83). Pages rendered through
+AppTest; the board, Workbench Bought form, Card Database and Home checked in
+headless Edge with no errors, and board art still shows.
 
 ## Phase 4 — Clean up checks and the "sleeved of N" caveat
 

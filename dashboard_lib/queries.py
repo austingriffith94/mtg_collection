@@ -3420,9 +3420,8 @@ def collection_dataframe(conn):
     aggregating rows that may live in different boxes or decks.
 
     `in_deck` (Prompt Pass 4) is 1 if this printing's scryfall_id is used
-    in ANY deck's mainboard (deck_cards), 0 otherwise — the same
-    "spoken for by a deck" test writes.prune_collection() already uses,
-    reused here to power the Collection page's deck-status filter."""
+    in ANY deck's mainboard (deck_cards), 0 otherwise, which powers the
+    Collection page's deck-status filter."""
     return pd.read_sql_query(
         f"""SELECT col.collection_id, {CARD_COLUMNS},
                    col.quantity, col.foil, col.location, col.date_acquired,
@@ -3565,11 +3564,53 @@ def unreferenced_card_sql(conn):
     return " AND ".join(parts)
 
 
+# The one test for a blank lot (docs/UNOWNED_LOTS_PLAN.md): no quantity, no
+# Location, not a basic land. Written against `col` (collection) and `c` (cards).
+BLANK_LOT_SQL = """(col.quantity IS NULL OR col.quantity = 0)
+                   AND (col.location IS NULL OR TRIM(col.location) = '')
+                   AND COALESCE(c.is_basic_land, 0) = 0"""
+
+
+def blank_lots(conn):
+    """Every blank lot, for the Clean up panel's preview: a DataFrame of
+    collection_id, card, printing and held_by, the decks listing the card and
+    the decks with an open idea or planned add for it, in any printing
+    ("Gisa; idea: Tuvasa", blank if neither)."""
+    def key(oracle_id, name):
+        return oracle_id or (name or "").casefold()
+
+    held = {}
+    for oracle_id, name, deck in conn.execute(
+        """SELECT c.oracle_id, c.name, d.name
+           FROM deck_cards dc JOIN decks d ON d.deck_id = dc.deck_id
+           JOIN cards c ON c.scryfall_id = dc.scryfall_id"""
+    ).fetchall():
+        held.setdefault(key(oracle_id, name), set()).add(deck)
+    for oracle_id, name, deck in conn.execute(
+        """SELECT c.oracle_id, COALESCE(c.name, dc.add_name), d.name
+           FROM deck_changes dc JOIN decks d ON d.deck_id = dc.deck_id
+           LEFT JOIN cards c ON c.scryfall_id = dc.add_scryfall_id
+           WHERE dc.status IN ('idea', 'planned')"""
+    ).fetchall():
+        held.setdefault(key(oracle_id, name), set()).add(f"idea: {deck}")
+    rows = [
+        (cid, name, f"{(set_code or '?').upper()} #{number}",
+         "; ".join(sorted(held.get(key(oracle_id, name), ()), key=lambda h: (h.startswith("idea: "), h.casefold()))))
+        for cid, name, set_code, number, oracle_id in conn.execute(
+            f"""SELECT col.collection_id, c.name, c.set_code, c.collector_number, c.oracle_id
+                FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
+                WHERE {BLANK_LOT_SQL}
+                ORDER BY c.name COLLATE NOCASE""").fetchall()
+    ]
+    return pd.DataFrame(rows, columns=["collection_id", "card", "printing", "held_by"])
+
+
 def orphan_report(conn, image_dir=None):
-    """Stale buckets, each a DataFrame: `unreferenced_cards`,
-    `stale_card_tags` (tag rows for a card no longer in that deck),
-    `orphan_image_files` (files in the image cache with no `cards` row) and
-    `missing_image_files` (cards whose local_image_path file is gone)."""
+    """Stale buckets, each a DataFrame: `blank_lots` (see blank_lots()),
+    `unreferenced_cards`, `stale_card_tags` (tag rows for a card no longer in
+    that deck), `orphan_image_files` (files in the image cache with no
+    `cards` row) and `missing_image_files` (cards whose local_image_path file
+    is gone)."""
     unreferenced = pd.read_sql_query(
         f"""SELECT c.scryfall_id, c.name, c.set_code, c.collector_number
             FROM cards c WHERE {unreferenced_card_sql(conn)}
@@ -3609,6 +3650,7 @@ def orphan_report(conn, image_dir=None):
         if not os.path.isfile(os.path.join(static_dir, path))
     ]
     return {
+        "blank_lots": blank_lots(conn),
         "unreferenced_cards": unreferenced,
         "stale_card_tags": stale_tags,
         "orphan_image_files": pd.DataFrame({"file": orphan_files}),

@@ -394,6 +394,11 @@ spread of styles (Nalia, a generic one, Marchesa). On Nalia, check the
 changelings and Mutavault by name. Use the result to tune the prompt and
 definitions, and to decide whether the idea is good enough to put a UI on.
 
+Decided 2026-11-01: the first backtest uses only the six labels already on each
+deck's cards (Card Adv, Interaction, Ramp, Removal, Protection, Wipe), the cleanest
+comparison with your data. Activate more menu labels per deck only if the results
+look too narrow.
+
 Run it on `function` only at this stage: `strategy` labels have no definitions
 until Phase 4, and a `strategy` vocabulary built from the deck's own labels
 already contains the answers, so that score would only measure choosing among
@@ -436,7 +441,7 @@ line in `PROJECT_STATE.md`.
 
 ## Already built (outside the phases above)
 
-Advisor improvements made on 2026-11-01, uncommitted, that this plan builds on.
+Advisor improvements made on 2026-11-01 (committed on this branch ahead of Phase 2) that this plan builds on.
 They change analysis mode only and touch no tags:
 
 - The prompt now includes the deck's win conditions, strengths, weaknesses,

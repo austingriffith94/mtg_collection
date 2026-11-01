@@ -153,8 +153,7 @@ if deck_id is not None:
 # copies): resolve locally or via Scryfall, then add it to the mainboard
 # through writes.add_deck_card(), which also sleeves the copies by the
 # Auto rule (docs/archive/EDIT_FLOW_PLAN.md Phase 1: a free copy from storage first,
-# a starter lot only for what isn't owned) and returns the moves for the
-# pop-up.
+# then the buy list, with no lot) and returns the moves for the pop-up.
 # ------------------------------------------------------------------
 def _add_card_to_deck(deck_id, name, set_code, number, qty, source=None, source_location=None):
     """Returns (message, error, moves) — exactly one of message/error is

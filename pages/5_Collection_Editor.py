@@ -426,12 +426,18 @@ if st.button("➕ Add to collection", key="editor_coll_add_btn"):
     if err:
         st.error(err)
     elif sid:
+        try:
+            add_qty, add_loc, filled = writes.fill_lot_fields(
+                conn, sid, int(coll_add_qty) if coll_add_qty else None, coll_add_location.strip() or None)
+        except ValueError as exc:
+            st.error(str(exc))
+            st.stop()
         move_mark = q.last_move_id(conn)
         writes.add_collection_lot(
             conn, sid,
-            quantity=int(coll_add_qty) if coll_add_qty else None,
+            quantity=add_qty,
             foil=coll_add_foil,
-            location=coll_add_location.strip() or None,
+            location=add_loc,
             date_acquired=coll_add_date.isoformat() if coll_add_date else None,
             price_paid=float(coll_add_price) if coll_add_price else None,
             source=coll_add_source.strip() or None,
@@ -441,15 +447,16 @@ if st.button("➕ Add to collection", key="editor_coll_add_btn"):
         what = selected_card_name or f"{coll_add_set.strip().upper()} #{coll_add_num.strip()}"
         if selected_printing:
             what += f" ({selected_printing['set_code'].upper()} #{selected_printing['collector_number']})"
-        qty_txt = f"{int(coll_add_qty)}× " if coll_add_qty else ""
+        qty_txt = f"{add_qty}× " if add_qty else ""
         foil_txt = " foil" if coll_add_foil else ""
-        loc_txt = f" → {coll_add_location.strip()}" if coll_add_location.strip() else ""
+        loc_txt = f" → {add_loc}" if add_loc else ""
         fetched_txt = " (fetched fresh from Scryfall)" if was_new else ""
+        filled_txt = f" ({', '.join(filled)})" if filled else ""
         # Flag the per-card fields to be cleared on the next run (widget keys
         # can only be reset before their widgets are instantiated).
         st.session_state["editor_coll_add_reset"] = True
         cv.finish_edit({
-            "message": f"Added {qty_txt}{what}{foil_txt}{loc_txt}{fetched_txt}.",
+            "message": f"Added {qty_txt}{what}{foil_txt}{loc_txt}{fetched_txt}{filled_txt}.",
             "collection": True, "reference": True,
             "deck_sync": q.deck_sync_offers(conn, move_mark),
         })

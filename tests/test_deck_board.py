@@ -481,10 +481,11 @@ def test_apply_matches_the_shortlist_tabs_apply_path(owned):
         assert _state(via_board) == _state(via_tab)
         assert result["undo"] is None
         assert result["message"].startswith("Applied: Sol Ring in, Heirloom Blade out")
-        assert ("starter collection lot" in result["message"]) == (not owned)
-        # And it really applied: Sol Ring in and sleeved here.
+        assert ("on the buy list" in result["message"]) == (not owned)
+        # And it really applied: Sol Ring in, sleeved here if you own it.
         assert _state(via_board)["deck_cards"] == [(deck_id, "Sol Ring", 1)]
-        assert ("Sol Ring", 1, "Gisa") in _state(via_board)["collection"]
+        assert (("Sol Ring", 1, "Gisa") in _state(via_board)["collection"]) == owned
+        assert any(row[0] == "Sol Ring" for row in _state(via_board)["collection"]) == owned
     finally:
         via_board.close()
         via_tab.close()

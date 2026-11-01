@@ -57,7 +57,8 @@ def _deck(c, name="Gisa"):
 
 
 def _lot(c, card, qty, where):
-    return writes.add_collection_lot(c, card, quantity=qty, location=where)
+    # reason="import": the one way a real copy still arrives with no Location.
+    return writes.add_collection_lot(c, card, quantity=qty, location=where, reason="import")
 
 
 def _lots(c, card=RING):

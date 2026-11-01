@@ -54,8 +54,8 @@ plus pytest (`pip install -r requirements-dev.txt`):
 - `test_edit_flow.py` — docs/archive/EDIT_FLOW_PLAN.md Phase 1: one scenario run through every entry point that can
   express it (add bar write, each Board op, the Mainboard table save, `apply_change()`'s three shapes),
   each on a fresh database, asserting they leave the same list and collection. Then the rules one at a
-  time: a Box copy before a starter lot, never another deck's copy, splitting a lot, −1 on an
-  under-sleeved deck, printing swaps, basic lands, Undo putting each copy back (and deleting a starter
+  time: a Box copy before the buy list, never another deck's copy, splitting a lot, −1 on an
+  under-sleeved deck, printing swaps, basic lands, Undo putting each copy back (and deleting a purchase's
   lot), brewing / dismantled decks, and lot-only `move_copies()`. The page side (add bar toast, Mainboard
   save dialog, the Build it dialog (mark-built count, a build moving a copy), Reconcile "Sleeved here", Board Undo) is in `test_pages_smoke.py`.
 - `test_edit_basics.py` — docs/archive/EDIT_FLOW_PLAN.md Phase 7: a basic land through every entry point in three collection

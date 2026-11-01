@@ -345,8 +345,8 @@ def _render_plan():
         )
         if blocked:
             st.caption(
-                f"{blocked} of these can't be sourced from storage right now — they'll buy a copy "
-                "(creating a starter collection lot) or need a card unsleeved first."
+                f"{blocked} of these can't be sourced from storage right now — they'll go on the "
+                "buy list or need a card unsleeved first."
             )
         by_deck = {}
         for e in planned_entries:

@@ -250,7 +250,7 @@ def test_apply_swaps_the_deck_moves_the_lots_and_records_one_applied_row(conn, s
     assert _in_deck(conn, s["deck"], s["sol"])
     assert _lot(conn, s["blade"])["location"] == "Box"   # cut card returns to storage
     assert _lot(conn, s["sol"])["location"] == "Gisa"    # added card gets sleeved here
-    assert outcome["moved_out"] and outcome["assigned_lot_id"] and not outcome["created_lot"]
+    assert outcome["moved_out"] and outcome["assigned_lot_id"] and not outcome["to_buy"]
 
     # All three effects, and exactly ONE history row: execute_swap goes
     # through the non-logging internals, so the swap isn't recorded again as
@@ -263,17 +263,16 @@ def test_apply_swaps_the_deck_moves_the_lots_and_records_one_applied_row(conn, s
     assert rows[0]["remove_name"] == "Heirloom Blade"
 
 
-def test_apply_creates_a_starter_lot_for_a_card_that_is_not_owned(conn, deck, add_card):
+def test_apply_puts_a_card_that_is_not_owned_on_the_buy_list(conn, deck, add_card):
     blade, wanted = add_card("Heirloom Blade"), add_card("Jeweled Lotus")
     writes.add_deck_card(conn, deck, blade)
     cid = writes.add_change(
         conn, deck, add_scryfall_id=wanted, remove_scryfall_id=blade, status="planned"
     )
     outcome = writes.apply_change(conn, cid)
-    assert outcome["created_lot"]
-    assert _lot(conn, wanted)["location"] == "Gisa"
-    # docs/archive/EDIT_FLOW_PLAN.md Phase 1: one Auto rule, one starter-lot source.
-    assert _lot(conn, wanted)["source"] == writes.STARTER_LOT_SOURCE
+    assert outcome["to_buy"] and outcome["assigned_lot_id"] is None
+    assert conn.execute("SELECT COUNT(*) FROM collection WHERE scryfall_id=?", (wanted,)).fetchone()[0] == 0
+    assert [b["card"] for b in queries.awaiting_buys(conn)] == ["Jeweled Lotus"]
 
 
 def test_apply_refuses_when_the_cut_card_has_left_the_mainboard(conn, swap_setup):
@@ -435,7 +434,8 @@ def test_bulk_update_deck_cards_logs_through_the_same_path(conn, deck, add_card)
 def _orphan_lot(conn, sid):
     """A lot prune_collection would delete if nothing protected it: no
     location, no quantity, not in any mainboard."""
-    return writes.add_collection_lot(conn, sid, quantity=None, location=None)
+    conn.execute("INSERT INTO collection (scryfall_id) VALUES (?)", (sid,))
+    conn.commit()
 
 
 @pytest.mark.parametrize("status", ["idea", "planned"])

@@ -589,8 +589,8 @@ def safe_filename(name, max_length=150):
 # ------------------------------------------------------------------
 def auto_source_label(sources):
     """The picker's first option, saying what Auto would do right now:
-    "Auto — Box", "Auto — already sleeved here", "Auto — new copy record
-    (not owned)". Plain "Auto" when the card isn't known yet."""
+    "Auto — Box", "Auto — already sleeved here", "Auto — buy list (no free
+    copy)". Plain "Auto" when the card isn't known yet."""
     auto = (sources or {}).get("auto") or {}
     kind = auto.get("kind")
     if kind == "bulk":
@@ -600,7 +600,7 @@ def auto_source_label(sources):
     if kind == "storage":
         return f"Auto — {auto.get('location') or 'a copy with no Location'}"
     if kind == "new":
-        return "Auto — new copy record (not owned)"
+        return "Auto — buy list (no free copy)"
     return "Auto"
 
 
@@ -678,8 +678,8 @@ def apply_result_line(result, verb="Applied"):
         return f"✅ Took {pair['card']} from {pair['from_deck']} into {pair['to_deck']}."
     outcome = result.get("outcome") or {}
     fetch = " (fetched fresh from Scryfall)" if result.get("was_new") else ""
-    if outcome.get("created_lot"):
-        lot = " — created a new starter collection lot"
+    if outcome.get("to_buy"):
+        lot = " — on the buy list, no free copy"
     elif outcome.get("assigned_lot_id"):
         lot = " — reassigned an existing owned copy"
     else:

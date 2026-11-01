@@ -205,7 +205,7 @@ def render_source_picker(choices, key, container=None, label="Comes from"):
     picked = container.selectbox(
         label, labels, key=key,
         help="Auto uses a copy already in this deck, then the biggest free lot in storage, "
-             "then makes a new copy record. Pick a Location to take it from there instead, "
+             "then puts it on the buy list. Pick a Location to take it from there instead, "
              "or Buy to put it on the list now and record the purchase later (no copy is made).",
     )
     _label, source, location = choices[labels.index(picked)] if picked in labels else choices[0]

@@ -26,6 +26,19 @@ def conn():
 
 
 @pytest.fixture
+def raw_lot(conn):
+    """raw_lot(sid, quantity=None, location=None) -> collection_id, inserted
+    directly: add_collection_lot() refuses or fills in a lot like this, but
+    the live database still holds them (docs/UNOWNED_LOTS_PLAN.md Phase 3)."""
+    def _add(scryfall_id, quantity=None, location=None):
+        cur = conn.execute("INSERT INTO collection (scryfall_id, quantity, location) VALUES (?,?,?)",
+                           (scryfall_id, quantity, location))
+        conn.commit()
+        return cur.lastrowid
+    return _add
+
+
+@pytest.fixture
 def add_card(conn):
     """add_card('Sol Ring') -> scryfall_id of a minimal card row.
 

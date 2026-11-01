@@ -14,7 +14,7 @@ buy list is ready for the cards it receives.
 Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 
 - [x] **Phase 0** — Clean starting point.
-- [ ] **Phase 1** — Stop creating lots for cards you don't own.
+- [x] **Phase 1** — Stop creating lots for cards you don't own.
 - [ ] **Phase 2** — Buy list: split decks from ideas, Bought with a printing picker.
 - [ ] **Phase 3** — Remove the blank lots (preview, backup, confirm).
 - [ ] **Phase 4** — Clean up checks and the "sleeved of N" caveat.
@@ -142,6 +142,25 @@ have a deck target, so Bought can act on them. A card owned elsewhere stays a
 
 Tests that assert a starter lot change here (`test_edit_flow.py`,
 `test_deck_changes_writes.py`, and others).
+
+**As built:** 747 tests pass. `STARTER_LOT_SOURCE` is gone, and `_move_outcome()`'s
+`created_lot` became `to_buy`, because Auto can no longer make a lot. Choices the
+plan left open:
+
+- An order import (`reason="import"`) skips the fill-in and keeps its lots
+  unlocated, since imports are out of scope.
+- A lot that is already blank can still be edited; only an edit that would
+  blank a real lot is refused.
+- `move_lot()` passes `allow_blank`, so Undo can put an untracked lot back to no
+  Location. A refused `bulk_update_collection()` writes none of its rows.
+- The picker's label is "Auto — buy list (no free copy)", since it also shows
+  for a card owned only in other decks.
+
+On a copy of the live database nothing moves until the blank lots go (26 rows,
+$259.46). Deleting them there gives 154 rows and $1,342.22, as above, now split
+85 ideas, 52 `awaiting` (all Grizzly), 17 `contention`. **Phase 2's "Needed by
+decks" must therefore cover `awaiting` as well as `contention`** to reach the
+69 / $185.03 above.
 
 ## Phase 2 — Buy list: split decks from ideas, Bought with a printing picker
 

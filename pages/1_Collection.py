@@ -164,7 +164,11 @@ def render_edit_table(df):
                                 f"not the same card — left unchanged.")
             elif writes.set_lot_printing(conn, int(row["collection_id"]), sid):
                 printing_changes += 1
-        changed = writes.bulk_update_collection(conn, updates)
+        try:
+            changed = writes.bulk_update_collection(conn, updates)
+        except ValueError as exc:
+            changed = 0
+            problems.append(str(exc))
         message = f"Updated {changed} lot(s)."
         if printing_changes:
             message += f" Changed the printing on {printing_changes}."

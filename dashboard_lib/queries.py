@@ -1114,7 +1114,8 @@ def _lots_for_card(conn, name=None, scryfall_id=None):
     in a box as NOT OWNED; so would the allocator, which would then let
     every deck claim the same uncounted copy. One copy is the floor a NULL
     lot can mean, and counting it is what makes "can I grab it?"
-    answerable for those lots at all."""
+    answerable for those lots at all. A card you don't own has no lot, so
+    it isn't counted (docs/UNOWNED_LOTS_PLAN.md)."""
     oracle_ids = oracle_ids_for_card(conn, name=name, scryfall_id=scryfall_id)
     if oracle_ids:
         placeholders = ",".join("?" for _ in oracle_ids)
@@ -1331,7 +1332,7 @@ def plan_availability(conn, changes):
       in_other_deck  short, nobody else claimed it, but you own copies
                      sleeved in other decks: unsleeve one, don't buy one
       not_owned      short and you own none — a purchase (applying would
-                     create a starter lot). Phase 3's buy list reads this
+                     put it on the buy list). Phase 3's buy list reads this
       buying         the row chose Buy (Phase 4): a decided purchase, owned
                      copies elsewhere or not. It claims nothing, so it never
                      competes with another row for a copy
@@ -2613,8 +2614,8 @@ def card_sources(conn, scryfall_id, deck_id):
       bulk      True for a basic land (Phase 7): nothing is ever moved, so
                 there is nothing to choose — `storage` and `decks` are empty
       auto      what Auto would do right now: {"kind": "here" | "storage" |
-                "new" | "bulk", "location": Location or None}. "new" is a
-                starter lot — a copy you don't own yet
+                "new" | "bulk", "location": Location or None}. "new" is no
+                free copy: the card goes on the list with no lot, to buy
     """
     if is_basic_land(conn, scryfall_id=scryfall_id):
         price_row = conn.execute(
@@ -2940,11 +2941,14 @@ BUY_REASONS = ("awaiting", "chosen", "contention", "idea")   # most specific fir
 
 
 def awaiting_buys(conn, deck_id=None):
-    """Cards on a deck's list from a Buy add that no copy is sleeved for yet
-    (docs/archive/EDIT_FLOW_PLAN.md Phase 4's `awaiting`). A card is one when its latest
-    applied add row on the deck is source='buy' (a direct add logs one; so
-    does applying an idea) and the list runs more copies than the deck's
-    sleeves hold. A dismantled deck and an untracked basic land never are.
+    """Cards on a deck's list that no copy is sleeved for and that are waiting
+    to be bought (docs/archive/EDIT_FLOW_PLAN.md Phase 4's `awaiting`). A card
+    is one when the list runs more copies than the deck's sleeves hold and
+    either its latest applied add row on the deck is source='buy' (a direct
+    add logs one; so does applying an idea) or no copy of it exists anywhere,
+    in any printing (docs/UNOWNED_LOTS_PLAN.md). A card owned elsewhere that
+    wasn't marked Buy is contention_table()'s, not this.
+    A dismantled deck and an untracked basic land never are.
     `deck_id` narrows it to one deck. Each: {deck_id, deck_name, scryfall_id,
     card, quantity (copies still to buy), price}."""
     latest = {}
@@ -2956,14 +2960,23 @@ def awaiting_buys(conn, deck_id=None):
            ORDER BY dc.change_id"""
     ).fetchall():
         latest[(d_id, sid)] = source
+    # One read of what has a lot, not _lots_for_card() per row: every deck card
+    # passes through here, and the Board asks on each render (deck_buying()).
+    held = {key for oracle_id, name in conn.execute(
+        """SELECT DISTINCT c.oracle_id, c.name
+           FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id"""
+    ).fetchall() for key in (oracle_id, name.casefold()) if key}
     out = []
-    for d_id, deck_name, sid, qty, card, price in conn.execute(
-        """SELECT d.deck_id, d.name, dcd.scryfall_id, dcd.quantity, c.name, c.current_price_usd
+    for d_id, deck_name, sid, qty, card, price, oracle_id in conn.execute(
+        """SELECT d.deck_id, d.name, dcd.scryfall_id, dcd.quantity, c.name, c.current_price_usd,
+                  c.oracle_id
            FROM decks d JOIN deck_cards dcd ON dcd.deck_id = d.deck_id
            JOIN cards c ON c.scryfall_id = dcd.scryfall_id
            WHERE COALESCE(d.build_state, '') != 'dismantled'"""
     ).fetchall():
-        if latest.get((d_id, sid)) != "buy" or (deck_id is not None and d_id != deck_id):
+        if deck_id is not None and d_id != deck_id:
+            continue
+        if latest.get((d_id, sid)) != "buy" and (oracle_id or card.casefold()) in held:
             continue
         if is_basic_land(conn, scryfall_id=sid):
             continue
@@ -3000,13 +3013,14 @@ def buy_list(conn, contention=None):
     several reasons to be here; it gets ONE row, under the most specific
     (BUY_REASONS order):
 
-      awaiting    on a deck's list from a Buy add, still no copy sleeved there
+      awaiting    on a deck's list from a Buy add, or with no copy anywhere;
+                  still no copy sleeved there
       chosen      an open idea or planned change marked Buy (Phase 4), even
                   when you own copies elsewhere — "keep Gisa's, buy a second"
       contention  a mainboard / shortlist shortfall from contention_table()
       idea        an open idea (not yet staged — a planned swap that's not
-                  owned buys a starter lot automatically on apply) whose card
-                  you own ZERO copies of
+                  owned turns `awaiting` on apply) whose card you own ZERO
+                  copies of
 
     `contention` reuses an existing contention_table() result. Returns
     {"rows": [...], "total": float}; each row is {card, quantity, price,

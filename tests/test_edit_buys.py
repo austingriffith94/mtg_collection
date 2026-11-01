@@ -109,12 +109,54 @@ def test_buy_on_a_brewing_deck_still_says_buy_not_pull(c):
 
 
 def test_a_bump_buys_only_the_difference_and_a_basic_is_never_bought(c):
-    writes.add_deck_card(c, _deck(c, "Prosper"), LOTUS, 1)               # Auto: a starter lot
+    writes.add_deck_card(c, _deck(c, "Prosper"), LOTUS, 1)               # Auto: not owned, no lot
     moves = writes.add_deck_card(c, _deck(c, "Prosper"), LOTUS, 3, source="buy")
     assert [(m["kind"], m["quantity"]) for m in moves] == [("buy", 2)]
-    assert _lots(c, LOTUS) == [("Prosper", 1)]
+    assert _lots(c, LOTUS) == []
     writes.add_collection_lot(c, SWAMP, quantity=None, location="Basics box")   # untracked bulk basic
     assert [m["kind"] for m in _buy(c, "Prosper", SWAMP, 10)] == ["bulk"]
+
+
+def test_an_auto_add_with_no_copy_anywhere_is_awaiting(c):
+    (move,) = writes.add_deck_card(c, _deck(c, "Prosper"), LOTUS, 2)
+    assert (move["kind"], move["quantity"]) == ("buy", 2)
+    assert _lots(c, LOTUS) == []
+    (row,) = q.buy_list(c)["rows"]
+    assert (row["reason"], row["quantity"]) == ("awaiting", 2)
+    assert [(t["kind"], t["deck_name"], t["change_id"]) for t in row["targets"]] == [("awaiting", "Prosper", None)]
+    assert q.deck_buying(c, _deck(c, "Prosper")) == {LOTUS: 2}
+
+
+def test_a_listed_card_nobody_added_through_a_change_is_awaiting_too(c):
+    # An imported list has no deck_changes row behind it.
+    c.execute("INSERT INTO deck_cards (deck_id, scryfall_id, quantity) VALUES (?,?,1)", (_deck(c, "Prosper"), LOTUS))
+    c.commit()
+    assert [b["card"] for b in q.awaiting_buys(c)] == [LOTUS]
+    assert q.awaiting_buys(c, deck_id=_deck(c, "Gisa")) == []
+
+
+def test_a_copy_of_another_printing_stops_a_card_being_awaiting(c):
+    writes.add_deck_card(c, _deck(c, "Prosper"), LOTUS, 1)
+    c.execute("INSERT INTO cards (scryfall_id, name, set_code, collector_number, oracle_id)"
+              " SELECT 'lotus-2', name, 'sld', '2', oracle_id FROM cards WHERE scryfall_id=?", (LOTUS,))
+    writes.add_collection_lot(c, "lotus-2", quantity=1, location="Gisa")
+    assert q.awaiting_buys(c) == []
+
+
+def test_an_auto_add_owned_elsewhere_stays_contention(c):
+    writes.add_collection_lot(c, LOTUS, quantity=1, location="Gisa")
+    c.execute("INSERT INTO deck_cards (deck_id, scryfall_id, quantity) VALUES (?,?,1)", (_deck(c, "Gisa"), LOTUS))
+    c.commit()
+    (move,) = writes.add_deck_card(c, _deck(c, "Prosper"), LOTUS, 1)
+    assert move["kind"] == "buy"
+    assert q.awaiting_buys(c) == []
+    assert [(r["reason"], r["targets"]) for r in q.buy_list(c)["rows"]] == [("contention", [])]
+
+
+def test_a_copy_bought_for_an_auto_add_clears_it(c):
+    writes.add_deck_card(c, _deck(c, "Prosper"), LOTUS, 1)
+    writes.record_purchase(c, _deck(c, "Prosper"), LOTUS)
+    assert q.awaiting_buys(c) == [] and q.buy_list(c)["rows"] == []
 
 
 def test_buying_what_is_already_sleeved_here_buys_nothing(c):
@@ -134,7 +176,7 @@ def test_a_staged_buy_idea_applies_with_no_lot(c):
     c.execute("INSERT INTO deck_cards (deck_id, scryfall_id, quantity) VALUES (?,?,1)", (_deck(c, "Prosper"), BLADE))
     c.commit()
     out = writes.apply_change(c, cid)
-    assert _lots(c, LOTUS) == [] and not out["created_lot"]
+    assert _lots(c, LOTUS) == [] and out["to_buy"]
     assert [(m["kind"]) for m in out["moves"] if m["card"] == LOTUS] == ["buy"]
     assert c.execute("SELECT source, status FROM deck_changes WHERE change_id=?", (cid,)).fetchone()[:] == ("buy", "applied")
     assert [(b["deck_name"], b["card"]) for b in q.awaiting_buys(c)] == [("Prosper", LOTUS)]

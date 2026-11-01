@@ -424,12 +424,11 @@ def test_board_edit_glue_undo_button(smoke_db_path, tmp_path, monkeypatch):
         assert at.session_state["_pending_feedback"]["lines"] == ["Sol Ring → ×2"]
         assert at.button(key="k__undo_btn").label.startswith("↶ Undo: ")
         # docs/archive/EDIT_FLOW_PLAN.md Phase 1: the deck's only copy is already sleeved
-        # and deck 2 has none to give, so +1 makes a starter lot here — and
-        # the Undo has to delete it again, not just lower the quantity.
+        # and deck 2 has none to give, so +1 goes on the buy list with no lot.
         lots = lambda: sqlite3.connect(path).execute(  # noqa: E731
             "SELECT location, COUNT(*) FROM collection GROUP BY location").fetchall()
-        assert lots() == [("Smoke Test Deck", 2)]
-        assert [m["kind"] for m in at.session_state["_pending_feedback"]["moves"]] == ["new"]
+        assert lots() == [("Smoke Test Deck", 1)]
+        assert [m["kind"] for m in at.session_state["_pending_feedback"]["moves"]] == ["buy"]
 
         at.session_state["edit"] = {"op": "inc", "id": "no-such-card"}  # refused
         at.run()
@@ -1502,3 +1501,41 @@ def test_collection_editor_offers_imported_copies_to_the_deck_waiting_on_them(sm
     finally:
         st.cache_resource.clear()
         st.cache_data.clear()
+
+
+def _add_form(smoke_db_path, tmp_path, monkeypatch, quantity):
+    """The Collection Editor's Add form, pinned to Sol Ring by set + number
+    with no Location picked, on a throwaway copy of the database."""
+    from dashboard_lib import db
+
+    path = str(tmp_path / "add_form.db")
+    shutil.copy(smoke_db_path, path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    at = AppTest.from_file(os.path.join(PAGES_DIR, "5_Collection_Editor.py"), default_timeout=15)
+    at.run()
+    at.text_input(key="editor_coll_add_set").set_value("cmd")
+    at.text_input(key="editor_coll_add_num").set_value("1")
+    at.number_input(key="editor_coll_add_qty").set_value(quantity)
+    at.button(key="editor_coll_add_btn").click().run()
+    assert not at.exception
+    return at, path
+
+
+def _lot_count(path):
+    return sqlite3.connect(path).execute("SELECT COUNT(*) FROM collection").fetchone()[0]
+
+
+def test_add_form_says_what_it_filled_in(smoke_db_path, tmp_path, monkeypatch):
+    before = _lot_count(smoke_db_path)
+    at, path = _add_form(smoke_db_path, tmp_path, monkeypatch, 2)
+    assert _lot_count(path) == before + 1
+    assert sqlite3.connect(path).execute(
+        "SELECT quantity, location FROM collection ORDER BY collection_id DESC LIMIT 1").fetchone() == (2, "Box")
+    assert any("Location set to Box" in t.value for t in at.toast)
+
+
+def test_add_form_refuses_a_lot_with_neither_field(smoke_db_path, tmp_path, monkeypatch):
+    before = _lot_count(smoke_db_path)
+    at, path = _add_form(smoke_db_path, tmp_path, monkeypatch, 0)
+    assert _lot_count(path) == before
+    assert any("enter a quantity or a Location" in e.value for e in at.error)

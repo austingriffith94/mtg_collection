@@ -715,8 +715,8 @@ def _apply_change_action(conn, deck_id, op, action, resolve_add=None, with_moves
         return {"message": fmt.apply_result_line(result)[2:], "undo": None,
                 "moves": result["moves"]}
     outcome = result["outcome"] or {}
-    if outcome.get("created_lot"):
-        lot = " (not owned — added a starter collection lot)"
+    if outcome.get("to_buy"):
+        lot = " (no free copy — on the buy list)"
     elif outcome.get("assigned_lot_id"):
         lot = " (owned copy moved into the deck)"
     else:

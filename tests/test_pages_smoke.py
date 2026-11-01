@@ -1562,6 +1562,31 @@ def _lot_count(path):
     return sqlite3.connect(path).execute("SELECT COUNT(*) FROM collection").fetchone()[0]
 
 
+def test_clean_up_lists_lots_missing_a_field_with_nothing_to_delete(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    conn = sqlite3.connect(path)
+    conn.execute("INSERT INTO collection (scryfall_id, quantity) VALUES ('sol-ring-cmd-1', 2)")
+    conn.execute("INSERT INTO collection (scryfall_id, location) VALUES ('sol-ring-cmd-1', 'Box')")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "6_Card_Database.py"), default_timeout=15)
+        at.run()
+        assert not at.exception
+        labels = [e.label for e in at.expander]
+        assert "Lots with no location (1)" in labels and "Lots with no quantity (1)" in labels
+        assert not [b for b in at.button if b.key and b.key.startswith("carddb_clean_no_")]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
 def test_clean_up_previews_and_deletes_blank_lots(smoke_db_path, tmp_path, monkeypatch):
     from dashboard_lib import db
 

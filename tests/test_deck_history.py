@@ -4,7 +4,7 @@ Workbench rework (see docs/archive/IMPLEMENTATION_PLAN.md).
 import pandas as pd
 
 from dashboard_lib import card_view
-from dashboard_lib import queries as q
+from dashboard_lib import queries as q, writes
 
 
 def _deck(conn, name):
@@ -190,6 +190,28 @@ def test_status_strip_omits_what_does_not_apply():
     assert card_view.deck_status_strip({"planned": 0, "ideas": 1, "games": 0, "wins": 0, "losses": 0,
                                         "build_pct": None}) == "1 idea"
     assert card_view.deck_status_strip({"planned": 0, "ideas": 0, "games": 0, "build_pct": 100.0}) == ""
+
+
+def test_status_strip_says_how_many_are_sleeved_and_to_buy():
+    row = {"planned": 0, "ideas": 0, "games": 0, "build_pct": 3.6, "build_located": 3, "build_needed": 83,
+           "to_buy": 52}
+    assert card_view.deck_status_strip(row) == "4% built · 3 of 83 sleeved · 52 to buy"
+    assert card_view.deck_status_strip({**row, "to_buy": 0}) == "4% built · 3 of 83 sleeved"
+    # Nothing is said about a fully sleeved deck, whatever the counts.
+    assert card_view.deck_status_strip({**row, "build_pct": 100.0, "build_located": 83}) == ""
+    # A NaN count (a deck with no reconciliation row) reads as absent.
+    assert card_view.deck_status_strip({**row, "build_needed": float("nan"), "to_buy": float("nan")}) == "4% built"
+
+
+def test_comparison_counts_sleeved_and_to_buy(conn, add_card):
+    sol, ring = add_card("Sol Ring"), add_card("Arcane Signet")
+    deck = conn.execute("INSERT INTO decks (name) VALUES ('Gisa')").lastrowid
+    conn.executemany("INSERT INTO deck_cards (deck_id, scryfall_id, quantity) VALUES (?,?,1)",
+                     [(deck, sol), (deck, ring)])
+    writes.add_collection_lot(conn, sol, quantity=1, location="Gisa")
+    row = q.deck_comparison(conn).iloc[0]
+    assert (row["build_located"], row["build_needed"], row["to_buy"]) == (1, 2, 1)
+    assert card_view.deck_status_strip(row) == "50% built · 1 of 2 sleeved · 1 to buy"
 
 
 def test_status_strip_shows_build_only_while_unfinished():

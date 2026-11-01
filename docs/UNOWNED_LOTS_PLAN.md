@@ -17,7 +17,7 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] **Phase 1** — Stop creating lots for cards you don't own.
 - [x] **Phase 2** — Buy list: split decks from ideas, Bought with a printing picker.
 - [x] **Phase 3** — Remove the blank lots (preview, backup, confirm).
-- [ ] **Phase 4** — Clean up checks and the "sleeved of N" caveat.
+- [x] **Phase 4** — Clean up checks and the "sleeved of N" caveat.
 - [ ] **Phase 5** — Docs and wrap-up.
 
 ## The design
@@ -264,6 +264,20 @@ headless Edge with no errors, and board art still shows.
 **Deck caveat:** `deck_sourcing_plan()` already returns `located` and `needed`, and
 the deck summary line already shows "% built". Show "3 of 83 sleeved · 52 to buy"
 beside it, wherever that line appears, whenever a deck isn't fully sleeved.
+
+**As built:** 781 tests pass, which includes the Advisor tests another change added.
+On the live database the Clean up panel lists the two Gisa lots with no quantity
+and nothing with no location, and Grizzly's tile reads
+"🔨 brewing · 3 ideas · 4% built · 3 of 83 sleeved · 52 to buy".
+
+- The "% built" line appears only in `card_view.deck_status_strip()` (the Home
+  tiles), so `deck_comparison()` gained `build_located`, `build_needed` and `to_buy`.
+  `to_buy` counts copies with no copy anywhere (`awaiting_buys()`), not every copy
+  still to pull, so it is 52 on Grizzly rather than 80. The Decks page's Build Plan
+  progress text gets the same "· 52 to buy".
+- The two checks are read-only buckets in `orphan_report()` and take no delete
+  button. Basic lands are exempt from both, and a lot with neither field is a blank
+  lot with its own bucket. They are counted on the "Stale data left" line.
 
 ## Phase 5 — Docs and wrap-up
 

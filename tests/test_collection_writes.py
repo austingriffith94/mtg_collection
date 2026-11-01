@@ -200,6 +200,22 @@ def test_blank_lots_names_what_holds_each_one(conn, add_card, raw_lot):
     assert len(queries.orphan_report(conn)["blank_lots"]) == 3
 
 
+def test_the_clean_up_checks_list_lots_missing_one_field(conn, add_card, raw_lot):
+    raw_lot(add_card("Counted"), 2, None)
+    raw_lot(add_card("Placed"), None, "Gisa")
+    raw_lot(add_card("Zero"), 0, "Box")
+    raw_lot(add_card("Whole"), 1, "Box")
+    raw_lot(add_card("Blank"))
+    swamp = _basic(conn, add_card)                            # basics are exempt from both
+    raw_lot(swamp, 5, None)
+    raw_lot(swamp, None, "Lands")
+    report = queries.orphan_report(conn)
+    assert report["no_location"]["card"].tolist() == ["Counted"]
+    assert report["no_quantity"]["card"].tolist() == ["Placed", "Zero"]
+    assert report["no_quantity"]["location"].tolist() == ["Gisa", "Box"]
+    assert report["blank_lots"]["card"].tolist() == ["Blank"]       # the blank lot is not in either
+
+
 def test_delete_blank_lots_rechecks_each_lot_and_logs_nothing(conn, add_card, raw_lot):
     gone, filled = raw_lot(add_card("Gone")), raw_lot(add_card("Filled"))
     writes.update_collection_lot(conn, filled, location="Box")   # since the preview

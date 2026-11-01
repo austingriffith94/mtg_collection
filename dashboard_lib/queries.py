@@ -3406,8 +3406,17 @@ def deck_comparison(conn):
            ORDER BY d.name COLLATE NOCASE""",
         conn,
     )
-    pct = {r["deck_id"]: r["build"]["pct"] for r in deck_reconciliation(conn)}
-    df["build_pct"] = df["deck_id"].map(pct)
+    builds = {r["deck_id"]: r["build"] for r in deck_reconciliation(conn)}
+    df["build_pct"] = df["deck_id"].map({d: b["pct"] for d, b in builds.items()})
+    # Beside "% built": how many copies are sleeved of how many needed, and how
+    # many of the rest have no copy anywhere and have to be bought
+    # (docs/UNOWNED_LOTS_PLAN.md Phase 4).
+    df["build_located"] = df["deck_id"].map({d: b["located"] for d, b in builds.items()})
+    df["build_needed"] = df["deck_id"].map({d: b["needed"] for d, b in builds.items()})
+    to_buy = {}
+    for b in awaiting_buys(conn):
+        to_buy[b["deck_id"]] = to_buy.get(b["deck_id"], 0) + b["quantity"]
+    df["to_buy"] = df["deck_id"].map(to_buy).fillna(0).astype(int)
     return df
 
 
@@ -3605,8 +3614,32 @@ def blank_lots(conn):
     return pd.DataFrame(rows, columns=["collection_id", "card", "printing", "held_by"])
 
 
+def lots_missing_a_field(conn, field):
+    """Lots a person has to look at, for two read-only Clean up checks
+    (docs/UNOWNED_LOTS_PLAN.md Phase 4): `field` "location" is a lot with a
+    quantity and no Location, "quantity" one with a Location and no quantity.
+    Basic lands are exempt from both, and a lot with neither is a blank lot,
+    which has its own bucket. A DataFrame of collection_id, card, printing,
+    quantity, location and source, by card name."""
+    where = {
+        "location": "col.quantity > 0 AND (col.location IS NULL OR TRIM(col.location) = '')",
+        "quantity": "(col.quantity IS NULL OR col.quantity = 0) AND TRIM(COALESCE(col.location, '')) != ''",
+    }[field]
+    return pd.read_sql_query(
+        f"""SELECT col.collection_id, c.name AS card,
+                   UPPER(COALESCE(c.set_code, '?')) || ' #' || c.collector_number AS printing,
+                   col.quantity, col.location, col.source
+            FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
+            WHERE {where} AND COALESCE(c.is_basic_land, 0) = 0
+            ORDER BY c.name COLLATE NOCASE""",
+        conn,
+    )
+
+
 def orphan_report(conn, image_dir=None):
     """Stale buckets, each a DataFrame: `blank_lots` (see blank_lots()),
+    `no_location` and `no_quantity` (lots_missing_a_field(); nothing here
+    deletes them),
     `unreferenced_cards`, `stale_card_tags` (tag rows for a card no longer in
     that deck), `orphan_image_files` (files in the image cache with no
     `cards` row) and `missing_image_files` (cards whose local_image_path file
@@ -3651,6 +3684,8 @@ def orphan_report(conn, image_dir=None):
     ]
     return {
         "blank_lots": blank_lots(conn),
+        "no_location": lots_missing_a_field(conn, "location"),
+        "no_quantity": lots_missing_a_field(conn, "quantity"),
         "unreferenced_cards": unreferenced,
         "stale_card_tags": stale_tags,
         "orphan_image_files": pd.DataFrame({"file": orphan_files}),

@@ -57,6 +57,8 @@ db.refresh_data_button()
 
 ORPHAN_LABELS = {
     "blank_lots": "blank lot(s)",
+    "no_location": "lot(s) with no location",
+    "no_quantity": "lot(s) with no quantity",
     "unreferenced_cards": "unreferenced card(s)",
     "stale_card_tags": "stale deck tag(s)",
     "orphan_image_files": "orphan image file(s)",
@@ -455,6 +457,20 @@ with tab_carddata:
                     st.error(str(exc))
                 else:
                     cv.finish_edit({"message": f"Deleted {n}.", "reference": True, "collection": True})
+
+    # Read-only: a lot with one field missing is a real copy that needs a person
+    # to fill it in, so there is nothing to delete.
+    for key, title, note in (
+        ("no_location", "Lots with no location",
+         "A quantity but nowhere recorded. Set a Location in the Collection page's Edit mode."),
+        ("no_quantity", "Lots with no quantity",
+         "A Location but no count, so each reads as one copy. Set the quantity in the Collection page's "
+         "Edit mode."),
+    ):
+        if not orphans[key].empty:
+            with st.expander(f"{title} ({len(orphans[key])})"):
+                st.caption(note)
+                st.dataframe(orphans[key].drop(columns="collection_id"), hide_index=True, width="stretch")
 
     _cleanup_bucket(
         "blank_lots", "Blank lots",

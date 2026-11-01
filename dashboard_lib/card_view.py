@@ -988,11 +988,13 @@ def deck_image_src(row, embed=False):
 
 def deck_status_strip(row):
     """One-line status for a deck tile from a deck_comparison() row:
-    "🔨 brewing · 9 planned · 18 ideas · 1-2 · 4% built". Parts that don't
-    apply are left out (no "0 planned"), the record shows only once a game
-    is logged, and build status only while the deck isn't fully sleeved — a
-    finished deck's 100% would be noise on 11 of 12 tiles. Empty string when
-    nothing applies.
+    "🔨 brewing · 9 planned · 18 ideas · 1-2 · 4% built · 3 of 83 sleeved · 52
+    to buy". Parts that don't apply are left out (no "0 planned"), the record
+    shows only once a game is logged, and build status only while the deck
+    isn't fully sleeved — a finished deck's 100% would be noise on 11 of 12
+    tiles. A deck missing cards must not read as done, so the sleeved count
+    and what has to be bought (no copy anywhere) follow the percentage when
+    the row has them. Empty string when nothing applies.
 
     The lifecycle flag (Phase 6) leads, because it changes how to read
     everything after it: 4% built is alarming on a deck you thought was
@@ -1014,6 +1016,10 @@ def deck_status_strip(row):
     pct = row.get("build_pct")
     if pct is not None and not pd.isna(pct) and pct < 100:
         parts.append(f"{pct:.0f}% built")
+        if n("build_needed"):
+            parts.append(f"{n('build_located')} of {n('build_needed')} sleeved")
+        if n("to_buy"):
+            parts.append(f"{n('to_buy')} to buy")
     return " · ".join(parts)
 
 

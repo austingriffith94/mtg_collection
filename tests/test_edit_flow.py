@@ -8,7 +8,7 @@ apply_change()'s three shapes), each on its own fresh database, and the
 resulting deck list + collection compared across all of them.
 
 Then the rules behind those states, one test each: a free copy in storage
-before a starter lot, never a copy out of another deck, splitting a lot,
+before the buy list, never a copy out of another deck, splitting a lot,
 bulk basics, Undo putting copies back, and brewing / dismantled decks.
 """
 import os
@@ -115,14 +115,14 @@ ADD_PATHS = {
 
 
 @pytest.mark.parametrize("world,expected_lots", [
-    # A free copy in Box is used before a starter lot is made.
+    # A free copy in Box is used before the card goes on the buy list.
     ({"box": 1}, [(RING, "Gisa", 1, "")]),
     # Biggest lot first, split so only one copy moves.
     ({"box": 3}, [(RING, "Box", 2, ""), (RING, "Gisa", 1, "")]),
-    # A copy in another deck is never taken: a starter lot instead.
-    ({"other_deck": 1}, [(RING, "Gisa", 1, writes.STARTER_LOT_SOURCE), (RING, "Tuvasa", 1, "")]),
-    # Not owned at all: a starter lot.
-    ({}, [(RING, "Gisa", 1, writes.STARTER_LOT_SOURCE)]),
+    # A copy in another deck is never taken, and no lot is made.
+    ({"other_deck": 1}, [(RING, "Tuvasa", 1, "")]),
+    # Not owned at all: no lot.
+    ({}, []),
     # A stray already sleeved here is adopted; nothing moves.
     ({"sleeved": 1, "box": 1}, [(RING, "Box", 1, ""), (RING, "Gisa", 1, "")]),
 ], ids=["box", "split", "other-deck", "not-owned", "stray-here"])
@@ -132,7 +132,7 @@ def test_adding_a_card_leaves_the_same_collection_from_every_path(fresh, world, 
         c = fresh()
         g = _world(c, **world)
         moves = path(c, g)
-        assert all(m["to"] == "Gisa" for m in moves), label
+        assert all(m["to"] == "Gisa" or m["kind"] == "buy" for m in moves), label
         states[label] = _state(c)
     first = next(iter(states.values()))
     assert all(s == first for s in states.values()), states
@@ -226,7 +226,7 @@ def test_cutting_one_printing_for_another_of_the_same_card_moves_nothing(fresh):
     c.execute("INSERT INTO cards (scryfall_id, name, set_code, collector_number, oracle_id)"
               " VALUES (?, 'Sol Ring', 'c21', '9', 'oracle-Sol Ring')", (foil,))
     outcome = writes.apply_change(c, _planned(c, g, add=foil, remove=RING))
-    assert outcome["moves"] == [] and not outcome["created_lot"]
+    assert outcome["moves"] == [] and not outcome["to_buy"]
     assert _state(c)["lots"] == [(RING, "Gisa", 1, "")]
 
 
@@ -245,7 +245,7 @@ def test_apply_keeps_its_old_outcome_keys(fresh):
     c = fresh()
     g = _world(c, box=1, cut_listed=True)
     outcome = writes.apply_change(c, _planned(c, g, add=RING, remove=BLADE))
-    assert outcome["moved_out"] and not outcome["created_lot"]
+    assert outcome["moved_out"] and not outcome["to_buy"]
     assert outcome["assigned_lot_id"] == next(m["collection_id"] for m in outcome["moves"] if m["card"] == RING)
 
 
@@ -310,13 +310,25 @@ def test_undoing_an_add_from_box_puts_the_copy_back_in_box(fresh):
     assert _state(c) == {"list": [], "lots": [(RING, "Box", 1, "")]}
 
 
-def test_undoing_a_bump_deletes_the_starter_lot_it_made(fresh):
+def test_undoing_an_add_of_a_card_you_dont_own_leaves_nothing(fresh):
+    c = fresh()
+    g = _world(c)
+    cid = writes.add_change(c, g, add_scryfall_id=RING, add_name=RING)
+    result = _board(c, g, op="add", change_id=cid)
+    assert [m["kind"] for m in result["moves"]] == ["buy"]
+    assert _state(c) == {"list": [(RING, 1)], "lots": []}
+    _undo(c, g, result)
+    assert _state(c) == {"list": [], "lots": []}
+
+
+def test_undoing_a_bump_with_no_free_copy_touches_no_lot(fresh):
     c = fresh()
     g = _world(c, sleeved=1, listed=1)
     result = _board(c, g, op="inc", id=RING)
-    assert [m["kind"] for m in result["moves"]] == ["new"]
+    assert [m["kind"] for m in result["moves"]] == ["buy"]
+    assert _state(c)["lots"] == [(RING, "Gisa", 1, "")]
     undone = _undo(c, g, result)
-    assert [m["kind"] for m in undone["moves"]] == ["delete"]
+    assert undone["moves"] == []
     assert _state(c) == {"list": [(RING, 1)], "lots": [(RING, "Gisa", 1, "")]}
 
 

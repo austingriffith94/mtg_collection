@@ -250,7 +250,7 @@ def test_apply_swaps_the_deck_moves_the_lots_and_records_one_applied_row(conn, s
     assert _in_deck(conn, s["deck"], s["sol"])
     assert _lot(conn, s["blade"])["location"] == "Box"   # cut card returns to storage
     assert _lot(conn, s["sol"])["location"] == "Gisa"    # added card gets sleeved here
-    assert outcome["moved_out"] and outcome["assigned_lot_id"] and not outcome["created_lot"]
+    assert outcome["moved_out"] and outcome["assigned_lot_id"] and not outcome["to_buy"]
 
     # All three effects, and exactly ONE history row: execute_swap goes
     # through the non-logging internals, so the swap isn't recorded again as
@@ -263,17 +263,16 @@ def test_apply_swaps_the_deck_moves_the_lots_and_records_one_applied_row(conn, s
     assert rows[0]["remove_name"] == "Heirloom Blade"
 
 
-def test_apply_creates_a_starter_lot_for_a_card_that_is_not_owned(conn, deck, add_card):
+def test_apply_puts_a_card_that_is_not_owned_on_the_buy_list(conn, deck, add_card):
     blade, wanted = add_card("Heirloom Blade"), add_card("Jeweled Lotus")
     writes.add_deck_card(conn, deck, blade)
     cid = writes.add_change(
         conn, deck, add_scryfall_id=wanted, remove_scryfall_id=blade, status="planned"
     )
     outcome = writes.apply_change(conn, cid)
-    assert outcome["created_lot"]
-    assert _lot(conn, wanted)["location"] == "Gisa"
-    # docs/archive/EDIT_FLOW_PLAN.md Phase 1: one Auto rule, one starter-lot source.
-    assert _lot(conn, wanted)["source"] == writes.STARTER_LOT_SOURCE
+    assert outcome["to_buy"] and outcome["assigned_lot_id"] is None
+    assert conn.execute("SELECT COUNT(*) FROM collection WHERE scryfall_id=?", (wanted,)).fetchone()[0] == 0
+    assert [b["card"] for b in queries.awaiting_buys(conn)] == ["Jeweled Lotus"]
 
 
 def test_apply_refuses_when_the_cut_card_has_left_the_mainboard(conn, swap_setup):
@@ -429,42 +428,23 @@ def test_bulk_update_deck_cards_logs_through_the_same_path(conn, deck, add_card)
 
 
 # ------------------------------------------------------------------
-# prune_collection must protect open shortlist cards — and survive NULLs
+# prune_collection: a blank lot goes, whatever wants the card
 # ------------------------------------------------------------------
 
 def _orphan_lot(conn, sid):
-    """A lot prune_collection would delete if nothing protected it: no
-    location, no quantity, not in any mainboard."""
-    return writes.add_collection_lot(conn, sid, quantity=None, location=None)
+    """A lot prune_collection deletes: no location, no quantity."""
+    conn.execute("INSERT INTO collection (scryfall_id) VALUES (?)", (sid,))
+    conn.commit()
 
 
 @pytest.mark.parametrize("status", ["idea", "planned"])
-def test_prune_keeps_a_lot_an_open_change_depends_on(conn, deck, add_card, status):
+def test_prune_deletes_a_blank_lot_an_open_change_wants(conn, deck, add_card, status):
     keep, blade = add_card("Sol Ring"), add_card("Heirloom Blade")
     _orphan_lot(conn, keep)
     writes.add_change(
         conn, deck, add_scryfall_id=keep, remove_scryfall_id=blade if status == "planned" else None,
         status=status,
     )
-    assert writes.prune_collection(conn) == []
-
-
-def test_prune_deletes_a_lot_once_its_idea_is_dropped(conn, deck, add_card):
-    sid = add_card("Sol Ring")
-    _orphan_lot(conn, sid)
-    cid = writes.add_change(conn, deck, add_scryfall_id=sid)
-    writes.drop_change(conn, cid)
-    assert [name for _, name in writes.prune_collection(conn)] == ["Sol Ring"]
-
-
-def test_an_unlinked_change_does_not_switch_pruning_off(conn, deck, add_card):
-    """add_scryfall_id is NULL for every swap backfilled from the old queue.
-    `x NOT IN (subquery containing NULL)` is NULL rather than true, so
-    without the IS NOT NULL filter one such row would silently stop
-    prune_collection from ever deleting anything."""
-    doomed, blade = add_card("Sol Ring"), add_card("Heirloom Blade")
-    _orphan_lot(conn, doomed)
-    writes.add_change(conn, deck, add_name="Some Typed Name", remove_scryfall_id=blade, status="planned")
     assert [name for _, name in writes.prune_collection(conn)] == ["Sol Ring"]
 
 

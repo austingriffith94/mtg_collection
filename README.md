@@ -374,9 +374,9 @@ jump to the same deck's other views.
     permanent Scryfall ID and refreshes its Reserved List flag, Game
     Changer flag, Showcase/Borderless flags, Commander legality, and
     price — without the wipe-and-rebuild `migrate.py` does. Afterward it
-    also automatically prunes the collection: any lot with no assigned
-    location, a quantity of 0/none, and not present in any deck's
-    mainboard or open shortlist is deleted. Same underlying logic (and same
+    also automatically prunes the collection: any non-basic lot with no
+    assigned location and a quantity of 0/none is deleted, even if a deck
+    lists the card (see *Cards you don't own* below). Same underlying logic (and same
     CLI-vs-dashboard sharing pattern) as Moxfield export — see
     `scripts/refresh_card_data.py` / `dashboard_lib/refresh.py`.
 - **Commander Game Tracking** — log a game with up to 4 seats, each either
@@ -419,13 +419,15 @@ jump to the same deck's other views.
       simply over-subscribed across decks still surfaces. "Drop from deck
       N" removes it from that deck's real mainboard (logged to history like
       any hand edit, via `writes.remove_deck_card`).
-    - **Buy list** — one row per card, grouped across decks so wanting one
-      card on three shortlists prices it once, under the most specific of
-      four reasons: on a deck's list from a **Buy** add with no copy
-      sleeved yet (*awaiting*), a Shortlist row marked **Buy** (*chosen*), a
-      Contention shortfall, or an open idea with zero owned copies. Each
-      row's deck gets a **Bought** button (see *Planned buys* below).
-      Exportable as plain text.
+    - **Needed by decks** and **Ideas** — the buy list, one row per card,
+      grouped across decks so wanting one card on three shortlists prices it
+      once, under the most specific of four reasons: on a deck's list with
+      no copy anywhere, or from a **Buy** add (*awaiting*), a Shortlist row
+      marked **Buy** (*chosen*), a Contention shortfall, or an open idea
+      with zero owned copies. The first three are needed by decks and
+      totalled together; ideas are maybes, so they sit in a collapsed section
+      outside that total. **Bought** records a purchase for a row's deck
+      (see *Planned buys* below). Exportable as plain text, with both totals.
   - **📦 Physical**
     - **Unlocated lots** — editable, priciest first. Pick a Location per
       row, or tick rows and choose one Location for all of them; one Save.
@@ -465,8 +467,9 @@ jump to the same deck's other views.
     not 0, for a deck never checked against Spellbook. Avg CMC excludes
     lands (including MDFC land faces), like the mana curve.
   - **Home tiles** carry a status line under each deck name —
-    `9 planned · 18 ideas · 1-2` — plus `N% built` while a deck isn't fully
-    sleeved, and a Workbench summary line sits above the grid. Both read
+    `9 planned · 18 ideas · 1-2` — plus `N% built · 3 of 83 sleeved · 52 to buy`
+    while a deck isn't fully sleeved (*to buy* is the cards you own no copy
+    of), and a Workbench summary line sits above the grid. Both read
     `queries.deck_comparison()`, so the tiles and the matrix can't disagree.
 - **Card Lookup** (Phase 3) — one card, everything about it: price/rarity
   from a representative printing, every owned lot, every deck it's
@@ -688,8 +691,8 @@ lifecycle" below), and has four parts:
    ones, or all of them. Applying updates this deck's mainboard AND moves
    the copies exactly as a hand edit would (see "Deck edits move the
    copies" below): the replaced card's copies sleeved in this deck go back
-   to "Box", and the added card is sleeved here from storage, or as a
-   starter lot if you own no free copy. A planned swap
+   to "Box", and the added card is sleeved here from storage, or goes on
+   the buy list if you own no free copy. A planned swap
    whose cut card has already left the mainboard is refused rather than
    applied, since it would add a card without removing one. A warning
    appears if applying everything would change the deck's card count: a
@@ -750,8 +753,8 @@ Shortlist tab or the Workbench, and the Workbench's contention "Drop".
 
 - **A card joins (or goes up in quantity):** copies already sleeved in the
   deck count first; then free copies in storage, biggest lot first (a lot
-  of 3 is split if only one is needed); then, for whatever is left, a
-  starter lot tagged `Auto-added (deck edit)`. Auto never takes a copy
+  of 3 is split if only one is needed); then, for whatever is left, the
+  buy list: no lot is made for a card you don't own. Auto never takes a copy
   sleeved in another deck — only choosing that deck does (below).
 - **A card leaves (or goes down):** the copies the list no longer needs go
   back to "Box". A deck that was never fully sleeved keeps what it still
@@ -771,8 +774,8 @@ Shortlist tab or the Workbench, and the Workbench's contention "Drop".
 
 A pop-up names every copy moved: a toast for one or two
 (*"Sol Ring: Box → Prosper"*), a dialog grouped by from → to for more.
-The Board's **Undo** puts each copy back exactly where it came from, and
-deletes a starter lot the edit made (if it hasn't been touched since).
+The Board's **Undo** puts each copy back exactly where it came from; a
+card that only went on the buy list has no lot to undo.
 Because hand edits now keep the collection in step, the Workbench's
 Reconcile only shows real drift.
 
@@ -795,7 +798,7 @@ rather than the only choice.
   to…** and **Remove to…** (they're left out for a brewing deck, where no copy
   moves).
 - **A Location that can't supply the copy refuses the edit** with the
-  reason and changes nothing; it never falls back to a starter lot. A deck
+  reason and changes nothing; it never falls back to the buy list. A deck
   isn't a storage Location — pick it as the deck the card comes from instead
   (next section).
 - **History records the choice** ("from Lands Box", "to Binder") on the
@@ -811,10 +814,14 @@ choice is **🛒 Buy**: the card goes on the deck's list (or an idea / planned
 row) now, and **no collection copy is made or moved**. It's allowed even when
 you own copies elsewhere — keep Gisa's, buy a second.
 
-- **Workbench → Buy list** shows it until a copy is sleeved in that deck.
-  **Bought** (per deck, with an optional price paid each) makes the lot
-  straight in that deck's sleeves. A Buy idea goes back to Auto when bought
-  in full, so applying it later finds the copy already there.
+- **Workbench → Needed by decks** shows it until a copy is sleeved in that
+  deck. **Bought** makes the lot for the printing you actually bought: it
+  starts on the deck's listed printing, any known printing can be picked, or
+  type a set and number. Quantity defaults to the number still short; foil,
+  price paid each and the Location are yours to set (the deck's sleeves by
+  default, or a storage box). When the copy goes into the deck as a different
+  printing, the deck's list moves to it too. A Buy idea goes back to Auto when
+  bought in full, so applying it later finds the copy already there.
 - **Collection Editor → order import**: after an import, copies of a card a
   deck is waiting on are offered *"Sleeve Sol Ring ×1 into Prosper"*, ticked
   by default for the first deck wanting it (two decks wanting one copy are
@@ -862,17 +869,43 @@ Taking it from Gisa changes Gisa's list too, so both decks show it.
   dismantle's transfers are takes too, so they read "from Vilis" and
   apply or drop as pairs.
 
+## Cards you don't own have no collection row
+
+A card you don't own never appears in the Collection and never counts as a
+copy you could sleeve. It lives in `cards`, and a deck's list or an idea
+points at it there; when a deck lists it with no copy anywhere, it goes on the
+Workbench buy list by itself. (Before this, Auto made a "starter lot" with no
+quantity or Location for such a card, which looked like a copy.)
+
+- **Unowned means** no quantity (blank or 0) **and** no Location. Either one
+  filled in is a copy; with a Location and no quantity it counts as one.
+  Basic lands are exempt from every rule here.
+- **A new lot needs a quantity or a Location.** Adding one with only one
+  fills in the other (quantity 1, or Location "Box") and says so; with
+  neither it is refused. An edit that would blank both on a real lot is
+  refused, and so is a bulk save containing one, which then writes nothing.
+  An order import is left as it is: its lots keep no Location until you
+  set one, in the Workbench's Unlocated lots.
+- **Card Database → Card Data → Clean up** lists *Blank lots* (with the deck
+  or idea holding each), which you can delete after ticking the confirm box;
+  a backup is taken first and nothing is deleted if it fails. Two read-only
+  lists show lots with a quantity but no Location, and with a Location but no
+  quantity, for you to fill in. The Card Data refresh deletes any blank lot
+  that turns up later.
+- **A deck missing cards doesn't read as done:** its Home tile and Build Plan
+  show how many copies are sleeved and how many you still have to buy.
+
 ## Every copy has a history, and collection edits flow back to decks
 
 Since [docs/archive/EDIT_FLOW_PLAN.md](docs/archive/EDIT_FLOW_PLAN.md) Phase 6 the collection side is
 tracked too, so the answer to *"where did my Blood Crypt go?"* is on one page.
 
 - **The move log.** Every change to a lot — adding or importing one, moving
-  it, editing its quantity or Location, deleting it, the Card Data refresh's
-  pruning, a deck's deletion sending its cards to Box, and all of Phase 1's
+  it, editing its quantity or Location, deleting it, a deck's deletion
+  sending its cards to Box, and all of Phase 1's
   deck-edit moves — writes a row to the `collection_moves` table: the card,
   how many, where from and to, when, and why (deck edit, applied change,
-  reconcile, dismantle, collection edit, import, prune, deck deleted),
+  reconcile, dismantle, collection edit, import, deck deleted),
   plus the deck change behind it when there is one. A blank side means no
   copy there: "new copy record" going in, "deleted" going out. Renaming a
   deck logs nothing (a relabel moves no copy), and old entries keep the name

@@ -102,6 +102,18 @@ def snapshot(conn, kind="manual", what=""):
         return None
 
 
+def required_snapshot(conn):
+    """A manual snapshot for an operation that must not run without one:
+    unlike snapshot(), a failure raises RuntimeError, and it is never skipped
+    as too recent. An in-memory database has nothing to back up: None."""
+    if not _db_file(conn):
+        return None
+    path = snapshot(conn, "manual")
+    if path is None:
+        raise RuntimeError("The database backup failed, so nothing was changed. See the log.")
+    return path
+
+
 def snapshot_path(db_path, kind="manual", what=""):
     """snapshot() for callers holding a path, not a connection (run.py)."""
     if not os.path.exists(db_path):

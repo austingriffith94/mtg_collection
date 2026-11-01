@@ -9,9 +9,9 @@ needed), so this stays correct even as WotC/Scryfall update the Game
 Changers or Reserved List over time, or as prices/legality change.
 
 As of Phase 1, this also automatically prunes the collection afterward
-(dashboard_lib.writes.prune_collection): any collection lot with no
-location, a quantity of 0/none, and not present in any deck's mainboard
-or open shortlist is deleted. This is the only thing here that touches your
+(dashboard_lib.writes.prune_collection): any non-basic collection lot with
+no location and a quantity of 0/none is deleted, whether or not a deck lists
+the card. This is the only thing here that touches your
 collection rather than just `cards` — everything else (decklists, tags)
 is untouched.
 

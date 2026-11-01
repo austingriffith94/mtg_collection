@@ -13,12 +13,12 @@ buy list is ready for the cards it receives.
 
 Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 
-- [ ] **Phase 0** — Clean starting point.
-- [ ] **Phase 1** — Stop creating lots for cards you don't own.
-- [ ] **Phase 2** — Buy list: split decks from ideas, Bought with a printing picker.
-- [ ] **Phase 3** — Remove the blank lots (preview, backup, confirm).
-- [ ] **Phase 4** — Clean up checks and the "sleeved of N" caveat.
-- [ ] **Phase 5** — Docs and wrap-up.
+- [x] **Phase 0** — Clean starting point.
+- [x] **Phase 1** — Stop creating lots for cards you don't own.
+- [x] **Phase 2** — Buy list: split decks from ideas, Bought with a printing picker.
+- [x] **Phase 3** — Remove the blank lots (preview, backup, confirm).
+- [x] **Phase 4** — Clean up checks and the "sleeved of N" caveat.
+- [x] **Phase 5** — Docs and wrap-up.
 
 ## The design
 
@@ -51,20 +51,17 @@ Agreed 2026-11-01:
   caveat rather than changing the rule.
 - **`scripts/migrate.py` is out of scope.** It is not updated for this work.
 
-Waiting on your answer (the plan assumes the recommendation):
+Agreed later the same day:
 
-1. **Delete blank lots rather than hide them** (the design above). Recommended.
-2. **Ideas on the buy list.** The buy list already includes an open idea whose
-   card you own zero of; blank lots have been suppressing them. Recommended:
-   a separate collapsed Ideas section, left out of the main total.
-3. **Mark "A Refined Grizzly of Noble Heritage" as brewing.** It holds 54 of
-   the 58 on-list blank lots but is currently a normal built deck.
-   Recommended: yes.
-4. **Where the integrity checks live.** There is no Data Integrity page.
-   Recommended: Card Database → Card Data → Clean up.
-5. **Imports** (separate from this plan). The app has no Moxfield paste import
-   (only exports), and the order CSV import is still live on the Collection
-   Editor. Build one, remove the other, or leave both for a later change?
+- **Delete the blank lots rather than hide them** (the design above).
+- **Ideas on the buy list** go in a separate collapsed section, left out of the
+  main total.
+- **"A Refined Grizzly of Noble Heritage" and "Ayara, Blood Wine Mom" are marked
+  brewing.** Grizzly holds 54 of the 58 on-list blank lots; Ayara holds 2.
+- **The missing quantity/location checks live in Card Database → Card Data →
+  Clean up.** There is no separate Data Integrity page.
+- **Imports are out of scope** (no Moxfield paste import is built here, and the
+  order CSV import is left as it is).
 
 ## What the database holds today
 
@@ -108,6 +105,10 @@ The test suite passes today (719).
 - Work on a branch, `unowned-cards`, one commit per phase.
 - Run the suite and note the count.
 
+**As built:** The Deck Editor add-to-Shortlist change was already committed
+(`9d595c9`), so nothing needed setting aside; the only dirty file was this plan.
+Branch `unowned-cards` created from `main`. Baseline: 719 tests pass.
+
 ## Phase 1 — Stop creating lots for cards you don't own
 
 **Auto on a card you don't own** (`writes.sleeve_into_deck()`, ~line 1231): make
@@ -142,6 +143,25 @@ have a deck target, so Bought can act on them. A card owned elsewhere stays a
 Tests that assert a starter lot change here (`test_edit_flow.py`,
 `test_deck_changes_writes.py`, and others).
 
+**As built:** 747 tests pass. `STARTER_LOT_SOURCE` is gone, and `_move_outcome()`'s
+`created_lot` became `to_buy`, because Auto can no longer make a lot. Choices the
+plan left open:
+
+- An order import (`reason="import"`) skips the fill-in and keeps its lots
+  unlocated, since imports are out of scope.
+- A lot that is already blank can still be edited; only an edit that would
+  blank a real lot is refused.
+- `move_lot()` passes `allow_blank`, so Undo can put an untracked lot back to no
+  Location. A refused `bulk_update_collection()` writes none of its rows.
+- The picker's label is "Auto — buy list (no free copy)", since it also shows
+  for a card owned only in other decks.
+
+On a copy of the live database nothing moves until the blank lots go (26 rows,
+$259.46). Deleting them there gives 154 rows and $1,342.22, as above, now split
+85 ideas, 52 `awaiting` (all Grizzly), 17 `contention`. **Phase 2's "Needed by
+decks" must therefore cover `awaiting` as well as `contention`** to reach the
+69 / $185.03 above.
+
 ## Phase 2 — Buy list: split decks from ideas, Bought with a printing picker
 
 **Layout (Workbench):** "Needed by decks" first, with its own total; a collapsed
@@ -166,6 +186,25 @@ mismatch in Reconcile straight away.
 The order import's buy-list offer (`buy_matches()`) keeps working with no change
 needed. No placeholder lots need filling in, because none exist.
 
+**As built:** 755 tests pass. On a copy of the live database with the 132 blank
+lots deleted, the page shows Needed by decks 69 rows, $185.03 and Ideas 85 rows,
+$1,157.19, as the plan expected, and the Workbench renders without error.
+
+- `buy_list()` keeps `rows` and `total` and adds `needed` and `ideas`, each
+  `{rows, total}`. `needed` is every reason but `idea`, so a row marked Buy
+  (`chosen`) counts as needed: it is a decision, not a maybe. The text export
+  lists every row and totals needs and ideas apart.
+- Bought is one form for a picked target instead of a row per target, since 154
+  rows of widgets would be unusable. Printing starts on the deck's listed one;
+  "Other printing…" takes a set and number through `resolve_exact_printing()`,
+  which never substitutes another printing of the same name.
+- `record_purchase()` gains keyword-only `printing_id`, `foil` and `location`
+  (blank means the deck). A printing of a different card is refused, as is a deck
+  name as the location. When the lot lands in the deck with another printing, the
+  list follows through `use_sleeved_printing()` (the one-printing-each case) and an
+  open Shortlist row's add printing follows too. Bought into storage leaves the
+  list alone. With `collection_id` (the order import) the new fields are ignored.
+
 ## Phase 3 — Remove the blank lots
 
 1. Clean up panel gets a **Blank lots** preview: each lot, with the deck or idea
@@ -181,7 +220,7 @@ needed. No placeholder lots need filling in, because none exist.
 Before running it on the real database: repeat the deletion on a copy, render
 every page (AppTest smoke tests), and check the deck board in headless Edge.
 
-If you mark Grizzly as brewing, do it here (one click, `set_build_state()`).
+Mark Grizzly and Ayara as brewing here (`set_build_state()`), after the lots are gone.
 
 Expected afterwards:
 
@@ -189,6 +228,30 @@ Expected afterwards:
   lot. The same goes for "Owned, location unknown" and the Collection's "No
   location only" toggle. They stay in the code; a real copy can still lack a
   location through an edit.
+
+**As built:** 759 tests pass. Run on the real database 2026-11-01: 132 blank lots
+deleted through `delete_blank_lots()` (1468 -> 1336 lots, backup
+`backups/mtg_collection_manual_2026-11-01_151400.db`), then Grizzly and Ayara marked
+brewing. The buy list read 69 / $185.03 needed and 85 / $1,157.19 ideas.
+
+- One test for a blank lot, `queries.BLANK_LOT_SQL`, shared by the preview,
+  `writes.delete_blank_lots()` and `prune_collection()`. The preview is a bucket in
+  `orphan_report()`, so it sits with the other Clean up groups.
+- `snapshot()` can skip or fail quietly, so the delete uses the new
+  `backup.required_snapshot()`, a manual snapshot that raises if it fails. Nothing
+  is deleted without a backup.
+- `delete_blank_lots()` re-checks each lot, so one filled in since the preview
+  stays. `"prune"` left `MOVE_REASONS`; its label stays for old log rows.
+- **`prune_collection()` no longer exempts decks or ideas, so a Card Data Refresh
+  run before the Clean up delete removes the blank lots with no preview.** Use
+  the Clean up panel first.
+
+Rehearsed on a copy of the live database: 132 previewed, every one held by a deck
+or idea, 132 deleted, 1336 lots left. Needed by decks 69 / $185.03, Ideas 85 /
+$1,157.19, total $1,342.22, no unlocated lots, and a prune afterwards finds nothing.
+Sleeved counts match on all 12 decks (Grizzly 3 / 83). Pages rendered through
+AppTest; the board, Workbench Bought form, Card Database and Home checked in
+headless Edge with no errors, and board art still shows.
 
 ## Phase 4 — Clean up checks and the "sleeved of N" caveat
 
@@ -202,6 +265,20 @@ Expected afterwards:
 the deck summary line already shows "% built". Show "3 of 83 sleeved · 52 to buy"
 beside it, wherever that line appears, whenever a deck isn't fully sleeved.
 
+**As built:** 781 tests pass, which includes the Advisor tests another change added.
+On the live database the Clean up panel lists the two Gisa lots with no quantity
+and nothing with no location, and Grizzly's tile reads
+"🔨 brewing · 3 ideas · 4% built · 3 of 83 sleeved · 52 to buy".
+
+- The "% built" line appears only in `card_view.deck_status_strip()` (the Home
+  tiles), so `deck_comparison()` gained `build_located`, `build_needed` and `to_buy`.
+  `to_buy` counts copies with no copy anywhere (`awaiting_buys()`), not every copy
+  still to pull, so it is 52 on Grizzly rather than 80. The Decks page's Build Plan
+  progress text gets the same "· 52 to buy".
+- The two checks are read-only buckets in `orphan_report()` and take no delete
+  button. Basic lands are exempt from both, and a lot with neither field is a blank
+  lot with its own bucket. They are counted on the "Stale data left" line.
+
 ## Phase 5 — Docs and wrap-up
 
 - New tests not already covered above: a blank-lot-free buy list end to end,
@@ -210,6 +287,19 @@ beside it, wherever that line appears, whenever a deck isn't fully sleeved.
   in `schema.sql` (comment only, no schema change).
 - Tick the phases, add an "As built" note to each, and move this file to
   `docs/archive/`.
+
+**As built:** 784 tests pass. Most of the new tests the plan named had already been
+written with their phases (Bought with a different printing, the Clean up checks, the
+caveat); the one added here is an end-to-end run in `test_edit_buys.py`: add an
+unowned card, see it on the buy list, record it bought as another printing, and
+confirm no blank lot appears at any step. `README.md` gets a "Cards you don't own"
+section and its starter-lot and prune lines corrected; `PROJECT_STATE.md` gets an
+"Unowned cards" entry; `schema.sql`'s `collection.quantity` comment is updated
+(comment only). The plan moved to `docs/archive/` and code comments now point there.
+The edit-flow entry in `PROJECT_STATE.md` and the archived `EDIT_FLOW_PLAN.md` still
+describe starter lots, as history, and say so. Not updated, as agreed:
+`scripts/migrate.py`, the order CSV import, and the offline harnesses under
+`scripts/` that mention starter lots.
 
 ## Not changing
 

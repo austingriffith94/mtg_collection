@@ -109,12 +109,54 @@ def test_buy_on_a_brewing_deck_still_says_buy_not_pull(c):
 
 
 def test_a_bump_buys_only_the_difference_and_a_basic_is_never_bought(c):
-    writes.add_deck_card(c, _deck(c, "Prosper"), LOTUS, 1)               # Auto: a starter lot
+    writes.add_deck_card(c, _deck(c, "Prosper"), LOTUS, 1)               # Auto: not owned, no lot
     moves = writes.add_deck_card(c, _deck(c, "Prosper"), LOTUS, 3, source="buy")
     assert [(m["kind"], m["quantity"]) for m in moves] == [("buy", 2)]
-    assert _lots(c, LOTUS) == [("Prosper", 1)]
+    assert _lots(c, LOTUS) == []
     writes.add_collection_lot(c, SWAMP, quantity=None, location="Basics box")   # untracked bulk basic
     assert [m["kind"] for m in _buy(c, "Prosper", SWAMP, 10)] == ["bulk"]
+
+
+def test_an_auto_add_with_no_copy_anywhere_is_awaiting(c):
+    (move,) = writes.add_deck_card(c, _deck(c, "Prosper"), LOTUS, 2)
+    assert (move["kind"], move["quantity"]) == ("buy", 2)
+    assert _lots(c, LOTUS) == []
+    (row,) = q.buy_list(c)["rows"]
+    assert (row["reason"], row["quantity"]) == ("awaiting", 2)
+    assert [(t["kind"], t["deck_name"], t["change_id"]) for t in row["targets"]] == [("awaiting", "Prosper", None)]
+    assert q.deck_buying(c, _deck(c, "Prosper")) == {LOTUS: 2}
+
+
+def test_a_listed_card_nobody_added_through_a_change_is_awaiting_too(c):
+    # An imported list has no deck_changes row behind it.
+    c.execute("INSERT INTO deck_cards (deck_id, scryfall_id, quantity) VALUES (?,?,1)", (_deck(c, "Prosper"), LOTUS))
+    c.commit()
+    assert [b["card"] for b in q.awaiting_buys(c)] == [LOTUS]
+    assert q.awaiting_buys(c, deck_id=_deck(c, "Gisa")) == []
+
+
+def test_a_copy_of_another_printing_stops_a_card_being_awaiting(c):
+    writes.add_deck_card(c, _deck(c, "Prosper"), LOTUS, 1)
+    c.execute("INSERT INTO cards (scryfall_id, name, set_code, collector_number, oracle_id)"
+              " SELECT 'lotus-2', name, 'sld', '2', oracle_id FROM cards WHERE scryfall_id=?", (LOTUS,))
+    writes.add_collection_lot(c, "lotus-2", quantity=1, location="Gisa")
+    assert q.awaiting_buys(c) == []
+
+
+def test_an_auto_add_owned_elsewhere_stays_contention(c):
+    writes.add_collection_lot(c, LOTUS, quantity=1, location="Gisa")
+    c.execute("INSERT INTO deck_cards (deck_id, scryfall_id, quantity) VALUES (?,?,1)", (_deck(c, "Gisa"), LOTUS))
+    c.commit()
+    (move,) = writes.add_deck_card(c, _deck(c, "Prosper"), LOTUS, 1)
+    assert move["kind"] == "buy"
+    assert q.awaiting_buys(c) == []
+    assert [(r["reason"], r["targets"]) for r in q.buy_list(c)["rows"]] == [("contention", [])]
+
+
+def test_a_copy_bought_for_an_auto_add_clears_it(c):
+    writes.add_deck_card(c, _deck(c, "Prosper"), LOTUS, 1)
+    writes.record_purchase(c, _deck(c, "Prosper"), LOTUS)
+    assert q.awaiting_buys(c) == [] and q.buy_list(c)["rows"] == []
 
 
 def test_buying_what_is_already_sleeved_here_buys_nothing(c):
@@ -134,7 +176,7 @@ def test_a_staged_buy_idea_applies_with_no_lot(c):
     c.execute("INSERT INTO deck_cards (deck_id, scryfall_id, quantity) VALUES (?,?,1)", (_deck(c, "Prosper"), BLADE))
     c.commit()
     out = writes.apply_change(c, cid)
-    assert _lots(c, LOTUS) == [] and not out["created_lot"]
+    assert _lots(c, LOTUS) == [] and out["to_buy"]
     assert [(m["kind"]) for m in out["moves"] if m["card"] == LOTUS] == ["buy"]
     assert c.execute("SELECT source, status FROM deck_changes WHERE change_id=?", (cid,)).fetchone()[:] == ("buy", "applied")
     assert [(b["deck_name"], b["card"]) for b in q.awaiting_buys(c)] == [("Prosper", LOTUS)]
@@ -270,6 +312,101 @@ def test_bought_refuses_a_dismantled_deck_a_basic_and_zero(c):
         with pytest.raises(ValueError, match=match):
             writes.record_purchase(c, _deck(c, deck), card, qty)
     assert _lots(c) == []
+
+
+def _second_printing(c, card=LOTUS, sid="lotus-sld", oracle=None):
+    c.execute("INSERT INTO cards (scryfall_id, name, set_code, collector_number, oracle_id, current_price_usd)"
+              " VALUES (?,?,'sld','9',?,5.0)", (sid, card, oracle or f"oracle-{card}"))
+    c.commit()
+    return sid
+
+
+def test_bought_makes_the_lot_in_the_printing_you_chose_and_the_list_follows(c):
+    other = _second_printing(c)
+    _buy(c, "Prosper", LOTUS)
+    (t,) = q.buy_list(c)["rows"][0]["targets"]
+    moves = writes.record_purchase(c, t["deck_id"], t["scryfall_id"], 1, price_paid=4.0,
+                                   printing_id=other, foil=True)
+    assert [(m["kind"], m["to"]) for m in moves] == [("new", "Prosper")]
+    assert _lots(c, LOTUS) == [] and _lots(c, other) == [("Prosper", 1)]
+    assert c.execute("SELECT foil FROM collection").fetchone()[0] == 1
+    # The list moved to the printing sleeved, so Reconcile has nothing to flag.
+    assert [r[0] for r in c.execute("SELECT scryfall_id FROM deck_cards")] == [other]
+    assert q.printing_mismatches(c) == [] and q.awaiting_buys(c) == []
+
+
+def test_bought_in_the_listed_printing_leaves_the_list_alone(c):
+    _second_printing(c)
+    _buy(c, "Prosper", LOTUS)
+    writes.record_purchase(c, _deck(c, "Prosper"), LOTUS, 1, printing_id=LOTUS)
+    assert [r[0] for r in c.execute("SELECT scryfall_id FROM deck_cards")] == [LOTUS]
+    assert _lots(c, LOTUS) == [("Prosper", 1)]
+
+
+def test_bought_into_storage_leaves_the_list_entry_alone(c):
+    other = _second_printing(c)
+    _buy(c, "Prosper", LOTUS)
+    (move,) = writes.record_purchase(c, _deck(c, "Prosper"), LOTUS, 1, printing_id=other, location="Box")
+    assert move["to"] == "Box" and _lots(c, other) == [("Box", 1)]
+    assert [r[0] for r in c.execute("SELECT scryfall_id FROM deck_cards")] == [LOTUS]
+
+
+def test_bought_refuses_another_card_and_a_deck_as_a_location(c):
+    with pytest.raises(ValueError, match="isn't Jeweled Lotus"):
+        writes.record_purchase(c, _deck(c, "Prosper"), LOTUS, 1, printing_id=RING)
+    with pytest.raises(ValueError, match="is a deck"):
+        writes.record_purchase(c, _deck(c, "Prosper"), LOTUS, 1, location="Gisa")
+    assert _lots(c, LOTUS) == [] and _lots(c, RING) == []
+
+
+def test_bought_with_a_different_printing_points_an_open_idea_at_it(c):
+    other = _second_printing(c)
+    cid = writes.add_change(c, _deck(c, "Gisa"), add_scryfall_id=LOTUS, add_name=LOTUS, source="buy")
+    writes.record_purchase(c, _deck(c, "Gisa"), LOTUS, 1, change_id=cid, printing_id=other)
+    row = writes.get_change(c, cid)
+    assert (row["add_scryfall_id"], row["source"]) == (other, None)
+    # Applying it later finds the sleeved copy: no second purchase.
+    writes.add_deck_card(c, _deck(c, "Gisa"), other, 1)
+    assert _lots(c, other) == [("Gisa", 1)]
+
+
+def test_the_buy_list_splits_what_decks_need_from_ideas(c):
+    _buy(c, "Prosper", LOTUS)                                                   # awaiting
+    writes.add_change(c, _deck(c, "Gisa"), add_scryfall_id=BLADE, add_name=BLADE)           # an unowned idea
+    writes.add_change(c, _deck(c, "Gisa"), add_scryfall_id=RING, add_name=RING, source="buy")  # marked Buy
+    buy = q.buy_list(c)
+    assert sorted(r["card"] for r in buy["needed"]["rows"]) == [LOTUS, RING]
+    assert [r["card"] for r in buy["ideas"]["rows"]] == [BLADE]
+    assert buy["needed"]["total"] == 4.0 and buy["ideas"]["total"] == 2.0 and buy["total"] == 6.0
+    assert len(buy["rows"]) == 3
+
+
+def test_an_unowned_card_goes_from_added_to_bought_without_ever_making_a_blank_lot(c):
+    """The whole story in one run: add, buy list, Bought as another printing, gone from the list."""
+    other = _second_printing(c)
+    writes.add_deck_card(c, _deck(c, "Prosper"), LOTUS, 1)                       # Auto: nothing owned
+    writes.add_change(c, _deck(c, "Gisa"), add_scryfall_id=BLADE, add_name=BLADE)  # an unowned idea
+    assert c.execute("SELECT COUNT(*) FROM collection").fetchone()[0] == 0        # no lot, ever
+    buy = q.buy_list(c)
+    assert [r["card"] for r in buy["needed"]["rows"]] == [LOTUS]
+    assert [r["card"] for r in buy["ideas"]["rows"]] == [BLADE]
+    row = q.deck_comparison(c).set_index("name").loc["Prosper"]
+    assert (row["build_located"], row["build_needed"], row["to_buy"]) == (0, 1, 1)
+    (t,) = buy["needed"]["rows"][0]["targets"]
+    writes.record_purchase(c, t["deck_id"], t["scryfall_id"], 1, printing_id=other, price_paid=4.5)
+    assert _lots(c, other) == [("Prosper", 1)] and _lots(c, LOTUS) == []
+    assert [r["card"] for r in q.buy_list(c)["needed"]["rows"]] == []
+    assert q.printing_mismatches(c) == []
+    assert q.orphan_report(c)["blank_lots"].empty
+    row = q.deck_comparison(c).set_index("name").loc["Prosper"]
+    assert (row["build_located"], row["to_buy"]) == (1, 0)
+
+
+def test_the_text_export_totals_needs_and_ideas_apart(c):
+    _buy(c, "Prosper", LOTUS)
+    writes.add_change(c, _deck(c, "Gisa"), add_scryfall_id=BLADE, add_name=BLADE)
+    text = mox.export_buy_list_text(q.buy_list(c))
+    assert "Needed by decks: $2.00" in text and "Ideas: $2.00" in text and "Total: $4.00" in text
 
 
 # ------------------------------------------------------------------

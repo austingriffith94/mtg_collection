@@ -140,7 +140,7 @@ untagged = q.untagged_deck_cards(conn)
 SECTIONS = {
     "plan": lambda: (f"📋 Shortlist · {len(planned_entries) + len(flagged)}"
                      + (f" · ⚠️ {len(conflicts)}" if conflicts else "")),
-    "supply": lambda: f"🛒 Supply & buy · {len(buy['rows'])}",
+    "supply": lambda: f"🛒 Supply & buy · {len(buy['needed']['rows'])}",
     "physical": lambda: f"📦 Physical · {unlocated['lots'] + len(mismatches)}",
     "tags": lambda: f"🏷️ Tags · {len(untagged)}",
 }
@@ -345,8 +345,8 @@ def _render_plan():
         )
         if blocked:
             st.caption(
-                f"{blocked} of these can't be sourced from storage right now — they'll buy a copy "
-                "(creating a starter collection lot) or need a card unsleeved first."
+                f"{blocked} of these can't be sourced from storage right now — they'll go on the "
+                "buy list or need a card unsleeved first."
             )
         by_deck = {}
         for e in planned_entries:
@@ -447,71 +447,129 @@ def _render_supply():
                         _refresh([f"✅ Dropped {row['card']} from {drop_choice}."], moves=moves)
 
     # Buy list (Phase 3, Phase 4) — one row per card, grouped across decks
-    # and priced once: cards already on a deck's list from a Buy add
-    # (awaiting), open rows marked Buy (chosen), contention shortfalls, and
-    # unowned ideas. A card with several reasons shows once, under the most
-    # specific.
+    # and priced once: cards on a deck's list with no copy (awaiting), open
+    # rows marked Buy (chosen), contention shortfalls, and unowned ideas. A
+    # card with several reasons shows once, under the most specific.
+    # docs/archive/UNOWNED_LOTS_PLAN.md Phase 2: what decks need comes first with its
+    # own total; ideas are maybes, so they sit collapsed after it, outside
+    # that total.
+    needed, ideas = buy["needed"], buy["ideas"]
     st.subheader(
-        f"🛒 Buy list ({len(buy['rows'])}) — ${buy['total']:,.2f}",
+        f"🛒 Needed by decks ({len(needed['rows'])}) — ${needed['total']:,.2f}",
         help=(
-            "Cards on a deck's list that you chose to buy and don't have a copy of yet, shortlist rows "
-            "marked Buy, ideas with zero owned copies (grouped across decks, priced once), and contention "
-            "rows where buying the shortfall resolves it."
+            "Cards on a deck's list that you have no copy of, rows marked Buy, and contention rows "
+            "where buying the shortfall resolves it. Grouped across decks and priced once. Ideas are "
+            "listed apart below and are not in this total."
         ),
     )
-    if not buy["rows"]:
-        st.caption("Nothing to buy — nothing is marked Buy, every open idea is already owned, and nothing is short.")
-        return
-    buy_table = pd.DataFrame([{
-        "Card": r["card"],
-        "Qty": r["quantity"],
-        "Price": r["price"],
-        "Subtotal": r["subtotal"],
-        "Why": fmt.BUY_REASON_LABELS[r["reason"]],
-        "Decks": ", ".join(r["decks"]),
-    } for r in buy["rows"]])
+    if needed["rows"]:
+        _buy_table(needed["rows"])
+    else:
+        st.caption("Nothing needed — every card on a deck's list has a copy, and nothing is marked Buy or short.")
+    with st.expander(f"💡 Ideas ({len(ideas['rows'])}) — ${ideas['total']:,.2f}"):
+        if ideas["rows"]:
+            st.caption("Open ideas with zero owned copies. Maybes, so not counted above.")
+            _buy_table(ideas["rows"])
+        else:
+            st.caption("Every open idea is already owned.")
+    if buy["rows"]:
+        st.download_button(
+            "⬇️ Export as text", data=mox.export_buy_list_text(buy),
+            file_name="buy_list.txt", mime="text/plain",
+            key=f"workbench_buy_list_export_{ver}",
+        )
+        _render_bought()
+
+
+def _buy_table(rows):
     st.dataframe(
-        buy_table,
+        pd.DataFrame([{
+            "Card": r["card"],
+            "Qty": r["quantity"],
+            "Price": r["price"],
+            "Subtotal": r["subtotal"],
+            "Why": fmt.BUY_REASON_LABELS[r["reason"]],
+            "Decks": ", ".join(r["decks"]),
+        } for r in rows]),
         column_config={
             "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
             "Subtotal": st.column_config.NumberColumn("Subtotal", format="$%.2f"),
         },
         hide_index=True, width="stretch",
     )
-    st.download_button(
-        "⬇️ Export as text", data=mox.export_buy_list_text(buy),
-        file_name="buy_list.txt", mime="text/plain",
-        key=f"workbench_buy_list_export_{ver}",
-    )
 
-    # "Bought": the copy arrived — sleeve it straight into the deck that
-    # wanted it (a contention shortfall belongs to no one deck, so it has no
-    # button: mark one of its ideas Buy first). For an idea that isn't on its
-    # deck's list yet, the copy sits sleeved there until the idea is applied.
-    purchases = [(r, t) for r in buy["rows"] for t in r["targets"]]
-    if purchases:
-        with st.expander(f"✅ Bought something? Sleeve it into its deck ({len(purchases)})"):
-            st.caption(
-                "Enter what you paid per copy (optional) and press Bought: a collection copy is made in "
-                "that deck's sleeves. An order import can do this for you — see Collection Editor."
-            )
-            for r, t in purchases:
-                tkey = f"{t['deck_id']}_{t['scryfall_id']}_{t['change_id']}_{ver}"
-                c_label, c_qty, c_price, c_btn = st.columns([4, 1, 1, 1])
-                c_label.markdown(f"**{r['card']}** → {t['deck_name']} · {fmt.BUY_REASON_LABELS[t['kind']].lower()}")
-                got = c_qty.number_input("Qty", min_value=1, value=int(t["quantity"]), step=1,
-                                         key=f"workbench_bought_qty_{tkey}", label_visibility="collapsed")
-                paid = c_price.number_input("Paid each", min_value=0.0, value=float(r["price"] or 0.0), step=0.25,
-                                            format="%.2f", key=f"workbench_bought_price_{tkey}",
-                                            label_visibility="collapsed")
-                if c_btn.button("Bought", key=f"workbench_bought_btn_{tkey}"):
-                    try:
-                        moves = writes.record_purchase(conn, t["deck_id"], t["scryfall_id"], int(got),
-                                                       price_paid=paid or None, change_id=t["change_id"])
-                    except ValueError as exc:
-                        st.error(str(exc))
-                    else:
-                        _refresh([f"✅ Sleeved {r['card']} ×{int(got)} into {t['deck_name']}."], moves=moves)
+
+OTHER_PRINTING = "Other printing… (type set + number)"
+
+
+def _render_bought():
+    """"Bought": the copy arrived — record it, as the printing you actually
+    bought, in the deck that wanted it (a contention shortfall belongs to no
+    one deck, so it has no entry: mark one of its ideas Buy first). For an
+    idea that isn't on its deck's list yet, the copy sits sleeved there until
+    the idea is applied. One target at a time, picked from a list, so the
+    form isn't repeated for every row on the buy list."""
+    purchases = [(r, t) for r in buy["needed"]["rows"] + buy["ideas"]["rows"] for t in r["targets"]]
+    if not purchases:
+        return
+    with st.expander(f"✅ Bought something? Record it ({len(purchases)})"):
+        pick = st.selectbox(
+            "What did you buy?", range(len(purchases)),
+            format_func=lambda i: (f"{purchases[i][0]['card']} → {purchases[i][1]['deck_name']} · "
+                                   f"{fmt.BUY_REASON_LABELS[purchases[i][1]['kind']].lower()} · "
+                                   f"×{purchases[i][1]['quantity']}"),
+            key=f"workbench_bought_pick_{ver}",
+        )
+        r, t = purchases[pick]
+        tkey = f"{t['deck_id']}_{t['scryfall_id']}_{t['change_id']}_{ver}"
+        st.caption(
+            "Pick the printing you bought (it starts on the one the deck lists), then the finish, what you "
+            "paid per copy (optional) and where it goes. A copy that lands in the deck's sleeves also "
+            "moves the deck's list to that printing. An order import can do this for you — see "
+            "Collection Editor."
+        )
+        card_name = (conn.execute("SELECT name FROM cards WHERE scryfall_id=?", (t["scryfall_id"],)).fetchone()
+                     or [r["card"]])[0]
+        printings = q.card_printings_by_name(conn, card_name)
+        listed = next((i for i, p in enumerate(printings) if p["scryfall_id"] == t["scryfall_id"]), 0)
+        labels = [fmt.printing_label(p) for p in printings] + [OTHER_PRINTING]
+        p1, p2 = st.columns([2, 1])
+        printing_pick = p1.selectbox("Printing", labels, index=listed if printings else len(labels) - 1,
+                                     key=f"workbench_bought_printing_{tkey}")
+        other_set = other_num = ""
+        if printing_pick == OTHER_PRINTING:
+            o1, o2 = st.columns(2)
+            other_set = o1.text_input("Set code", key=f"workbench_bought_set_{tkey}")
+            other_num = o2.text_input("Collector number", key=f"workbench_bought_num_{tkey}")
+        got = p2.number_input("Qty", min_value=1, value=int(t["quantity"]), step=1,
+                              key=f"workbench_bought_qty_{tkey}")
+        f1, f2, f3, f4 = st.columns([1, 1, 2, 1], vertical_alignment="bottom")
+        foil = f1.checkbox("Foil", key=f"workbench_bought_foil_{tkey}")
+        paid = f2.number_input("Paid each", min_value=0.0, value=float(r["price"] or 0.0), step=0.25,
+                               format="%.2f", key=f"workbench_bought_price_{tkey}")
+        places = [t["deck_name"]] + q.storage_locations(conn)
+        place = f3.selectbox("Location", places, key=f"workbench_bought_place_{tkey}",
+                             help="A bought card lands in the deck's sleeves. Pick a storage Location "
+                                  "to put it away instead.")
+        if f4.button("Bought", key=f"workbench_bought_btn_{tkey}"):
+            printing_id = None
+            if printing_pick == OTHER_PRINTING:
+                printing_id, _new, err = card_resolver.resolve_exact_printing(conn, other_set, other_num)
+                if err:
+                    st.error(err)
+                    return
+            elif printings:
+                printing_id = printings[labels.index(printing_pick)]["scryfall_id"]
+            try:
+                moves = writes.record_purchase(conn, t["deck_id"], t["scryfall_id"], int(got),
+                                               price_paid=paid or None, change_id=t["change_id"],
+                                               printing_id=printing_id, foil=foil, location=place)
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                line = (f"✅ Sleeved {r['card']} ×{int(got)} into {t['deck_name']}."
+                        if place == t["deck_name"] else f"✅ Put {r['card']} ×{int(got)} away in {place}.")
+                _refresh([line], moves=moves)
 
 
 # ==================================================================

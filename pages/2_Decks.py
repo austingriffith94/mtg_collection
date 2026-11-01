@@ -417,9 +417,11 @@ def _render_overview(conn, deck_id, meta, deck_name, color_identity_raw):
                 st.caption("Mark the deck as brewing in the Deck Editor to keep this panel open.")
 
             if _pct is not None:
+                _to_buy = sum(q.deck_buying(conn, deck_id).values())
                 st.progress(
                     min(1.0, _pct / 100.0),
-                    text=f"{_sourcing['located']} of {_sourcing['needed']} non-basics sleeved here",
+                    text=f"{_sourcing['located']} of {_sourcing['needed']} non-basics sleeved here"
+                         + (f" · {_to_buy} to buy" if _to_buy else ""),
                 )
 
             # One row of counts, in the order you'd work them.

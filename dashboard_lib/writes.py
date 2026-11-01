@@ -992,14 +992,14 @@ def bulk_update_deck_cards(conn, deck_id, updates, with_moves=True, dest=None):
 #   card           card name, for display
 #   quantity       copies (None for an untracked lot moved whole)
 #   collection_id  the lot now at `to` (a split leaves the rest behind
-#                  under the old id), or the starter lot made / deleted
+#                  under the old id), or the lot a purchase made / Undo deleted
 #   from, to       Locations as stored (a deck name, a storage box, or
 #                  None for "no location recorded")
 #   kind           what happened, which is also how it reads:
 #                    move        a lot moved from -> to
-#                    new         a starter lot made at `to` (a "new copy
-#                                record"; from is None)
-#                    delete      a starter lot deleted again by Undo
+#                    new         a lot made at `to` by a purchase (a "new
+#                                copy record"; from is None)
+#                    delete      a purchase's lot deleted again by Undo
 #                    bulk        a basic land (Phase 7) — no lot is ever
 #                                touched; from/to are the deck and None
 #                                ("basic land supply"), `direction` in/out,
@@ -1008,13 +1008,13 @@ def bulk_update_deck_cards(conn, deck_id, updates, with_moves=True, dest=None):
 #                                `direction` says whether copies would have
 #                                come in or gone out
 #                    dismantled  likewise for a dismantled deck (in only)
-#                    buy         a planned purchase (Phase 4): the list has
-#                                the card, no lot exists to move or make
+#                    buy         a copy still to buy (Phase 4, and Auto with
+#                                no free copy): the list has the card, no
+#                                lot exists to move or make
 #
 # `kind` rather than a sentinel in from/to, because "Bulk" or "Brewing"
 # could be someone's real storage box name.
 # ------------------------------------------------------------------
-STARTER_LOT_SOURCE = "Auto-added (deck edit)"
 
 
 # ------------------------------------------------------------------
@@ -1152,14 +1152,15 @@ def sleeve_into_deck(conn, deck_id, scryfall_id, quantity, source=None, source_l
          included), biggest lot first, splitting a lot with move_lot() —
          the order plan_availability() allocates in, so the copy the
          Workbench promised is the one that moves
-      3. then a starter lot for the remainder (STARTER_LOT_SOURCE), which
-         can record a copy you don't own yet (docs/archive/EDIT_FLOW_PLAN.md open
-         question 3)
+      3. then one `buy` move for the remainder: no lot is made, because a
+         card you don't own has no collection row (docs/archive/UNOWNED_LOTS_PLAN.md).
+         A card with no copy anywhere reaches the buy list through
+         awaiting_buys(); one owned elsewhere, through contention_table()
 
     `source="storage"` with a `source_location` (Phase 2) takes copies from
     that Location only, biggest lot there first, and raises — before moving
     anything — if it can't supply them. Copies already sleeved here still
-    count first. A starter lot is never made for a chosen Location.
+    count first.
 
     `source="buy"` (Phase 4) moves and makes nothing: it returns one `buy`
     move for the copies still to be bought, the same on any deck.
@@ -1229,12 +1230,7 @@ def sleeve_into_deck(conn, deck_id, scryfall_id, quantity, source=None, source_l
         moves.append(_move(card, take, "move", moved_id, location, deck_name))
         need -= take
     if need > 0:   # only reachable on Auto: a chosen Location or deck is checked above
-        lot_id = add_collection_lot(
-            conn, scryfall_id, quantity=need, foil=False, location=deck_name,
-            date_acquired=datetime.date.today().isoformat(), price_paid=None,
-            source=STARTER_LOT_SOURCE, reason=reason, change_id=change_id,
-        )
-        moves.append(_move(card, need, "new", lot_id, None, deck_name))
+        moves.append(_move(card, need, "buy", frm=None, to=None, direction="in"))
     return moves
 
 
@@ -1330,7 +1326,7 @@ def fix_location_mismatch(conn, mismatch, dest=None):
     for lot in mismatch["lots"]:
         if remaining <= 0:
             break
-        now = conn.execute("SELECT location, COALESCE(quantity, 1) FROM collection WHERE collection_id=?",
+        now = conn.execute("SELECT location, COALESCE(NULLIF(quantity, 0), 1) FROM collection WHERE collection_id=?",
                            (lot["collection_id"],)).fetchone()
         if now is None or (now[0] or "").strip() != (lot["location"] or ""):
             continue
@@ -1344,7 +1340,7 @@ def fix_location_mismatch(conn, mismatch, dest=None):
 
 def revert_moves(conn, moves):
     """Undo a list of moves, newest first: each moved lot goes back to its
-    `from`, and a starter lot is deleted again — only if it is untouched
+    `from`, and a purchase's lot is deleted again — only if it is untouched
     since (still at `to`, same quantity). Placeholder moves are skipped;
     there's no lot to put back.
 
@@ -1853,14 +1849,15 @@ def reopen_change(conn, change_id):
 
 
 def _move_outcome(moves_out, moves_in):
-    """execute_swap()'s long-standing {"moved_out", "assigned_lot_id",
-    "created_lot"} summary, kept beside the full "moves" list (cut side
-    first) so callers written before Phase 1 still read it."""
+    """execute_swap()'s long-standing {"moved_out", "assigned_lot_id"} summary,
+    plus "to_buy" (copies went on the list with no lot), kept beside the full
+    "moves" list (cut side first) so callers written before Phase 1 still
+    read it."""
     real_in = [m for m in moves_in if m["kind"] in ("move", "new")]
     return {
         "moved_out": any(m["kind"] == "move" for m in moves_out),
         "assigned_lot_id": real_in[0]["collection_id"] if real_in else None,
-        "created_lot": any(m["kind"] == "new" for m in moves_in),
+        "to_buy": any(m["kind"] == "buy" for m in moves_in),
         "moves": list(moves_out) + list(moves_in),
     }
 
@@ -1893,7 +1890,7 @@ def apply_change(conn, change_id, add_scryfall_id=None):
     a card over, with an 'applied' row claiming otherwise).
 
     Returns execute_swap()'s shape in every case — {"moved_out",
-    "assigned_lot_id", "created_lot", "moves"} — so one caller can report
+    "assigned_lot_id", "to_buy", "moves"} — so one caller can report
     all three. Copies move through sleeve_into_deck() / unsleeve_from_deck()
     (docs/archive/EDIT_FLOW_PLAN.md Phase 1), the same as a hand edit.
 
@@ -2492,7 +2489,7 @@ COLLECTION_FIELDS = ["quantity", "foil", "location", "date_acquired", "price_pai
 # rename_deck() logs nothing — a rename relabels, no copy moved.
 # ------------------------------------------------------------------
 MOVE_REASONS = ("deck_edit", "apply", "reconcile", "dismantle", "collection_edit",
-                "import", "prune", "deck_delete", "purchase", "build")
+                "import", "deck_delete", "purchase", "build")
 
 
 def _loc(value):
@@ -2520,9 +2517,54 @@ def _log_collection_move(conn, collection_id, scryfall_id, quantity, frm, to, re
     )
 
 
+def _lot_is_blank(quantity, location):
+    """No quantity (blank or 0) and no Location: the mark of a card you don't
+    own (docs/archive/UNOWNED_LOTS_PLAN.md). Either one filled in means a real copy."""
+    return not quantity and not _loc(location)
+
+
+def fill_lot_fields(conn, scryfall_id, quantity, location):
+    """(quantity, location, notes) for a new lot, which needs at least one of
+    the two: the missing one is filled in (1 copy, or DEFAULT_LOCATION) and
+    `notes` says so, for the page to show. ValueError with neither. A basic
+    land is exempt and comes back as given."""
+    if q.is_basic_land(conn, scryfall_id=scryfall_id):
+        return quantity, location, []
+    if _lot_is_blank(quantity, location):
+        card = _card_name(conn, scryfall_id) or scryfall_id
+        raise ValueError(f"{card}: enter a quantity or a Location. A card you don't own needs no "
+                         "collection lot — put it on a deck's list or the Shortlist instead.")
+    notes = []
+    if not quantity:
+        quantity = 1
+        notes.append("quantity set to 1")
+    if not _loc(location):
+        location = DEFAULT_LOCATION
+        notes.append(f"Location set to {DEFAULT_LOCATION}")
+    return quantity, location, notes
+
+
+def _refuse_blanking(conn, scryfall_id, old_quantity, old_location, new_quantity, new_location):
+    """ValueError if an edit would leave a real lot with no quantity and no
+    Location. A lot that is already blank can still be edited, and a basic
+    land is exempt."""
+    if (_lot_is_blank(new_quantity, new_location) and not _lot_is_blank(old_quantity, old_location)
+            and not q.is_basic_land(conn, scryfall_id=scryfall_id)):
+        card = _card_name(conn, scryfall_id) or scryfall_id
+        raise ValueError(f"{card}: a lot needs a quantity or a Location. "
+                         "Delete the lot if you no longer own it.")
+
+
 def add_collection_lot(conn, scryfall_id, *, reason="collection_edit", change_id=None, **fields):
+    """Add a lot, through fill_lot_fields() so it can't be blank. An order
+    import is left as it is (docs/archive/UNOWNED_LOTS_PLAN.md): its lots always have
+    a quantity, and with no Location chosen they stay unlocated, for the
+    Workbench's panel."""
     fields = {k: fields.get(k) for k in COLLECTION_FIELDS}
     fields["foil"] = 1 if fields.get("foil") else 0
+    if reason != "import":
+        fields["quantity"], fields["location"], _notes = fill_lot_fields(
+            conn, scryfall_id, fields["quantity"], fields["location"])
     cur = conn.execute(
         """INSERT INTO collection (scryfall_id, quantity, foil, location, date_acquired, price_paid, source)
            VALUES (?,?,?,?,?,?,?)""",
@@ -2535,13 +2577,17 @@ def add_collection_lot(conn, scryfall_id, *, reason="collection_edit", change_id
     return cur.lastrowid
 
 
-def update_collection_lot(conn, collection_id, *, reason="collection_edit", change_id=None, **fields):
+def update_collection_lot(conn, collection_id, *, reason="collection_edit", change_id=None,
+                          allow_blank=False, **fields):
     """Edit a lot's fields. Logs what a change to `location` or `quantity`
     means for the copies: a new Location moves the copies the lot held
     (the smaller of old and new quantity, when both change); more copies
     arrive as a "new copy record" at the new Location, fewer leave as
     "deleted" from where the lot was. A lot with no tracked quantity (NULL)
-    logs only its Location move."""
+    logs only its Location move.
+
+    An edit that would leave a non-basic lot with no quantity and no Location
+    is refused with ValueError, unless `allow_blank` (move_lot() only)."""
     fields = {k: v for k, v in fields.items() if k in COLLECTION_FIELDS}
     if not fields:
         return
@@ -2549,6 +2595,9 @@ def update_collection_lot(conn, collection_id, *, reason="collection_edit", chan
         "SELECT scryfall_id, quantity, location FROM collection WHERE collection_id=?",
         (collection_id,),
     ).fetchone()
+    if old is not None and not allow_blank:
+        _refuse_blanking(conn, old[0], old[1], old[2], fields.get("quantity", old[1]),
+                         fields.get("location", old[2]))
     if "foil" in fields:
         fields["foil"] = 1 if fields["foil"] else 0
     set_clause = ", ".join(f"{k}=?" for k in fields)
@@ -2668,8 +2717,10 @@ def move_lot(conn, collection_id, location, quantity=None, *, reason="collection
         raise ValueError(f"No collection lot #{collection_id}.")
     sid, have, foil, old_loc, acquired, paid, source = row
     if quantity is None or have is None or quantity >= have:
+        # allow_blank: Undo can put an untracked lot back to no Location. A
+        # move relabels a lot that already exists; it is not an edit to it.
         update_collection_lot(conn, collection_id, location=location,
-                              reason=reason, change_id=change_id)
+                              reason=reason, change_id=change_id, allow_blank=True)
         twin = _find_twin(conn, collection_id)
         if twin is not None:
             _merge_lots(conn, twin, collection_id)
@@ -2714,51 +2765,57 @@ def remove_collection_lot(conn, collection_id, *, reason="collection_edit", chan
 
 
 def prune_collection(conn):
-    """Deletes any collection lot that meets ALL three conditions:
-      a) no assigned location (NULL or blank/whitespace-only)
-      b) a quantity of 0 or "none" (i.e. NULL)
-      c) not included in any existing deck list — checked against both
-         a deck's mainboard (deck_cards) and its open shortlist (ideas and
-         planned changes in deck_changes), so a card still under
-         consideration for a deck isn't swept away just because it isn't
-         physically located anywhere yet.
+    """Deletes every blank lot (queries.BLANK_LOT_SQL: no quantity, no
+    Location, not a basic land). A card you don't own has no collection row
+    (docs/archive/UNOWNED_LOTS_PLAN.md), whether or not a deck lists it or an idea
+    wants it, so there is nothing to protect.
 
     Called automatically as part of the Card Database page's Card Data
-    "Refresh" action (see dashboard_lib/refresh.py) so stale collection rows for
-    cards you no longer own and aren't running anywhere get cleaned up
-    without a separate manual step. Returns a list of
-    (collection_id, card_name) tuples for whatever was removed, so
-    callers can report it."""
+    "Refresh" action (see dashboard_lib/refresh.py), so a blank lot that
+    appears later doesn't stay. Nothing goes in the move log: a blank lot was
+    never a physical copy, and Card Lookup's History shouldn't show one being
+    removed. Returns a list of (collection_id, card_name) tuples for whatever
+    was removed, so callers can report it."""
     rows = conn.execute(
-        """SELECT col.collection_id, c.name, col.scryfall_id, col.quantity
-           FROM collection col
-           JOIN cards c ON c.scryfall_id = col.scryfall_id
-           WHERE (col.location IS NULL OR TRIM(col.location) = '')
-             AND (col.quantity IS NULL OR col.quantity = 0)
-             AND col.scryfall_id NOT IN (SELECT scryfall_id FROM deck_cards)
-             -- add_scryfall_id is NULL for any idea/planned row not yet
-             -- linked to a printing (every backfilled swap-queue row, for
-             -- one). `x NOT IN (subquery containing a NULL)` is NULL, not
-             -- true, so without this filter a single unlinked row would make
-             -- the whole condition false and silently disable pruning.
-             AND col.scryfall_id NOT IN (
-                 SELECT add_scryfall_id FROM deck_changes
-                 WHERE status IN ('idea', 'planned') AND add_scryfall_id IS NOT NULL)
-           ORDER BY c.name COLLATE NOCASE"""
+        f"""SELECT col.collection_id, c.name
+            FROM collection col
+            JOIN cards c ON c.scryfall_id = col.scryfall_id
+            WHERE {q.BLANK_LOT_SQL}
+            ORDER BY c.name COLLATE NOCASE"""
     ).fetchall()
     if not rows:
         return []
-    ids = [r[0] for r in rows]
     backup.snapshot(conn, "before", "prune-collection")
-    placeholders = ",".join("?" for _ in ids)
-    # Phase 6: a pruned lot leaves a row in the move log (it had no Location,
-    # so it reads "no location → deleted") — these used to vanish silently.
-    for collection_id, _name, sid, qty in rows:
-        _log_collection_move(conn, collection_id, sid, qty, "", None, "prune")
-    conn.execute(f"DELETE FROM collection WHERE collection_id IN ({placeholders})", ids)
-    conn.commit()
+    _delete_lots(conn, [r[0] for r in rows])
     logger.info("Pruned %d collection lot(s): %s", len(rows), ", ".join(r[1] for r in rows))
     return [(r[0], r[1]) for r in rows]
+
+
+def _delete_lots(conn, ids):
+    conn.execute(f"DELETE FROM collection WHERE collection_id IN ({','.join('?' for _ in ids)})", ids)
+    conn.commit()
+
+
+def delete_blank_lots(conn, collection_ids):
+    """The Clean up panel's Blank lots delete (docs/archive/UNOWNED_LOTS_PLAN.md
+    Phase 3): remove the lots listed, re-checking each is still blank, so a
+    lot given a quantity since the preview stays. A backup comes first and
+    is required: RuntimeError, nothing deleted, if it fails. No move-log rows,
+    as prune_collection(). Returns how many were deleted."""
+    marks = ",".join("?" for _ in collection_ids) or "NULL"
+    ids = [r[0] for r in conn.execute(
+        f"""SELECT col.collection_id
+            FROM collection col
+            JOIN cards c ON c.scryfall_id = col.scryfall_id
+            WHERE col.collection_id IN ({marks}) AND {q.BLANK_LOT_SQL}""",
+        list(collection_ids),
+    ).fetchall()]
+    if not ids:
+        return 0
+    backup.required_snapshot(conn)
+    _delete_lots(conn, ids)
+    logger.info("Deleted %d blank collection lot(s)", len(ids))
+    return len(ids)
 
 
 def _validate_game_participants(participants):
@@ -2876,9 +2933,8 @@ def delete_game(conn, game_id):
 #
 # No longer called by the Deck Editor (docs/archive/EDIT_FLOW_PLAN.md Phase 1): its add
 # bar goes through add_deck_card(), whose sleeve_into_deck() Auto rule moves
-# a free copy in before making a starter lot, which this never did. Kept
-# because the offline test harness and old lots' "Auto-added (deck build)"
-# source refer to it.
+# a free copy in and makes no lot at all. Kept because the offline test
+# harness and old lots' "Auto-added (deck build)" source refer to it.
 # ------------------------------------------------------------------
 def collection_has_card(conn, scryfall_id):
     """True if at least one collection lot already exists for this exact
@@ -2921,21 +2977,29 @@ def bulk_update_collection(conn, updates, *, reason="collection_edit"):
     Returns count changed. Deletes are diffed as unconditional (a row
     flagged _delete is always removed); field updates are diffed against
     current DB state so untouched rows aren't rewritten needlessly. Every
-    change reaches the move log through the single-lot writers, as `reason`."""
+    change reaches the move log through the single-lot writers, as `reason`.
+
+    An edit that would blank a lot (see update_collection_lot()) raises
+    ValueError before anything is written, so a refused save changes nothing."""
     ids = list(updates.keys())
     if not ids:
         return 0
     placeholders = ",".join("?" for _ in ids)
     current_rows = conn.execute(
-        f"SELECT collection_id, quantity, foil, location, date_acquired, price_paid, source "
+        f"SELECT collection_id, quantity, foil, location, date_acquired, price_paid, source, scryfall_id "
         f"FROM collection WHERE collection_id IN ({placeholders})",
         ids,
     ).fetchall()
     current = {
         r[0]: {"quantity": r[1], "foil": r[2], "location": r[3],
-               "date_acquired": r[4], "price_paid": r[5], "source": r[6]}
+               "date_acquired": r[4], "price_paid": r[5], "source": r[6], "scryfall_id": r[7]}
         for r in current_rows
     }
+    for collection_id, edit in updates.items():
+        old = current.get(collection_id)
+        if old is not None and not edit.get("_delete"):
+            _refuse_blanking(conn, old["scryfall_id"], old["quantity"], old["location"],
+                             edit.get("quantity", old["quantity"]), edit.get("location", old["location"]))
     changed = 0
     for collection_id, edit in updates.items():
         if edit.get("_delete"):
@@ -2992,11 +3056,22 @@ PURCHASE_LOT_SOURCE = "Purchase (buy list)"
 
 
 def record_purchase(conn, deck_id, scryfall_id, quantity=1, price_paid=None, change_id=None,
-                    collection_id=None):
+                    collection_id=None, *, printing_id=None, foil=False, location=None):
     """A bought copy lands in a deck's sleeves. With `collection_id` (a lot
     that arrived by order import) that many copies move into the deck;
     without, a new lot is made there at `price_paid` per copy (the unit
     price, as an order import records it). Returns the moves.
+
+    A new lot is for the printing you actually bought, never assumed to be
+    the listed one: `printing_id` (default `scryfall_id`, the deck's listed
+    printing) must be another printing of the same card, else ValueError.
+    `foil` is its finish and `location` where it goes (blank: the deck,
+    where a bought card lands; otherwise a storage Location, such as "Box").
+    When the lot lands in the deck with a printing the list doesn't have, the
+    list entry follows it through use_sleeved_printing() (the one-printing-
+    each case Reconcile calls fixable), and an open row's add printing too,
+    so the purchase doesn't show up as a printing mismatch straight away.
+    Ignored with `collection_id`: that lot is already a particular printing.
 
     `change_id` is the open Shortlist row the purchase answers: a row marked
     Buy goes back to Auto once its copies are bought, so applying it later
@@ -3019,12 +3094,18 @@ def record_purchase(conn, deck_id, scryfall_id, quantity=1, price_paid=None, cha
         moves = move_copies(conn, collection_id, deck_name, quantity=quantity, reason="purchase")
     else:
         card = _card_name(conn, scryfall_id) or scryfall_id
+        bought_id = printing_id or scryfall_id
+        if bought_id != scryfall_id and _oracle_of(conn, bought_id) != _oracle_of(conn, scryfall_id):
+            raise ValueError(f"That printing isn't {card} — pick another printing of it.")
+        lot_location = deck_name if _loc(location) in ("", deck_name) else normalize_dest(conn, location)
         lot_id = add_collection_lot(
-            conn, scryfall_id, quantity=quantity, foil=False, location=deck_name,
+            conn, bought_id, quantity=quantity, foil=foil, location=lot_location,
             date_acquired=datetime.date.today().isoformat(), price_paid=price_paid,
             source=PURCHASE_LOT_SOURCE, reason="purchase", change_id=change_id,
         )
-        moves = [_move(card, quantity, "new", lot_id, None, deck_name)]
+        moves = [_move(card, quantity, "new", lot_id, None, lot_location)]
+        if bought_id != scryfall_id:
+            _follow_bought_printing(conn, deck_id, deck_name, card, lot_location, change_id, bought_id)
     if change_id is not None:
         row = get_change(conn, change_id)
         if (row and row["status"] in OPEN_CHANGE_STATUSES and row["source"] == "buy"
@@ -3033,6 +3114,29 @@ def record_purchase(conn, deck_id, scryfall_id, quantity=1, price_paid=None, cha
                          (change_id,))
             conn.commit()
     return moves
+
+
+def _oracle_of(conn, scryfall_id):
+    """A printing's oracle_id, or its name when it has none."""
+    row = conn.execute("SELECT oracle_id, name FROM cards WHERE scryfall_id=?", (scryfall_id,)).fetchone()
+    return (row[0] or row[1].casefold()) if row else None
+
+
+def _follow_bought_printing(conn, deck_id, deck_name, card, lot_location, change_id, bought_id):
+    """record_purchase()'s second half for a printing other than the listed
+    one: an open Shortlist row's add printing follows, and, if the lot went
+    into the deck, so does the list entry (when it is the simple case
+    use_sleeved_printing() can swap — a wider split is left to Reconcile)."""
+    if change_id is not None:
+        row = get_change(conn, change_id)
+        if row and row["status"] in OPEN_CHANGE_STATUSES and row["add_scryfall_id"] != bought_id:
+            update_change(conn, change_id, add_scryfall_id=bought_id)
+    if lot_location != deck_name:
+        return
+    for m in q.printing_mismatches(conn):
+        if m["deck_id"] == deck_id and m["card"] == card and m["fixable"]:
+            use_sleeved_printing(conn, deck_id, [p["scryfall_id"] for p in m["listed"]],
+                                 [(p["scryfall_id"], p["qty"]) for p in m["sleeved"]])
 
 
 def sleeve_purchases(conn, offers):
@@ -3089,7 +3193,7 @@ def execute_swap(conn, deck_id, deck_name, remove_scryfall_id, remove_card_name,
         list ran, and only those the list no longer needs. (This used to
         move every lot of that NAME in the deck, whatever the quantity.)
       - the added card is sleeved here by sleeve_into_deck(): its Auto
-        rule (a free copy in storage if there is one, else a starter lot)
+        rule (a free copy in storage if there is one, else the buy list)
         or, with `source` / `source_location` (Phase 2), a chosen storage
         Location — never one taken out of another deck's sleeves.
 
@@ -3099,7 +3203,7 @@ def execute_swap(conn, deck_id, deck_name, remove_scryfall_id, remove_card_name,
     passes "apply" and its row.
 
     Returns {"moved_out": bool, "assigned_lot_id": int_or_None,
-    "created_lot": bool, "moves": [...]}."""
+    "to_buy": bool, "moves": [...]}."""
     cut_qty = _deck_card_quantity(conn, deck_id, remove_scryfall_id) or 0
     _delete_deck_card(conn, deck_id, remove_scryfall_id)
     _put_deck_card(conn, deck_id, add_scryfall_id, quantity)
@@ -3168,12 +3272,12 @@ def set_build_state(conn, deck_id, state):
 #   2. each listed card still not sleeved here is pulled from the source its
 #      last add chose: a storage Location, or Auto (free copies, biggest lot
 #      first). Donors go first so step 2 finds the transferred copy already
-#      sleeved here instead of making a starter lot for it
+#      sleeved here instead of reporting it short
 #   3. Buy cards stay on the buy list; anything that can't be pulled is
 #      listed, never skipped quietly
 #
-# Auto here NEVER makes a starter lot (unlike a direct edit): a card you
-# own no free copy of is reported as "to pull", not recorded as owned.
+# A card you own no free copy of is reported as "to pull", never recorded
+# as owned.
 # ------------------------------------------------------------------
 def _card_key(conn, scryfall_id):
     """The oracle-or-lowercased-name key deck_sourcing_plan() groups by."""

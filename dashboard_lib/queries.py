@@ -1107,19 +1107,22 @@ def _lots_for_card(conn, name=None, scryfall_id=None):
     face missed every copy you own, and two printings of one card that
     differ in name punctuation missed each other too.
 
-    `quantity` comes back COALESCEd to 1. collection.quantity is nullable
+    `quantity` comes back COALESCEd to 1, a 0 counting the same as NULL: a
+    lot with no quantity and a Location is one copy (a lot with neither is not
+    a copy at all, see BLANK_LOT_SQL). collection.quantity is nullable
     and NULL means "untracked / bulk" (see schema.sql), not zero — 183 of
     the 1,472 lots in the live database are NULL. The per-row check this
     feeds used to read that as `quantity or 0` and report a card sitting
     in a box as NOT OWNED; so would the allocator, which would then let
     every deck claim the same uncounted copy. One copy is the floor a NULL
     lot can mean, and counting it is what makes "can I grab it?"
-    answerable for those lots at all."""
+    answerable for those lots at all. A card you don't own has no lot, so
+    it isn't counted (docs/archive/UNOWNED_LOTS_PLAN.md)."""
     oracle_ids = oracle_ids_for_card(conn, name=name, scryfall_id=scryfall_id)
     if oracle_ids:
         placeholders = ",".join("?" for _ in oracle_ids)
         return conn.execute(
-            f"""SELECT col.collection_id, COALESCE(col.quantity, 1), col.location
+            f"""SELECT col.collection_id, COALESCE(NULLIF(col.quantity, 0), 1), col.location
                 FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
                 WHERE c.oracle_id IN ({placeholders})""",
             tuple(oracle_ids),
@@ -1128,7 +1131,7 @@ def _lots_for_card(conn, name=None, scryfall_id=None):
     if not name:
         return []
     return conn.execute(
-        """SELECT col.collection_id, COALESCE(col.quantity, 1), col.location
+        """SELECT col.collection_id, COALESCE(NULLIF(col.quantity, 0), 1), col.location
            FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
            WHERE c.name = ? COLLATE NOCASE""",
         (name,),
@@ -1331,7 +1334,7 @@ def plan_availability(conn, changes):
       in_other_deck  short, nobody else claimed it, but you own copies
                      sleeved in other decks: unsleeve one, don't buy one
       not_owned      short and you own none — a purchase (applying would
-                     create a starter lot). Phase 3's buy list reads this
+                     put it on the buy list). Phase 3's buy list reads this
       buying         the row chose Buy (Phase 4): a decided purchase, owned
                      copies elsewhere or not. It claims nothing, so it never
                      competes with another row for a copy
@@ -1653,8 +1656,8 @@ def unlocated_lot_summary(conn):
     surfaced in the Workbench header so the number doesn't stay invisible
     until then. Returns {lots, copies, value}."""
     row = conn.execute(
-        """SELECT COUNT(*), COALESCE(SUM(COALESCE(col.quantity, 1)), 0),
-                  COALESCE(SUM(COALESCE(col.quantity, 1) * COALESCE(c.current_price_usd, 0)), 0)
+        """SELECT COUNT(*), COALESCE(SUM(COALESCE(NULLIF(col.quantity, 0), 1)), 0),
+                  COALESCE(SUM(COALESCE(NULLIF(col.quantity, 0), 1) * COALESCE(c.current_price_usd, 0)), 0)
            FROM collection col LEFT JOIN cards c ON c.scryfall_id = col.scryfall_id
            WHERE col.location IS NULL OR TRIM(col.location) = ''"""
     ).fetchone()
@@ -1680,7 +1683,7 @@ def unlocated_lots(conn):
     set_code, quantity (COALESCEd to 1), foil, price (unit), value
     (quantity x price), source, date_acquired."""
     rows = conn.execute(
-        """SELECT col.collection_id, c.name, c.set_code, COALESCE(col.quantity, 1),
+        """SELECT col.collection_id, c.name, c.set_code, COALESCE(NULLIF(col.quantity, 0), 1),
                   col.foil, COALESCE(c.current_price_usd, 0), col.source, col.date_acquired
            FROM collection col LEFT JOIN cards c ON c.scryfall_id = col.scryfall_id
            WHERE col.location IS NULL OR TRIM(col.location) = ''"""
@@ -1736,7 +1739,7 @@ def deck_reconciliation(conn, deck_id=None):
 
     lots = {}     # key -> [{collection_id, quantity, location, card}]
     for cid, k, name, qty, loc in conn.execute(
-        f"""SELECT col.collection_id, {key}, c.name, COALESCE(col.quantity, 1), col.location
+        f"""SELECT col.collection_id, {key}, c.name, COALESCE(NULLIF(col.quantity, 0), 1), col.location
             FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
             WHERE COALESCE(c.is_basic_land, 0) = 0"""
     ):
@@ -2041,7 +2044,7 @@ def deck_sourcing_plan(conn, deck_id):
     if needed:
         marks = ",".join("?" for _ in needed)
         for cid, k, qty, loc in conn.execute(
-            f"""SELECT col.collection_id, {key}, COALESCE(col.quantity, 1), col.location
+            f"""SELECT col.collection_id, {key}, COALESCE(NULLIF(col.quantity, 0), 1), col.location
                 FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
                 WHERE {key} IN ({marks})""",
             tuple(needed),
@@ -2260,7 +2263,7 @@ def deck_dismantle_plan(conn, deck_id, target_deck_id=None):
     value = 0.0
     for cid, k, name, sid, qty, type_line, price in conn.execute(
         f"""SELECT col.collection_id, {key}, c.name, c.scryfall_id,
-                   COALESCE(col.quantity, 1), c.type_line, c.current_price_usd
+                   COALESCE(NULLIF(col.quantity, 0), 1), c.type_line, c.current_price_usd
             FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
             WHERE col.location = ?
             ORDER BY col.collection_id""",
@@ -2285,7 +2288,7 @@ def deck_dismantle_plan(conn, deck_id, target_deck_id=None):
         target_list = mainboard(target[0], nonbasic_only=True)
         held = {}
         for k, qty in conn.execute(
-            f"""SELECT {key}, COALESCE(col.quantity, 1)
+            f"""SELECT {key}, COALESCE(NULLIF(col.quantity, 0), 1)
                 FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
                 WHERE col.location = ?""",
             (target_name,),
@@ -2433,7 +2436,7 @@ def contention_table(conn):
     owned = {
         r[0]: r[1] or 0
         for r in conn.execute(
-            """SELECT c.oracle_id, SUM(COALESCE(col.quantity, 1))
+            """SELECT c.oracle_id, SUM(COALESCE(NULLIF(col.quantity, 0), 1))
                FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
                WHERE c.oracle_id IS NOT NULL AND c.is_basic_land = 0
                GROUP BY c.oracle_id"""
@@ -2506,7 +2509,7 @@ def deck_card_entry(conn, deck_id, scryfall_id):
 def card_lots(conn, scryfall_id):
     """Every collection lot of a card, across printings:
     [(collection_id, quantity, location, scryfall_id), ...] in
-    collection_id order. `quantity` is COALESCEd to 1 (a NULL lot is at
+    collection_id order. `quantity` is COALESCEd to 1 (a NULL or 0 lot is at
     least one copy — see _lots_for_card); `location` is as stored, not
     stripped, so a move can be undone back to exactly where it was."""
     name_row = conn.execute("SELECT name FROM cards WHERE scryfall_id=?", (scryfall_id,)).fetchone()
@@ -2516,7 +2519,7 @@ def card_lots(conn, scryfall_id):
         return []
     marks = ",".join("?" for _ in ids)
     return [tuple(r) for r in conn.execute(
-        f"""SELECT collection_id, COALESCE(quantity, 1), location, scryfall_id
+        f"""SELECT collection_id, COALESCE(NULLIF(quantity, 0), 1), location, scryfall_id
             FROM collection WHERE collection_id IN ({marks}) ORDER BY collection_id""",
         ids,
     ).fetchall()]
@@ -2613,8 +2616,8 @@ def card_sources(conn, scryfall_id, deck_id):
       bulk      True for a basic land (Phase 7): nothing is ever moved, so
                 there is nothing to choose — `storage` and `decks` are empty
       auto      what Auto would do right now: {"kind": "here" | "storage" |
-                "new" | "bulk", "location": Location or None}. "new" is a
-                starter lot — a copy you don't own yet
+                "new" | "bulk", "location": Location or None}. "new" is no
+                free copy: the card goes on the list with no lot, to buy
     """
     if is_basic_land(conn, scryfall_id=scryfall_id):
         price_row = conn.execute(
@@ -2937,14 +2940,21 @@ def deck_sync_offers(conn, since_move_id):
 
 
 BUY_REASONS = ("awaiting", "chosen", "contention", "idea")   # most specific first
+# The Workbench shows the buy list in two parts (docs/archive/UNOWNED_LOTS_PLAN.md
+# Phase 2): what decks need, and ideas, which are maybes. A card marked Buy is
+# a decision, so `chosen` counts as needed.
+BUY_IDEA_REASONS = ("idea",)
 
 
 def awaiting_buys(conn, deck_id=None):
-    """Cards on a deck's list from a Buy add that no copy is sleeved for yet
-    (docs/archive/EDIT_FLOW_PLAN.md Phase 4's `awaiting`). A card is one when its latest
-    applied add row on the deck is source='buy' (a direct add logs one; so
-    does applying an idea) and the list runs more copies than the deck's
-    sleeves hold. A dismantled deck and an untracked basic land never are.
+    """Cards on a deck's list that no copy is sleeved for and that are waiting
+    to be bought (docs/archive/EDIT_FLOW_PLAN.md Phase 4's `awaiting`). A card
+    is one when the list runs more copies than the deck's sleeves hold and
+    either its latest applied add row on the deck is source='buy' (a direct
+    add logs one; so does applying an idea) or no copy of it exists anywhere,
+    in any printing (docs/archive/UNOWNED_LOTS_PLAN.md). A card owned elsewhere that
+    wasn't marked Buy is contention_table()'s, not this.
+    A dismantled deck and an untracked basic land never are.
     `deck_id` narrows it to one deck. Each: {deck_id, deck_name, scryfall_id,
     card, quantity (copies still to buy), price}."""
     latest = {}
@@ -2956,14 +2966,23 @@ def awaiting_buys(conn, deck_id=None):
            ORDER BY dc.change_id"""
     ).fetchall():
         latest[(d_id, sid)] = source
+    # One read of what has a lot, not _lots_for_card() per row: every deck card
+    # passes through here, and the Board asks on each render (deck_buying()).
+    held = {key for oracle_id, name in conn.execute(
+        """SELECT DISTINCT c.oracle_id, c.name
+           FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id"""
+    ).fetchall() for key in (oracle_id, name.casefold()) if key}
     out = []
-    for d_id, deck_name, sid, qty, card, price in conn.execute(
-        """SELECT d.deck_id, d.name, dcd.scryfall_id, dcd.quantity, c.name, c.current_price_usd
+    for d_id, deck_name, sid, qty, card, price, oracle_id in conn.execute(
+        """SELECT d.deck_id, d.name, dcd.scryfall_id, dcd.quantity, c.name, c.current_price_usd,
+                  c.oracle_id
            FROM decks d JOIN deck_cards dcd ON dcd.deck_id = d.deck_id
            JOIN cards c ON c.scryfall_id = dcd.scryfall_id
            WHERE COALESCE(d.build_state, '') != 'dismantled'"""
     ).fetchall():
-        if latest.get((d_id, sid)) != "buy" or (deck_id is not None and d_id != deck_id):
+        if deck_id is not None and d_id != deck_id:
+            continue
+        if latest.get((d_id, sid)) != "buy" and (oracle_id or card.casefold()) in held:
             continue
         if is_basic_land(conn, scryfall_id=sid):
             continue
@@ -3000,13 +3019,14 @@ def buy_list(conn, contention=None):
     several reasons to be here; it gets ONE row, under the most specific
     (BUY_REASONS order):
 
-      awaiting    on a deck's list from a Buy add, still no copy sleeved there
+      awaiting    on a deck's list from a Buy add, or with no copy anywhere;
+                  still no copy sleeved there
       chosen      an open idea or planned change marked Buy (Phase 4), even
                   when you own copies elsewhere — "keep Gisa's, buy a second"
       contention  a mainboard / shortlist shortfall from contention_table()
       idea        an open idea (not yet staged — a planned swap that's not
-                  owned buys a starter lot automatically on apply) whose card
-                  you own ZERO copies of
+                  owned turns `awaiting` on apply) whose card you own ZERO
+                  copies of
 
     `contention` reuses an existing contention_table() result. Returns
     {"rows": [...], "total": float}; each row is {card, quantity, price,
@@ -3018,7 +3038,11 @@ def buy_list(conn, contention=None):
     when it is the larger figure. `targets` is what "Bought" can act on:
     [{deck_id, deck_name, scryfall_id, quantity, kind: awaiting | chosen |
     idea, change_id (None for awaiting)}] — a contention shortfall belongs to
-    no one deck, so it adds none."""
+    no one deck, so it adds none.
+
+    The result also splits the same rows in two, each {"rows", "total"}:
+    "needed" (every reason but `idea`) and "ideas", so the page can total
+    what decks need without the maybes."""
     if contention is None:
         contention = contention_table(conn)
 
@@ -3098,7 +3122,11 @@ def buy_list(conn, contention=None):
             "decks": sorted(g["decks"]), "targets": g["targets"],
             "reason": next(r for r in BUY_REASONS if r in g["reasons"]),
         })
-    return {"rows": rows, "total": total}
+    needed = [r for r in rows if r["reason"] not in BUY_IDEA_REASONS]
+    ideas = [r for r in rows if r["reason"] in BUY_IDEA_REASONS]
+    return {"rows": rows, "total": total,
+            "needed": {"rows": needed, "total": sum(r["subtotal"] for r in needed)},
+            "ideas": {"rows": ideas, "total": sum(r["subtotal"] for r in ideas)}}
 
 
 def buy_matches(conn, lots):
@@ -3380,8 +3408,17 @@ def deck_comparison(conn):
            ORDER BY d.name COLLATE NOCASE""",
         conn,
     )
-    pct = {r["deck_id"]: r["build"]["pct"] for r in deck_reconciliation(conn)}
-    df["build_pct"] = df["deck_id"].map(pct)
+    builds = {r["deck_id"]: r["build"] for r in deck_reconciliation(conn)}
+    df["build_pct"] = df["deck_id"].map({d: b["pct"] for d, b in builds.items()})
+    # Beside "% built": how many copies are sleeved of how many needed, and how
+    # many of the rest have no copy anywhere and have to be bought
+    # (docs/archive/UNOWNED_LOTS_PLAN.md Phase 4).
+    df["build_located"] = df["deck_id"].map({d: b["located"] for d, b in builds.items()})
+    df["build_needed"] = df["deck_id"].map({d: b["needed"] for d, b in builds.items()})
+    to_buy = {}
+    for b in awaiting_buys(conn):
+        to_buy[b["deck_id"]] = to_buy.get(b["deck_id"], 0) + b["quantity"]
+    df["to_buy"] = df["deck_id"].map(to_buy).fillna(0).astype(int)
     return df
 
 
@@ -3394,9 +3431,8 @@ def collection_dataframe(conn):
     aggregating rows that may live in different boxes or decks.
 
     `in_deck` (Prompt Pass 4) is 1 if this printing's scryfall_id is used
-    in ANY deck's mainboard (deck_cards), 0 otherwise — the same
-    "spoken for by a deck" test writes.prune_collection() already uses,
-    reused here to power the Collection page's deck-status filter."""
+    in ANY deck's mainboard (deck_cards), 0 otherwise, which powers the
+    Collection page's deck-status filter."""
     return pd.read_sql_query(
         f"""SELECT col.collection_id, {CARD_COLUMNS},
                    col.quantity, col.foil, col.location, col.date_acquired,
@@ -3539,11 +3575,77 @@ def unreferenced_card_sql(conn):
     return " AND ".join(parts)
 
 
+# The one test for a blank lot (docs/archive/UNOWNED_LOTS_PLAN.md): no quantity, no
+# Location, not a basic land. Written against `col` (collection) and `c` (cards).
+BLANK_LOT_SQL = """(col.quantity IS NULL OR col.quantity = 0)
+                   AND (col.location IS NULL OR TRIM(col.location) = '')
+                   AND COALESCE(c.is_basic_land, 0) = 0"""
+
+
+def blank_lots(conn):
+    """Every blank lot, for the Clean up panel's preview: a DataFrame of
+    collection_id, card, printing and held_by, the decks listing the card and
+    the decks with an open idea or planned add for it, in any printing
+    ("Gisa; idea: Tuvasa", blank if neither)."""
+    def key(oracle_id, name):
+        return oracle_id or (name or "").casefold()
+
+    held = {}
+    for oracle_id, name, deck in conn.execute(
+        """SELECT c.oracle_id, c.name, d.name
+           FROM deck_cards dc JOIN decks d ON d.deck_id = dc.deck_id
+           JOIN cards c ON c.scryfall_id = dc.scryfall_id"""
+    ).fetchall():
+        held.setdefault(key(oracle_id, name), set()).add(deck)
+    for oracle_id, name, deck in conn.execute(
+        """SELECT c.oracle_id, COALESCE(c.name, dc.add_name), d.name
+           FROM deck_changes dc JOIN decks d ON d.deck_id = dc.deck_id
+           LEFT JOIN cards c ON c.scryfall_id = dc.add_scryfall_id
+           WHERE dc.status IN ('idea', 'planned')"""
+    ).fetchall():
+        held.setdefault(key(oracle_id, name), set()).add(f"idea: {deck}")
+    rows = [
+        (cid, name, f"{(set_code or '?').upper()} #{number}",
+         "; ".join(sorted(held.get(key(oracle_id, name), ()), key=lambda h: (h.startswith("idea: "), h.casefold()))))
+        for cid, name, set_code, number, oracle_id in conn.execute(
+            f"""SELECT col.collection_id, c.name, c.set_code, c.collector_number, c.oracle_id
+                FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
+                WHERE {BLANK_LOT_SQL}
+                ORDER BY c.name COLLATE NOCASE""").fetchall()
+    ]
+    return pd.DataFrame(rows, columns=["collection_id", "card", "printing", "held_by"])
+
+
+def lots_missing_a_field(conn, field):
+    """Lots a person has to look at, for two read-only Clean up checks
+    (docs/archive/UNOWNED_LOTS_PLAN.md Phase 4): `field` "location" is a lot with a
+    quantity and no Location, "quantity" one with a Location and no quantity.
+    Basic lands are exempt from both, and a lot with neither is a blank lot,
+    which has its own bucket. A DataFrame of collection_id, card, printing,
+    quantity, location and source, by card name."""
+    where = {
+        "location": "col.quantity > 0 AND (col.location IS NULL OR TRIM(col.location) = '')",
+        "quantity": "(col.quantity IS NULL OR col.quantity = 0) AND TRIM(COALESCE(col.location, '')) != ''",
+    }[field]
+    return pd.read_sql_query(
+        f"""SELECT col.collection_id, c.name AS card,
+                   UPPER(COALESCE(c.set_code, '?')) || ' #' || c.collector_number AS printing,
+                   col.quantity, col.location, col.source
+            FROM collection col JOIN cards c ON c.scryfall_id = col.scryfall_id
+            WHERE {where} AND COALESCE(c.is_basic_land, 0) = 0
+            ORDER BY c.name COLLATE NOCASE""",
+        conn,
+    )
+
+
 def orphan_report(conn, image_dir=None):
-    """Stale buckets, each a DataFrame: `unreferenced_cards`,
-    `stale_card_tags` (tag rows for a card no longer in that deck),
-    `orphan_image_files` (files in the image cache with no `cards` row) and
-    `missing_image_files` (cards whose local_image_path file is gone)."""
+    """Stale buckets, each a DataFrame: `blank_lots` (see blank_lots()),
+    `no_location` and `no_quantity` (lots_missing_a_field(); nothing here
+    deletes them),
+    `unreferenced_cards`, `stale_card_tags` (tag rows for a card no longer in
+    that deck), `orphan_image_files` (files in the image cache with no
+    `cards` row) and `missing_image_files` (cards whose local_image_path file
+    is gone)."""
     unreferenced = pd.read_sql_query(
         f"""SELECT c.scryfall_id, c.name, c.set_code, c.collector_number
             FROM cards c WHERE {unreferenced_card_sql(conn)}
@@ -3583,6 +3685,9 @@ def orphan_report(conn, image_dir=None):
         if not os.path.isfile(os.path.join(static_dir, path))
     ]
     return {
+        "blank_lots": blank_lots(conn),
+        "no_location": lots_missing_a_field(conn, "location"),
+        "no_quantity": lots_missing_a_field(conn, "quantity"),
         "unreferenced_cards": unreferenced,
         "stale_card_tags": stale_tags,
         "orphan_image_files": pd.DataFrame({"file": orphan_files}),

@@ -177,14 +177,18 @@ def export_buy_list_text(buy_list_result):
     above) rather than inventing a CSV format for a list that's really
     just a shopping list to paste somewhere. One line per card, a blank
     line, then the running total."""
-    lines = []
-    for row in buy_list_result["rows"]:
+    def line(row):
         price = f"${row['price']:.2f} ea" if row["price"] is not None else "price unknown"
         why = {"awaiting": "on a deck's list, no copy yet", "chosen": "marked Buy",
                "idea": "unowned idea"}.get(row["reason"], "contention shortfall")
-        decks = ", ".join(row["decks"])
-        lines.append(f"{row['quantity']}x {row['card']} — {price} ({why}; {decks})")
+        return f"{row['quantity']}x {row['card']} — {price} ({why}; {', '.join(row['decks'])})"
+
+    lines = [line(row) for row in buy_list_result["rows"]]
     lines.append("")
+    if "needed" in buy_list_result:
+        # Decks' needs and ideas totalled apart, as the Workbench shows them.
+        lines.append(f"Needed by decks: ${buy_list_result['needed']['total']:,.2f}")
+        lines.append(f"Ideas: ${buy_list_result['ideas']['total']:,.2f}")
     lines.append(f"Total: ${buy_list_result['total']:,.2f}")
     return "\n".join(lines)
 

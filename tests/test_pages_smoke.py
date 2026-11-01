@@ -424,12 +424,11 @@ def test_board_edit_glue_undo_button(smoke_db_path, tmp_path, monkeypatch):
         assert at.session_state["_pending_feedback"]["lines"] == ["Sol Ring → ×2"]
         assert at.button(key="k__undo_btn").label.startswith("↶ Undo: ")
         # docs/archive/EDIT_FLOW_PLAN.md Phase 1: the deck's only copy is already sleeved
-        # and deck 2 has none to give, so +1 makes a starter lot here — and
-        # the Undo has to delete it again, not just lower the quantity.
+        # and deck 2 has none to give, so +1 goes on the buy list with no lot.
         lots = lambda: sqlite3.connect(path).execute(  # noqa: E731
             "SELECT location, COUNT(*) FROM collection GROUP BY location").fetchall()
-        assert lots() == [("Smoke Test Deck", 2)]
-        assert [m["kind"] for m in at.session_state["_pending_feedback"]["moves"]] == ["new"]
+        assert lots() == [("Smoke Test Deck", 1)]
+        assert [m["kind"] for m in at.session_state["_pending_feedback"]["moves"]] == ["buy"]
 
         at.session_state["edit"] = {"op": "inc", "id": "no-such-card"}  # refused
         at.run()
@@ -1476,6 +1475,43 @@ def test_workbench_buy_list_bought_sleeves_a_lot_into_the_deck(smoke_db_path, tm
         st.cache_data.clear()
 
 
+def test_workbench_bought_records_the_printing_you_chose(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = _buy_world(smoke_db_path, tmp_path)
+    conn = sqlite3.connect(path)
+    conn.execute("INSERT INTO cards (scryfall_id, name, set_code, collector_number, oracle_id, type_line, cmc)"
+                 " VALUES ('arcane-sign-2', 'Arcane Signet', 'sld', '5', 'oracle-arcane', 'Artifact', 2)")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "8_Workbench.py"), default_timeout=15)
+        at.run()
+        at.button_group(key="workbench_view").set_value("supply").run()
+        assert not at.exception
+        # The buy list is split: a Needed-by-decks table, then a collapsed Ideas expander.
+        assert any("Needed by decks (" in s.value for s in at.subheader)
+        assert any(e.label.startswith("💡 Ideas (0)") for e in at.expander)
+        printing = at.selectbox(key="workbench_bought_printing_3_arcane-sign-1_None_0")
+        assert printing.value.startswith("CMD #2")                         # starts on the listed printing
+        printing.select(next(o for o in printing.options if o.startswith("SLD #5")))
+        at.checkbox(key="workbench_bought_foil_3_arcane-sign-1_None_0").check()
+        at.run()
+        at.button(key="workbench_bought_btn_3_arcane-sign-1_None_0").click().run()
+        assert not at.exception
+        lots = sqlite3.connect(path).execute(
+            "SELECT scryfall_id, foil, location FROM collection WHERE source=?", ("Purchase (buy list)",)).fetchall()
+        assert lots == [("arcane-sign-2", 1, "Empty Deck")]
+        assert sqlite3.connect(path).execute(
+            "SELECT scryfall_id FROM deck_cards WHERE deck_id=3").fetchall() == [("arcane-sign-2",)]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
 def test_collection_editor_offers_imported_copies_to_the_deck_waiting_on_them(smoke_db_path, tmp_path, monkeypatch):
     from dashboard_lib import db, queries, writes
 
@@ -1502,3 +1538,114 @@ def test_collection_editor_offers_imported_copies_to_the_deck_waiting_on_them(sm
     finally:
         st.cache_resource.clear()
         st.cache_data.clear()
+
+
+def _add_form(smoke_db_path, tmp_path, monkeypatch, quantity):
+    """The Collection Editor's Add form, pinned to Sol Ring by set + number
+    with no Location picked, on a throwaway copy of the database."""
+    from dashboard_lib import db
+
+    path = str(tmp_path / "add_form.db")
+    shutil.copy(smoke_db_path, path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    at = AppTest.from_file(os.path.join(PAGES_DIR, "5_Collection_Editor.py"), default_timeout=15)
+    at.run()
+    at.text_input(key="editor_coll_add_set").set_value("cmd")
+    at.text_input(key="editor_coll_add_num").set_value("1")
+    at.number_input(key="editor_coll_add_qty").set_value(quantity)
+    at.button(key="editor_coll_add_btn").click().run()
+    assert not at.exception
+    return at, path
+
+
+def _lot_count(path):
+    return sqlite3.connect(path).execute("SELECT COUNT(*) FROM collection").fetchone()[0]
+
+
+def test_decks_build_plan_says_how_many_are_still_to_buy(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = _buy_world(smoke_db_path, tmp_path)           # Empty Deck lists a card marked Buy
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "2_Decks.py"), default_timeout=15)
+        at.session_state["current_deck_id"] = 3
+        at.run()
+        assert not at.exception
+        assert [p.proto.text for p in at.get("progress")] == ["0 of 1 non-basics sleeved here · 1 to buy"]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_clean_up_lists_lots_missing_a_field_with_nothing_to_delete(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    conn = sqlite3.connect(path)
+    conn.execute("INSERT INTO collection (scryfall_id, quantity) VALUES ('sol-ring-cmd-1', 2)")
+    conn.execute("INSERT INTO collection (scryfall_id, location) VALUES ('sol-ring-cmd-1', 'Box')")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "6_Card_Database.py"), default_timeout=15)
+        at.run()
+        assert not at.exception
+        labels = [e.label for e in at.expander]
+        assert "Lots with no location (1)" in labels and "Lots with no quantity (1)" in labels
+        assert not [b for b in at.button if b.key and b.key.startswith("carddb_clean_no_")]
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_clean_up_previews_and_deletes_blank_lots(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    conn = sqlite3.connect(path)
+    conn.execute("INSERT INTO collection (scryfall_id) VALUES ('sol-ring-cmd-1')")
+    conn.commit()
+    conn.close()
+    before = _lot_count(path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "6_Card_Database.py"), default_timeout=15)
+        at.run()
+        assert not at.exception
+        assert any(e.label == "Blank lots (1)" for e in at.expander)
+        assert at.button(key="carddb_clean_blank_lots_btn").disabled      # until confirmed
+        at.checkbox(key="carddb_clean_blank_lots_ok").check().run()
+        at.button(key="carddb_clean_blank_lots_btn").click().run()
+        assert not at.exception
+        assert _lot_count(path) == before - 1
+        assert os.listdir(os.path.join(tmp_path, "backups"))
+        assert not any(e.label.startswith("Blank lots") for e in at.expander)
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_add_form_says_what_it_filled_in(smoke_db_path, tmp_path, monkeypatch):
+    before = _lot_count(smoke_db_path)
+    at, path = _add_form(smoke_db_path, tmp_path, monkeypatch, 2)
+    assert _lot_count(path) == before + 1
+    assert sqlite3.connect(path).execute(
+        "SELECT quantity, location FROM collection ORDER BY collection_id DESC LIMIT 1").fetchone() == (2, "Box")
+    assert any("Location set to Box" in t.value for t in at.toast)
+
+
+def test_add_form_refuses_a_lot_with_neither_field(smoke_db_path, tmp_path, monkeypatch):
+    before = _lot_count(smoke_db_path)
+    at, path = _add_form(smoke_db_path, tmp_path, monkeypatch, 0)
+    assert _lot_count(path) == before
+    assert any("enter a quantity or a Location" in e.value for e in at.error)

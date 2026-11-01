@@ -164,7 +164,11 @@ def render_edit_table(df):
                                 f"not the same card — left unchanged.")
             elif writes.set_lot_printing(conn, int(row["collection_id"]), sid):
                 printing_changes += 1
-        changed = writes.bulk_update_collection(conn, updates)
+        try:
+            changed = writes.bulk_update_collection(conn, updates)
+        except ValueError as exc:
+            changed = 0
+            problems.append(str(exc))
         message = f"Updated {changed} lot(s)."
         if printing_changes:
             message += f" Changed the printing on {printing_changes}."
@@ -284,8 +288,7 @@ filtered = cv.render_filter_panel(
 
 # Deck-status toggle (Prompt Pass 4). "in_deck" comes straight from
 # queries.collection_dataframe() — 1 if this printing's scryfall_id is
-# used in ANY deck's mainboard (deck_cards), the same "spoken for by a
-# deck" test writes.prune_collection() uses. "Not in a deck OR another
+# used in ANY deck's mainboard (deck_cards). "Not in a deck OR another
 # location" narrows further to cards that are unaccounted for on BOTH
 # fronts at once — not run in any deck AND no location recorded either
 # (blank/NULL) — rather than the broader "not in a deck, or has some

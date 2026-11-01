@@ -50,7 +50,9 @@ CREATE INDEX idx_cards_oracle ON cards(oracle_id);
 CREATE TABLE collection (
     collection_id     INTEGER PRIMARY KEY AUTOINCREMENT,
     scryfall_id        TEXT NOT NULL REFERENCES cards(scryfall_id),
-    quantity           INTEGER,           -- NULL = untracked/bulk quantity (e.g. basic lands)
+    quantity           INTEGER,           -- NULL or 0 = no count (a basic land's, or an uncounted lot): one copy when
+                                          -- `location` is set. No quantity AND no location is not a copy, so no row is
+                                          -- kept for it (docs/archive/UNOWNED_LOTS_PLAN.md)
     foil               BOOLEAN NOT NULL DEFAULT 0,
     location           TEXT,              -- free text: box code OR deck name if sleeved in
     date_acquired      DATE,

@@ -42,9 +42,9 @@ def test_adding_a_lot_logs_a_new_copy_record(conn, world):
     assert _log(conn) == [("Sol Ring", 2, None, "Box", "collection_edit")]
 
 
-def test_adding_a_lot_with_no_location_logs_an_empty_location(conn, world):
-    writes.add_collection_lot(conn, world["ring"], quantity=1, location=None)
-    assert _log(conn) == [("Sol Ring", 1, None, "", "collection_edit")]
+def test_an_imported_lot_with_no_location_logs_an_empty_location(conn, world):
+    writes.add_collection_lot(conn, world["ring"], quantity=1, location=None, reason="import")
+    assert _log(conn) == [("Sol Ring", 1, None, "", "import")]
 
 
 def test_a_caller_names_the_reason(conn, world):
@@ -101,10 +101,10 @@ def test_a_location_and_quantity_edit_together_log_both_halves(conn, world):
     ]
 
 
-def test_an_untracked_lot_logs_only_its_location_move(conn, world):
-    lot = writes.add_collection_lot(conn, world["ring"], quantity=None, location="Box")
+def test_an_untracked_lot_logs_only_its_location_move(conn, world, raw_lot):
+    lot = raw_lot(world["ring"], None, "Box")
     writes.update_collection_lot(conn, lot, location="Gisa")
-    assert _log(conn)[1:] == [("Sol Ring", None, "Box", "Gisa", "collection_edit")]
+    assert _log(conn) == [("Sol Ring", None, "Box", "Gisa", "collection_edit")]
 
 
 def test_edits_that_move_nothing_log_nothing(conn, world):
@@ -166,12 +166,11 @@ def test_deleting_a_deck_without_clearing_locations_logs_nothing_more(conn, worl
     assert len(_log(conn)) == 1
 
 
-def test_prune_logs_the_lots_it_deletes_by_name(conn, world):
-    writes.add_collection_lot(conn, world["ring"], quantity=0, location=None)
-    writes.add_collection_lot(conn, world["signet"], quantity=1, location="Box")
+def test_prune_leaves_no_trace_in_the_move_log(conn, world, raw_lot):
+    raw_lot(world["ring"], 0, None)
     pruned = writes.prune_collection(conn)
     assert [name for _, name in pruned] == ["Sol Ring"]
-    assert _log(conn)[2:] == [("Sol Ring", 0, "", None, "prune")]
+    assert _log(conn) == []
 
 
 # ------------------------------------------------------------------
@@ -187,9 +186,9 @@ def test_a_hand_edit_logs_its_moves_with_the_history_row(conn, world):
     assert tuple(row) == ("Sol Ring", 1, "Box", "Gisa", "deck_edit", applied)
 
 
-def test_a_starter_lot_is_logged_as_a_new_copy_record(conn, world):
+def test_adding_a_card_you_dont_own_logs_no_move(conn, world):
     writes.add_deck_card(conn, world["gisa"], world["signet"], 1)
-    assert _log(conn) == [("Arcane Signet", 1, None, "Gisa", "deck_edit")]
+    assert _log(conn) == []
 
 
 def test_removing_a_card_logs_the_copy_going_to_box(conn, world):

@@ -170,6 +170,14 @@ def _add_card_to_deck(deck_id, name, set_code, number, qty, source=None, source_
     )
     if err:
         return None, err, []
+    if not (set_code and number) and source in (None, "storage") and not q.is_basic_land(conn, scryfall_id=sid):
+        # A bare name resolves to whichever printing the database lists first,
+        # but Auto/storage sleeves a free copy of the printing you OWN. Put
+        # that printing on the list so the previewer shows the card that is
+        # actually going into the deck, not a different art.
+        lots = q.free_lots(conn, sid, location=source_location if source == "storage" else None)
+        if lots:
+            sid = lots[0][3]
     existing = (q.deck_card_entry(conn, deck_id, sid) or {}).get("quantity") or 0
     try:
         moves = writes.add_deck_card(conn, deck_id, sid, quantity=existing + qty,
@@ -1030,10 +1038,11 @@ with tab_shortlist:
             help="Set code + collector number picks an exact printing; leave them blank to match by name.",
         )
         with st.form(f"editor_{deck_id}_shortlist_add_form", clear_on_submit=True):
-            f1, f2, f3 = st.columns([3, 1, 1])
+            f1, f2, f3, f3b = st.columns([3, 1, 1, 1])
             sl_name = f1.text_input("Card name", key=f"editor_{deck_id}_sl_add_name")
             sl_set = f2.text_input("Set", key=f"editor_{deck_id}_sl_add_set")
             sl_num = f3.text_input("Number", key=f"editor_{deck_id}_sl_add_num")
+            sl_qty = f3b.number_input("Qty", min_value=1, value=1, step=1, key=f"editor_{deck_id}_sl_add_qty")
             f4, f5, f6 = st.columns([2, 2, 3])
             sl_replace = f4.selectbox("Replaces (optional)", replace_choices, key=f"editor_{deck_id}_sl_add_replace")
             # Inside a form nothing reruns while typing, so the card isn't
@@ -1065,6 +1074,7 @@ with tab_shortlist:
                             conn, deck_id, add_scryfall_id=sid, add_name=resolved_name,
                             remove_scryfall_id=target[0] if target else None,
                             remove_name=target[1] if target else None,
+                            quantity=int(sl_qty),
                             notes=_clean_text(sl_notes),
                             source=sl_source, source_location=sl_source_location,
                         )
@@ -1074,7 +1084,7 @@ with tab_shortlist:
                         fetched = " (fetched fresh from Scryfall)" if was_new else ""
                         taken = (f" {sl_source_location}'s copy is promised to this deck until you apply "
                                  "or drop it." if sl_source == "deck" else "")
-                        _refresh([f"✅ Added {resolved_name} to the shortlist{fetched}.{taken}"])
+                        _refresh([f"✅ Added {resolved_name}{f' ×{int(sl_qty)}' if sl_qty > 1 else ''} to the shortlist{fetched}.{taken}"])
 
         # ---------------- Ideas ----------------
         st.divider()

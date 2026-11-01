@@ -2533,6 +2533,22 @@ def update_collection_lot(conn, collection_id, *, reason="collection_edit", chan
     conn.commit()
 
 
+def set_lot_printing(conn, collection_id, scryfall_id):
+    """Point a lot at a different printing (the Collection editor's Set / #
+    cells — fixing a lot that was recorded as the wrong printing). The copy
+    itself didn't go anywhere, so nothing is move-logged. Deck lists are
+    left alone; a lot now differing from its deck's list shows up in
+    Reconcile. Returns True when the lot changed."""
+    old = conn.execute("SELECT scryfall_id FROM collection WHERE collection_id=?",
+                       (collection_id,)).fetchone()
+    if old is None or old[0] == scryfall_id:
+        return False
+    conn.execute("UPDATE collection SET scryfall_id=? WHERE collection_id=?",
+                 (scryfall_id, collection_id))
+    conn.commit()
+    return True
+
+
 def _find_twin(conn, collection_id):
     """The OTHER lot that is interchangeable with this one — same printing,
     finish, Location (blank == NULL), source and acquired date — or None.

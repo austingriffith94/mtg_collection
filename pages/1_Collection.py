@@ -47,7 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pandas as pd
 import streamlit as st
 
-from dashboard_lib import db, loaders, writes, formatting as fmt, moxfield_export
+from dashboard_lib import db, loaders, writes, card_resolver, formatting as fmt, moxfield_export
 from dashboard_lib import card_view as cv
 from dashboard_lib import queries as q
 
@@ -80,6 +80,7 @@ def render_edit_table(df):
     rows = [
         {
             "collection_id": r["collection_id"], "Card": r["name"], "Set": r["set_code"],
+            "#": r["collector_number"] if pd.notna(r["collector_number"]) else "",
             "Qty": int(r["quantity"]) if pd.notna(r["quantity"]) else None,
             "Foil": bool(r["foil"]),
             "Location": r["location"] if pd.notna(r["location"]) else "",
@@ -104,7 +105,10 @@ def render_edit_table(df):
         pd.DataFrame(rows),
         column_config={
             "Card": st.column_config.TextColumn("Card", disabled=True),
-            "Set": st.column_config.TextColumn("Set", disabled=True),
+            "Set": st.column_config.TextColumn(
+                "Set", help="Set code. Editing Set or # re-points the lot at that exact printing "
+                            "of the same card."),
+            "#": st.column_config.TextColumn("#", help="Collector number."),
             "Qty": st.column_config.NumberColumn("Qty", min_value=0, step=1),
             "Foil": st.column_config.CheckboxColumn("Foil"),
             "Location": st.column_config.SelectboxColumn("Location", options=loc_options),
@@ -113,7 +117,7 @@ def render_edit_table(df):
             "Source": st.column_config.TextColumn("Source"),
             "Delete": st.column_config.CheckboxColumn("Delete"),
         },
-        column_order=["Card", "Set", "Qty", "Foil", "Location", "Date", "Price Paid", "Source", "Delete"],
+        column_order=["Card", "Set", "#", "Qty", "Foil", "Location", "Date", "Price Paid", "Source", "Delete"],
         hide_index=True, width="stretch",
         key=editor_key,
     )
@@ -142,9 +146,32 @@ def render_edit_table(df):
         # from one) has already happened and is in the move log; ask whether
         # that deck's list should follow rather than leaving it for Reconcile.
         mark = q.last_move_id(conn)
+        printing_changes, problems = 0, []
+        original = {r["collection_id"]: r for r in rows}
+        for _, row in edited.iterrows():
+            was = original[row["collection_id"]]
+            set_code, number = str(row["Set"] or "").strip(), str(row["#"] or "").strip()
+            if (set_code.lower(), number.lower()) == (str(was["Set"]).lower(), str(was["#"]).lower()):
+                continue
+            if row["Delete"]:
+                continue
+            sid, _new, err = card_resolver.resolve_exact_printing(conn, set_code, number)
+            new_name = conn.execute("SELECT name FROM cards WHERE scryfall_id=?", (sid,)).fetchone() if sid else None
+            if err or not new_name:
+                problems.append(f"{was['Card']}: {err or 'printing not found'}")
+            elif new_name[0] != was["Card"]:
+                problems.append(f"{was['Card']}: {set_code.upper()} {number} is {new_name[0]}, "
+                                f"not the same card — left unchanged.")
+            elif writes.set_lot_printing(conn, int(row["collection_id"]), sid):
+                printing_changes += 1
         changed = writes.bulk_update_collection(conn, updates)
+        message = f"Updated {changed} lot(s)."
+        if printing_changes:
+            message += f" Changed the printing on {printing_changes}."
+        if problems:
+            message += " Not saved — " + "; ".join(problems)
         cv.finish_edit({
-            "message": f"Updated {changed} lot(s).", "collection": True,
+            "message": message, "collection": True,
             "deck_sync": q.deck_sync_offers(conn, mark),
         })
 
@@ -200,7 +227,7 @@ db.refresh_data_button()
 full_df = loaders.load_collection_df(conn)
 coll_summary = loaders.load_collection_summary(conn)
 
-m1, m2, m3, m4 = st.columns(4)
+m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("Collection lots", coll_summary.get("lots") or 0)
 m2.metric("Unique printings", coll_summary.get("unique_printings") or 0)
 _tracked_help = (
@@ -209,6 +236,9 @@ _tracked_help = (
 )
 m3.metric("Tracked quantity", coll_summary.get("tracked_quantity") or 0, help=_tracked_help)
 m4.metric("Tracked value", fmt.format_money(coll_summary.get("tracked_value")), help=_tracked_help)
+m5.metric("Total paid", fmt.format_money(coll_summary.get("total_paid")),
+          help="Price paid × quantity across lots that have a Price Paid recorded; "
+               "lots with none count as nothing.")
 
 # Built lazily: a collapsed st.expander still runs its body, so with
 # on_change="rerun" its .open flag decides whether to build the export.

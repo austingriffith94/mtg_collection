@@ -859,14 +859,24 @@ def deck_cards_dataframe(conn, deck_id):
     """One row per mainboard card, with quantity and any strategy tag(s)
     (comma-joined — schema supports multiple tags per card-in-deck even
     though today's data only populates one). Card art is the printing
-    sleeved in this deck (see _sleeved_art_sql), not just deck_cards'."""
+    deck_cards' own printing — what the user added (e.g. SCD 77) — wins;
+    the printing sleeved in this deck (see _sleeved_art_sql) only fills in
+    when that printing has no art, so the board and previewer never show a
+    different printing than the one on the list."""
+    # Judged on both columns together: a printing with only a remote URI must
+    # not get a different printing's cached file (that would win in
+    # card_image_src).
+    no_art = "COALESCE(c.image_uri, '') = '' AND COALESCE(c.\"local_image_path\", '') = ''"
     columns = CARD_COLUMNS.replace(
         "c.image_uri,",
-        _sleeved_art_sql("image_uri", "dc.deck_id", "c.name", "c.image_uri") + " AS image_uri,",
+        f"CASE WHEN {no_art} THEN "
+        + _sleeved_art_sql("image_uri", "dc.deck_id", "c.name", "c.image_uri")
+        + " ELSE c.image_uri END AS image_uri,",
     ).replace(
         "c.local_image_path,",
-        _sleeved_art_sql("local_image_path", "dc.deck_id", "c.name", "c.local_image_path")
-        + " AS local_image_path,",
+        f"CASE WHEN {no_art} THEN "
+        + _sleeved_art_sql("local_image_path", "dc.deck_id", "c.name", "c.local_image_path")
+        + " ELSE c.local_image_path END AS local_image_path,",
     )
     return pd.read_sql_query(
         f"""SELECT {columns}, dc.quantity,
@@ -3338,7 +3348,9 @@ def collection_summary(conn):
                   COUNT(DISTINCT scryfall_id) AS unique_printings,
                   SUM(quantity) AS tracked_quantity,
                   SUM(quantity * (SELECT current_price_usd FROM cards
-                                   WHERE cards.scryfall_id = collection.scryfall_id)) AS tracked_value
+                                   WHERE cards.scryfall_id = collection.scryfall_id)) AS tracked_value,
+                  -- price_paid is per copy (order import stores the unit price)
+                  SUM(quantity * price_paid) AS total_paid
            FROM collection"""
     ).fetchone()
     return dict(row) if row else {}

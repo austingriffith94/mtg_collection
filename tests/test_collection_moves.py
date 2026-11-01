@@ -439,3 +439,13 @@ def test_an_offer_for_a_deck_deleted_since_is_skipped(conn, world):
     offers = q.deck_sync_offers(conn, mark)
     writes.delete_deck(conn, world["gisa"])
     assert writes.sync_deck_lists(conn, offers) == ([], [])
+
+
+def test_set_lot_printing_repoints_the_lot_without_logging_a_move(conn, add_card):
+    a, b = add_card("Sol Ring", set_code="cmd", collector_number="1"), add_card("Sol Ring", set_code="c21", collector_number="2")
+    lot = writes.add_collection_lot(conn, a, quantity=1, foil=False, location="Box")
+    before = conn.execute("SELECT COUNT(*) FROM collection_moves").fetchone()[0]
+    assert writes.set_lot_printing(conn, lot, b) is True
+    assert writes.set_lot_printing(conn, lot, b) is False
+    assert conn.execute("SELECT scryfall_id FROM collection WHERE collection_id=?", (lot,)).fetchone()[0] == b
+    assert conn.execute("SELECT COUNT(*) FROM collection_moves").fetchone()[0] == before

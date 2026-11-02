@@ -55,7 +55,9 @@ out; the edit is still in History and the move log.
 
 Card Tags (bulk-editing any tag_type across a deck's mainboard) lives
 here too, moved from the earlier standalone Tag Editor page. Deck-level
-tags were removed entirely — use description/tutors instead.
+tags were removed entirely — use description/tutors instead. The tab also
+has the AI tag tools (dashboard_lib/tag_panel.py): a Suggest tags pop-up that
+writes only the rows you tick, and the labels-and-definitions editor.
 
 The old hand-typed "Combos" field (and its text_area here) was removed
 outright — it only ever held a manual guess at what combos existed.
@@ -89,7 +91,7 @@ import pandas as pd
 import streamlit as st
 
 from dashboard_lib import db, loaders, writes, card_resolver, formatting as fmt, queries as q
-from dashboard_lib import card_view as cv, nav, deck_board
+from dashboard_lib import card_view as cv, nav, deck_board, tag_panel
 
 # Under static/ so the cover can be served by URL (UI plan Phase 4).
 DECK_COVER_DIR = os.path.join(fmt.STATIC_DIR, "image_cache", "deck_covers")
@@ -841,6 +843,7 @@ with tab_cardtags:
             if not tag_type:
                 st.info("Enter a tag type name above to start editing.")
             else:
+                tag_panel.render_tag_tools(conn, deck_id, tag_type, existing_types)
                 current_tags = loaders.load_card_tags_by_type(conn, deck_id, tag_type)
                 existing_labels = sorted({label for labels in current_tags.values() for label in labels})
                 if existing_labels:

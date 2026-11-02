@@ -23,7 +23,8 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] **Phase 3** — Backtest against your existing tags, before any UI (done
   2026-11-01: Gemini run on three decks; the Nalia changeling / Mutavault check
   waits for Phase 6, when Nalia gets a vocabulary).
-- [ ] **Phase 4** — Review panel in the Deck Editor, with Apply.
+- [x] **Phase 4** — Review panel in the Deck Editor, with Apply (done 2026-11-01;
+  checked with a scripted model, not yet with a real Gemini call).
 - [ ] **Phase 5** — Show a chosen layer on the deck board and in counts.
 - [ ] **Phase 6** — Two-pass mode: propose a vocabulary for an untagged deck.
 - [ ] **Phase 7** — Docs and wrap-up.
@@ -522,6 +523,44 @@ in the editor for you to change and save. Labels used by one card only get a
 note that the draft rests on a single example. Tests: `writes.apply_tag_proposals`, Apply touching only ticked rows,
 the stale-row skips, no write on Suggest, and an AppTest pass over the panel
 (pages can be executed here, per project notes).
+
+**As built:** the pop-up, its Undo and the vocabulary editor are in
+`dashboard_lib/tag_panel.py`, called from the Card Tags tab. `writes.py` gained
+`apply_tag_proposals` and `undo_tag_proposals`. `tagging.py` gained
+`starts_ticked`, `estimate_tokens` and `draft_definitions`, with
+`skills/tag_definitions.md`. `focus_report` takes `replaced`, so a ticked replace
+row counts as losing its old labels.
+
+Changes from the design above:
+
+- **Replace works on any row, not only conflicts.** The table has one Replace
+  column, and the same choice also trims a `same` row down to the proposal.
+- **The cost note is tokens only.** The app stores no prices, so it shows
+  estimated tokens before a run and actual tokens after. The output estimate
+  is 140 tokens per card, from the backtest.
+- **Retry covers only the unreviewed cards** when a batch failed or the model
+  skipped some, and merges them in, so finished batches are not paid for twice.
+  Ticks on existing rows are kept.
+- **Thin rows hold their labels.** A label whose rows all start unticked counts
+  zero, so it would drop out of the thin report. `Proposals.held` keeps it
+  listed with its tick and drop buttons.
+- **Undo leaves a later edit alone.** A card whose tags changed after Apply, or
+  that left the mainboard, is skipped and named, as Apply does for Suggest.
+- **Applied and skipped rows leave the proposals;** unticked rows stay waiting.
+  Skipped cards show in a toast and beside the Undo button.
+- **Definition drafts have no retry.** A label the model left out is reported and
+  can be drafted again. Drafts fill the empty Definition cells, marked as not
+  saved, and Save definitions stores what is in the table. A definition
+  that matches the built-in default is stored empty, so a later change to the
+  default reaches it.
+
+Checks: 892 tests pass, including `tests/test_tag_panel.py`. A headless Edge run
+on a database copy with a scripted model used deck 2: ticks went 56, 57, 58, 59,
+then 58 on an untick, with none lost, and survived Close and reopen. Apply added
+58 tags, taking the copy from 30 to 88 `function` tags on that deck, and tagged
+cards kept their primary. The dialog has no close X. The live database was not
+touched. No real Gemini call has run through the panel, and definition drafts
+have only run against the fake provider.
 
 ### Phase 5 — Layer on the board
 

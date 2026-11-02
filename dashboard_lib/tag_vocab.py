@@ -11,6 +11,8 @@ Pure data with no database or Streamlit use, so anything can import it.
 
 FUNCTION_LAYER = "function"
 STRATEGY_LAYER = "strategy"
+# The vocabulary editor warns past this many labels for a deck and layer.
+MAX_ACTIVE_LABELS = 10
 
 FUNCTION_MENU = {
     "Card Adv": "Draws extra cards or otherwise gives repeatable access to more cards than it costs.",

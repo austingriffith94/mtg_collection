@@ -10,6 +10,8 @@ plus pytest (`pip install -r requirements-dev.txt`):
 
 - `conftest.py` — `conn` (fresh empty DB) and `add_card` (insert a minimal
   card row) fixtures.
+- `test_tag_panel.py` — the tag review panel: Apply and Undo, which rows start
+  ticked, definition drafts, and the pop-up through the real Deck Editor page.
 - `test_collection_writes.py` — add / bulk-update / delete / prune of
   collection lots (the code behind the Collection page's Edit mode).
 - `test_deck_changes.py` — the `deck_changes` table's creation on an older

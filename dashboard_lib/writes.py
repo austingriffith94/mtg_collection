@@ -443,6 +443,12 @@ def set_card_tags(conn, deck_id, scryfall_id, tag_type, labels):
     """Replace ALL of one card's tags of `tag_type` (within this deck)
     with exactly `labels` (list of strings; pass [] to clear), keeping their
     order: the first is the primary tag."""
+    _write_card_tags(conn, deck_id, scryfall_id, tag_type, labels)
+    conn.commit()
+
+
+def _write_card_tags(conn, deck_id, scryfall_id, tag_type, labels):
+    """set_card_tags() without the commit, for a caller's own transaction."""
     conn.execute(
         """DELETE FROM card_tags
            WHERE deck_id=? AND scryfall_id=? AND tag_id IN (
@@ -456,7 +462,6 @@ def set_card_tags(conn, deck_id, scryfall_id, tag_type, labels):
             "INSERT OR IGNORE INTO card_tags (deck_id, scryfall_id, tag_id, position) VALUES (?,?,?,?)",
             (deck_id, scryfall_id, tag_id, position),
         )
-    conn.commit()
 
 
 def bulk_set_card_tags(conn, deck_id, tag_type, labels_by_scryfall_id):
@@ -470,6 +475,67 @@ def bulk_set_card_tags(conn, deck_id, tag_type, labels_by_scryfall_id):
             set_card_tags(conn, deck_id, scryfall_id, tag_type, labels)
             changed += 1
     return changed
+
+
+def apply_tag_proposals(conn, deck_id, tag_type, rows):
+    """Write accepted tag proposals in one transaction: the only code that puts
+    a model's tags in the database, and only the review panel's Apply calls it.
+    Each of `rows` is {"card", "tags" (primary first), "replace", "seen"}, where
+    `seen` is {scryfall_id: [labels]} as of the Suggest.
+
+    A row is additive, so a tagged card keeps its primary and the new labels go
+    after it, unless `replace` makes the proposal the card's whole tag list. A
+    proposal can outlive what it was made from, so a card off the mainboard, or
+    one whose tags in this layer changed since `seen`, is skipped and listed. A
+    replace takes a backup first.
+
+    Returns {"tags_added", "cards", "replaced", "skipped": [(card, why)],
+    "changes": [{"card", "scryfall_id", "before", "after"}], "backup_path"}.
+    `changes` is what undo_tag_proposals() takes."""
+    on_list = {r[0] for r in conn.execute("SELECT scryfall_id FROM deck_cards WHERE deck_id=?", (deck_id,))}
+    current = get_card_tags_by_type(conn, deck_id, tag_type)
+    changes, skipped, replaced = [], [], set()
+    for row in rows:
+        ids = [sid for sid in row["seen"] if sid in on_list]
+        if not ids:
+            skipped.append((row["card"], "no longer on the mainboard"))
+            continue
+        if any(not same_tags(current.get(sid, []), row["seen"][sid]) for sid in ids):
+            skipped.append((row["card"], "its tags changed since Suggest"))
+            continue
+        for sid in ids:
+            before = current.get(sid, [])
+            after = _clean_tag_labels(row["tags"] if row.get("replace") else before + list(row["tags"]))
+            if not same_tags(before, after):
+                changes.append({"card": row["card"], "scryfall_id": sid, "before": before, "after": after})
+                if row.get("replace"):
+                    replaced.add(row["card"])
+
+    backup_path = backup.snapshot(conn, "before", "replace-tags") if replaced else None
+    with conn:
+        for c in changes:
+            _write_card_tags(conn, deck_id, c["scryfall_id"], tag_type, c["after"])
+
+    added = {(c["card"], label.lower()) for c in changes for label in c["after"]
+             if label.lower() not in {old.lower() for old in c["before"]}}
+    return {"tags_added": len(added), "cards": len({c["card"] for c in changes}), "replaced": len(replaced),
+            "skipped": skipped, "changes": changes, "backup_path": backup_path}
+
+
+def undo_tag_proposals(conn, deck_id, tag_type, changes):
+    """Put back the tags apply_tag_proposals() changed, in one transaction. A
+    card edited since then, or off the mainboard, is left alone, so an Undo
+    can't wipe out a later edit. Returns (cards restored, [cards left alone])."""
+    on_list = {r[0] for r in conn.execute("SELECT scryfall_id FROM deck_cards WHERE deck_id=?", (deck_id,))}
+    current = get_card_tags_by_type(conn, deck_id, tag_type)
+    restore, left = [], []
+    for c in changes:
+        moved_on = c["scryfall_id"] not in on_list or not same_tags(current.get(c["scryfall_id"], []), c["after"])
+        (left if moved_on else restore).append(c)
+    with conn:
+        for c in restore:
+            _write_card_tags(conn, deck_id, c["scryfall_id"], tag_type, c["before"])
+    return len({c["card"] for c in restore}), sorted({c["card"] for c in left})
 
 
 # ------------------------------------------------------------------

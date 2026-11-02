@@ -81,6 +81,23 @@ def tag_schema(ctx):
     }
 
 
+def definition_schema(labels):
+    """JSON schema for drafted label definitions: one line per label in `labels`."""
+    row = {
+        "type": "OBJECT",
+        "properties": {
+            "label": _s(enum=list(labels)),
+            "definition": _s(description="One line saying what a card must do to carry this label."),
+        },
+        "required": ["label", "definition"],
+    }
+    return {
+        "type": "OBJECT",
+        "properties": {"definitions": {"type": "ARRAY", "items": row}},
+        "required": ["definitions"],
+    }
+
+
 def chat_answer_schema():
     """JSON schema for restating a finished chat turn (chat.RESTATE_PROMPT)
     so its card mentions can be checked. No enum on `card`: chat is

@@ -25,6 +25,7 @@ are checked per card, and a card sent but not returned is listed as missing.
 The quote may come from the type line too, since a creature type is often
 only there. A rejected tag is left off the row, which is otherwise kept and
 marked unverified. Roles are not checked: the regexes miss too many real tags.
+`check_definitions` keeps the usable lines of a drafted-definitions answer.
 
 `check_chat_answer` is the chat-mode (Phase 3) counterpart: no cut/add
 structure, no pre-filtered pool — name, quote and roles are all checked
@@ -314,6 +315,23 @@ def check_tags(parsed, ctx):
     rows = [_check_tag_row(raw, pool, seen, labels)
             for raw in parsed.get("cards") or [] if isinstance(raw, dict)]
     return CheckedTags(rows, [c.name for c in ctx.cards if front_face(c.name) not in seen])
+
+
+def check_definitions(parsed, labels):
+    """({label: definition}, [labels with no usable answer]) from a drafted
+    definitions answer. Only labels that were asked about count, a blank is no
+    answer, and each definition is folded to one line. Never raises."""
+    parsed = parsed if isinstance(parsed, dict) else {}
+    asked = {label.casefold(): label for label in labels}
+    drafts = {}
+    for row in parsed.get("definitions") or []:
+        if not isinstance(row, dict):
+            continue
+        label = asked.get(str(row.get("label") or "").strip().casefold())
+        text = re.sub(r"\s+", " ", str(row.get("definition") or "")).strip()
+        if label and text:
+            drafts[label] = text
+    return drafts, [label for label in labels if label not in drafts]
 
 
 def tag_retry_prompt(checked):

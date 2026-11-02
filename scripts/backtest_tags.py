@@ -59,9 +59,11 @@ def estimate(ctx, examples):
 
 
 def score(ctx, result, held):
-    """Compare the model's rows to the user's tags. Returns (stats, disagreements)."""
-    stats = dict(scored=0, exact=0, any=0, primary=0, extras=0, unverified=0, thin_or_broad=0)
+    """Compare the model's rows to the user's tags. Returns (stats, disagreements,
+    extras), where extras are the model's tags on cards the user left untagged."""
+    stats = dict(scored=0, exact=0, any=0, primary=0, extras=0, unverified=0, untagged=0)
     disagreements = []
+    extras = []
     for row in result.checked.rows:
         if row.card is None:
             continue
@@ -72,7 +74,10 @@ def score(ctx, result, held):
         if name in held:
             continue
         if not key:
-            stats["extras"] += bool(row.tags)
+            stats["untagged"] += 1
+            if row.tags:
+                stats["extras"] += 1
+                extras.append((name, row.tags, row.data.get("reason", "")))
             continue
         stats["scored"] += 1
         mine, theirs = {t.casefold() for t in row.tags}, {t.casefold() for t in key}
@@ -81,7 +86,7 @@ def score(ctx, result, held):
         stats["primary"] += bool(row.primary) and row.primary.casefold() == key[0].casefold()
         if mine != theirs:
             disagreements.append((name, key, row.tags, row.data.get("reason", "")))
-    return stats, disagreements
+    return stats, disagreements, extras
 
 
 def pct(n, total):
@@ -89,7 +94,7 @@ def pct(n, total):
 
 
 def report(ctx, result, held, cards_of_interest):
-    stats, disagreements = score(ctx, result, held)
+    stats, disagreements, extras = score(ctx, result, held)
     n = stats["scored"]
     print(f"\n=== {ctx.meta.get('name')} ({ctx.tag_type}) ===")
     print(f"Labels: {', '.join(ctx.labels())}")
@@ -99,7 +104,7 @@ def report(ctx, result, held, cards_of_interest):
     print(f"  exact match:   {pct(stats['exact'], n)}")
     print(f"  any match:     {pct(stats['any'], n)}")
     print(f"  primary match: {pct(stats['primary'], n)}")
-    print(f"  extras (model tagged a card you left untagged): {stats['extras']}")
+    print(f"  extras (model tagged a card you left untagged): {pct(stats['extras'], stats['untagged'])}")
     print(f"  unverified rows: {stats['unverified']}; not returned: {len(result.checked.missing)}")
     f = result.focus
     if f:
@@ -109,6 +114,10 @@ def report(ctx, result, held, cards_of_interest):
         print(f"\nDisagreements ({len(disagreements)}): card | yours -> model's | reason")
         for name, key, mine, reason in sorted(disagreements):
             print(f"  {name} | {', '.join(key)} -> {', '.join(mine) or 'none'} | {reason}")
+    if extras:
+        print(f"\nExtras ({len(extras)}): card | model's | reason")
+        for name, mine, reason in sorted(extras):
+            print(f"  {name} | {', '.join(mine)} | {reason}")
     for row in result.checked.rows:
         if row.card and any(w.casefold() in row.card.name.casefold() for w in cards_of_interest):
             print(f"\n[{row.card.name}] yours: {ctx.current.get(row.card.name, [])} "

@@ -21,7 +21,8 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] **Phase 2** — Proposal engine: prompt, schema, guard, no database writes
   (done 2026-11-01; offline only, no real model call yet).
 - [~] **Phase 3** — Backtest against your existing tags, before any UI (script built
-  2026-11-01; the real run is still to do).
+  2026-11-01, Gemini run on three decks; waiting on the decision to build the UI,
+  and the Nalia check is not done).
 - [ ] **Phase 4** — Review panel in the Deck Editor, with Apply.
 - [ ] **Phase 5** — Show a chosen layer on the deck board and in counts.
 - [ ] **Phase 6** — Two-pass mode: propose a vocabulary for an untagged deck.
@@ -458,8 +459,38 @@ scored. It prints the token estimate (about 5,700–6,100 input for decks 12, 2 
 tagged, non-held-out cards; cards you left untagged are counted as extras, not
 scored. It also prints tags per card, thin and broad labels, unverified rows, and
 every disagreement with the model's reason. `--card NAME` prints one card's full
-row. Checked offline with a scripted provider; no real call has been made yet.
-Run: `python scripts/backtest_tags.py --deck 12 --deck 2 --deck 9`.
+row. Run: `python scripts/backtest_tags.py --deck 12 --deck 2 --deck 9`.
+
+**Results, 2026-11-01** (gemini-3.5-flash, second run; a card counts once per deck):
+
+| Deck | Scored | Exact | Any | Primary | Extras |
+| --- | --- | --- | --- | --- | --- |
+| Marchesa (2) | 22 | 17 | 20 | 20 | 12 of 56 |
+| Grizzly (12) | 35 | 29 | 34 | 34 | 7 of 36 |
+| Vaevictis (9) | 34 | 31 | 34 | 33 | 11 of 44 |
+| Total | 91 | 77 (85%) | 88 (97%) | 87 (96%) | 30 of 136 (22%) |
+
+- The first run gave Grizzly 32 exact and Vaevictis 30, so a deck's exact score
+  moves a few cards between runs. Any and primary barely moved.
+- 11 of the 14 disagreements are the model adding a second tag to your label.
+  Your cards mostly carry one tag, so exact match counts these against it. The
+  other 3 are Do or Die, Thaumatic Compass and Homeward Path.
+- Extras are the tag rows Phase 4 would most often add. Many look like real gaps
+  (Anguished Unmaking, Tireless Tracker, the monarch Courts); a few are a stretch
+  (Noble Heritage as Protection, Gisa as Interaction).
+- The model broke the "Removal or Interaction, never both" rule once, on
+  Manglehorn in the first run. The guard doesn't check this.
+- Actual use: about 5,300 tokens in and 10,000-13,000 out per deck, near the
+  16,000 limit. A retry took Vaevictis to about 16,900 in. Gemini's output count
+  may include hidden thinking. No rows were unverified after the guard, and none
+  went missing.
+- One of six requests failed with a 503 after the provider's own retries, so the
+  panel has to show that error cleanly.
+
+Limits: the score is agreement with your tags, and Removal / Interaction were
+re-sorted by these same definitions in Phase 0, so those two labels are partly
+measured against themselves. Nalia's changelings and Mutavault remain unchecked,
+and `strategy` was not tested.
 
 ### Phase 4 — Review panel
 

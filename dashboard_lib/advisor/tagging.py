@@ -7,10 +7,12 @@ once, and return whatever still fails marked unverified. The retry asks only
 for the cards with a problem and its rows are merged over the first answer, so
 it costs far less than a second full answer and can't lose good rows.
 
-Nothing here writes to the database. A result is a proposal: each row is
+Large decks go out in batches of BATCH_SIZE cards. Nothing here writes to the database. A result is a proposal: each row is
 classified against the card's current tags (`classify`), and `focus_report`
 says which labels would end up thin or broad. Applying rows is the page's job.
 """
+import dataclasses
+import logging
 import os
 from collections import Counter
 from dataclasses import dataclass
@@ -21,7 +23,12 @@ from .context import TagContext, front_face
 from .providers import ProviderError
 from .schemas import tag_schema
 
+logger = logging.getLogger(__name__)
+
 SKILL_FILE = "tag_suggester.md"
+# Cards per request. A whole deck's answer came to 10,000-13,000 tokens against a
+# 16,000 limit in the backtest, and a cut-off answer fails to parse.
+BATCH_SIZE = 50
 # One row per card, each with a quote and a reason, so a full deck's answer is
 # several times the usual length and takes minutes to come back.
 MAX_OUTPUT_TOKENS = 16000
@@ -144,50 +151,92 @@ def _merge_retry(first, second, keys):
     return {"cards": kept + list(redone.values())}
 
 
+def _batches(cards, size=None):
+    """`cards` in the fewest even chunks of at most `size` (BATCH_SIZE)."""
+    size = size or BATCH_SIZE
+    n = -(-len(cards) // size)
+    step = -(-len(cards) // n)
+    return [cards[i:i + step] for i in range(0, len(cards), step)]
+
+
 def run_tag_proposals(provider, ctx: TagContext, hide_current=False, examples=None):
-    """Ask for tags for every card in `ctx`. Returns a TagResult; on a provider
-    failure `error` is set and nothing else is usable."""
+    """Ask for tags for every card in `ctx`, BATCH_SIZE cards per request so a
+    full answer stays inside the output limit. Returns a TagResult. If a batch
+    fails, `error` says which and why, `checked` holds the batches that
+    finished (None if none did), and the failed batch's cards read as missing."""
     if not ctx.cards:
         return TagResult(None, None, False, 0, 0, "This deck has no cards to tag.")
     if not ctx.vocabulary:
         return TagResult(None, None, False, 0, 0, f"No labels with definitions in the '{ctx.tag_type}' layer.")
     with open(os.path.join(SKILLS_DIR, SKILL_FILE), encoding="utf-8") as f:
         system = f.read()
-    schema = tag_schema(ctx)
-    messages = [{"role": "user", "content": build_prompt(ctx, hide_current, examples)}]
-    tokens_in = tokens_out = 0
+    if examples is None:
+        examples = {} if hide_current else pick_examples(ctx)   # from the whole deck, not one batch
+    tokens = [0, 0]
+    batches = _batches(ctx.cards)
+    rows, missing, retried, error = [], [], False, ""
+    done = 0
+
+    for number, cards in enumerate(batches, 1):
+        part = dataclasses.replace(ctx, cards=cards)
+        where = f"batch {number} of {len(batches)}" if len(batches) > 1 else "the request"
+        checked, was_retried, why = _run_batch(provider, part, system, hide_current, examples, tokens)
+        if checked is None:
+            logger.warning("Tag proposals for deck %s (%s): %s failed: %s", ctx.deck_id, ctx.tag_type, where, why)
+            error = (f"The model call for {where} ({len(cards)} cards: {cards[0].name} to {cards[-1].name}) "
+                     f"failed: {why}")
+            if done:
+                error += f" {done} of {len(batches)} batches finished and are kept; the rest were not reviewed."
+            missing += [c.name for b in batches[number - 1:] for c in b]
+            break
+        done += 1
+        retried |= was_retried
+        rows += checked.rows
+        missing += checked.missing
+        logger.info("Tag proposals for deck %s (%s): %s done, %d violations%s", ctx.deck_id, ctx.tag_type,
+                    where, len(checked.violations), ", retried" if was_retried else "")
+    if not done:
+        return TagResult(None, None, False, tokens[0], tokens[1], error)
+
+    checked = guard.CheckedTags(rows, missing)
+    for r in rows:
+        r.status = classify(r.tags, ctx.current.get(r.card.name, []) if r.card else [])
+    focus = focus_report(ctx, [r for r in rows if r.verified and r.status == "new"])
+    return TagResult(checked, focus, retried, tokens[0], tokens[1], error)
+
+
+def _run_batch(provider, part, system, hide_current, examples, tokens):
+    """One request plus its one retry, for the cards in `part`. Returns
+    (CheckedTags, retried, "") or (None, False, why) when the model call or its
+    JSON failed. `tokens` is [in, out] and is added to in place."""
+    schema = tag_schema(part)
+    messages = [{"role": "user", "content": build_prompt(part, hide_current, examples)}]
 
     def ask():
-        nonlocal tokens_in, tokens_out
         resp = provider.chat(messages, system=system, schema=schema,
                              max_tokens=MAX_OUTPUT_TOKENS, timeout=TIMEOUT_SECONDS)
-        tokens_in += resp.input_tokens
-        tokens_out += resp.output_tokens
+        tokens[0] += resp.input_tokens
+        tokens[1] += resp.output_tokens
         return resp
-
-    def result(checked, retried):
-        for r in checked.rows:
-            r.status = classify(r.tags, ctx.current.get(r.card.name, []) if r.card else [])
-        focus = focus_report(ctx, [r for r in checked.rows if r.verified and r.status == "new"])
-        return TagResult(checked, focus, retried, tokens_in, tokens_out)
 
     try:
         resp = ask()
     except ProviderError as e:
-        return TagResult(None, None, False, tokens_in, tokens_out, str(e))
+        return None, False, str(e)
     if not isinstance(resp.parsed, dict):
-        return TagResult(None, None, False, tokens_in, tokens_out, "The model did not return valid JSON.")
-    checked = guard.check_tags(resp.parsed, ctx)
+        return None, False, "the model did not return valid JSON (the answer may have been cut off)."
+    checked = guard.check_tags(resp.parsed, part)
     if not checked.violations and not checked.missing:
-        return result(checked, False)
+        return checked, False, ""
 
     # One retry that names each problem; keep the first answer if it fails.
     messages += [{"role": "assistant", "content": resp.text},
                  {"role": "user", "content": guard.tag_retry_prompt(checked)}]
     try:
         retry = ask()
-    except ProviderError:
-        return result(checked, True)
+    except ProviderError as e:
+        logger.warning("Tag retry failed, keeping the first answer: %s", e)
+        return checked, True, ""
     if retry.parsed is None:
-        return result(checked, True)
-    return result(guard.check_tags(_merge_retry(resp.parsed, retry.parsed, checked.retry_keys()), ctx), True)
+        return checked, True, ""
+    return guard.check_tags(_merge_retry(resp.parsed, retry.parsed, checked.retry_keys()), part), True, ""

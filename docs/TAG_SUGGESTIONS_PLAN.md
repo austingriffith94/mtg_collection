@@ -71,7 +71,7 @@ Agreed 2026-11-01:
 - **Tags stay focused.** A deck's active vocabulary in a layer is capped (about
   10 labels), a tag should cover enough cards to be worth having (at least 3),
   and the model is told to tag a card only where it clearly does the thing and
-  to prefer one or two tags over three. The review panel reports tags that would
+  to prefer one tag, and two at most. The review panel reports tags that would
   stay thin or grow too broad before you apply anything. See "Keeping tags
   focused" below.
 - **Gemini is the default model for suggestions,** the cheaper option. Claude
@@ -87,7 +87,7 @@ Agreed 2026-11-01:
   secondary cards as "(+X)". Any tag count counts both. See "Primary and
   secondary tags" below.
 
-Proposed here (not yet agreed):
+Agreed after the backtest (2026-11-01):
 
 - **`strategy` stays as it is.** Existing data and the deck board depend on it
   (Nalia's creature-type tags live there). The new layer is called `function`
@@ -95,11 +95,23 @@ Proposed here (not yet agreed):
 - **Additive Apply by default.** Accepting a proposal adds labels to the card
   and keeps the ones it has. Removing or swapping a label is a separate
   per-row choice, shown as such.
-- **At most 3 tags per card per layer.** A card with nothing fitting gets no
-  tag.
+- **At most 2 tags per card per layer** (was 3; the backtest showed the second
+  tag is usually noise). A card with nothing fitting gets no tag.
 - **The Advisor package stays read-only.** `dashboard_lib/advisor/` returns
   proposals; the page calls `writes.*` after you click. This keeps the claim in
   `advisor/README.md` ("nothing here writes to the database") true.
+- **Rows that only add a secondary tag start unticked** in the review panel, as
+  do unverified, `conflict` and thin-label rows. Only a verified row that gives
+  a card its first tag, or a new primary, starts ticked.
+- **Removal and Interaction are exclusive in the guard.** A row with both is a
+  violation, the primary is kept, and the other is dropped. The pairs are
+  `EXCLUSIVE_LABELS` in `context.py`.
+- **Large decks go out in batches of 50 cards** (even split), each with its own
+  retry. A batch that fails keeps the finished ones.
+- **Errors are specific and logged.** Phase 4 shows the failure as a retryable
+  message, with the batch, the cards it covered and the provider's reason, and
+  keeps any proposals already on screen. `tagging` logs each failed batch and
+  retry at WARNING.
 
 ## What the database holds today
 
@@ -164,10 +176,10 @@ One request per deck and layer, modelled on `analysis.run_analysis`:
    line, mana cost, oracle text, and its current tags in this layer. A few of
    the deck's already-tagged cards act as examples of how you use each label.
 2. **Schema:** card names are an enum of the deck's mainboard; tags are an
-   enum of the layer's vocabulary; `tags` has `maxItems` 3. Per card:
+   enum of the layer's vocabulary; `tags` has `maxItems` 2. Per card:
    `tags`, `primary`, `evidence_quote`, `reason` (one sentence).
 3. **Guard** (`guard.py`, same violation-list shape as `check_analysis`):
-   - card is a mainboard card; tag is in the vocabulary; at most 3 tags; the
+   - card is a mainboard card; tag is in the vocabulary; at most 2 tags, and not both Removal and Interaction; the
      `primary` is one of the card's own tags (and absent when `tags` is empty);
    - every card sent came back, so a skipped card reads as "not reviewed" and
      not as "no tag fits" (an empty `tags` list is the model's way to say that);
@@ -234,7 +246,7 @@ points to adjust after the backtest):
   The same report marks a label that would cover over about 40% of the deck as
   **broad**, since a tag on nearly everything says nothing.
 - **Prompt rules.** Tag a card only when the label is a main thing it does, not a
-  side effect. Prefer one or two tags. Return an empty list rather than the
+  side effect. Prefer one tag, two at most. Return an empty list rather than the
   nearest label. The guard can't judge this, so the backtest measures it: it
   reports tags per card and thin or broad labels next to accuracy.
 
@@ -452,6 +464,11 @@ for a go-ahead before the first call. Gemini is the model under test. If a
 Claude key is ever added, rerunning the same script on it is the way to find out
 whether the quality differs enough to matter.
 
+**Engine changes after the backtest** (committed before Phase 4): max 2 tags,
+the exclusive-pair guard, batching of 50 cards, and per-batch error text with
+logging. Partial results: `TagResult.error` can be set while `checked` still
+holds the finished batches, and the failed batch's cards are in `missing`.
+
 **As built:** `scripts/backtest_tags.py`. Hold-out is the first two tagged cards
 by name for each label (by primary), used as the prompt's examples and not
 scored. It prints the token estimate (about 5,700–6,100 input for decks 12, 2 and
@@ -493,6 +510,9 @@ measured against themselves. Nalia's changelings and Mutavault remain unchecked,
 and `strategy` was not tested.
 
 ### Phase 4 — Review panel
+
+**Decisions already made for it:** secondary-only rows start unticked and a failed
+request shows a specific, retryable error (see Decisions).
 
 The panel above, with Apply and Undo, plus the vocabulary editor in the Card
 Tags tab. The panel gets a second kind of proposal, **definitions**: a "Draft
@@ -562,7 +582,7 @@ bias), and hand-written narrow skills.
 - **Plan-based labels (Fodder, Target, Politics)** depend on the deck's plan,
   which the model only sees as the one-line description. Definitions and
   examples carry most of the weight here.
-- **Output size is the tight limit, not input.** Estimate for a 90-card deck:
+- **Output size is the tight limit, not input** (answered by batching, above). Estimate for a 90-card deck:
   5–8k tokens out, since every card returns tags, a quote and a reason. Input is
   larger still once definitions and the schema are counted. The first real run
   should record actual numbers. If one request proves too big, split the deck

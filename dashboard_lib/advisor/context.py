@@ -45,7 +45,10 @@ LOW_COMBO_BRACKETS = (1, 2)
 GAME_CHANGER_LIMITS = {1: 0, 2: 0, 3: 3}
 
 # Most tags the model may give a card in one layer.
-MAX_TAGS_PER_CARD = 3
+MAX_TAGS_PER_CARD = 2
+
+# Label pairs a card may not carry together (the definitions say "never both").
+EXCLUSIVE_LABELS = [("Removal", "Interaction")]
 
 # Weight of a commander's / the deck notes' words in deck_profile, relative
 # to one card in the deck: they state the plan, so one mention counts as

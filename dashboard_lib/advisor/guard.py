@@ -36,7 +36,7 @@ our miss, not the model's.
 import re
 from dataclasses import dataclass, field
 
-from .context import GAME_CHANGER_LIMITS, MAX_TAGS_PER_CARD, front_face, lookup_card_text, mechanical_roles
+from .context import EXCLUSIVE_LABELS, GAME_CHANGER_LIMITS, MAX_TAGS_PER_CARD, front_face, lookup_card_text, mechanical_roles
 
 
 def _norm(text):
@@ -266,6 +266,14 @@ def _check_tag_labels(row, labels):
         row.tags.sort(key=lambda t: t != row.primary)
     elif claimed and not raw:
         row.violations.append(f"primary '{claimed}' given with no tags")
+    for pair in EXCLUSIVE_LABELS:
+        both = [t for t in row.tags if t.casefold() in {p.casefold() for p in pair}]
+        if len(both) == len(pair):
+            # Keep the primary; the other label of the pair is the one dropped.
+            drop = next(t for t in both if t != row.primary)
+            row.violations.append(f"{' and '.join(pair)} are exclusive: a card is one or the other, "
+                                  f"so '{drop}' was dropped")
+            row.tags.remove(drop)
     if len(row.tags) > MAX_TAGS_PER_CARD:
         row.violations.append(f"{len(row.tags)} tags (at most {MAX_TAGS_PER_CARD})")
         del row.tags[MAX_TAGS_PER_CARD:]

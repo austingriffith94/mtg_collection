@@ -128,7 +128,7 @@ def test_schema_is_enum_constrained(ctx):
 def test_schema_survives_translation_for_claude(ctx):
     out = providers._gemini_schema_to_json_schema(tag_schema(ctx))
     tags = out["properties"]["cards"]["items"]["properties"]["tags"]
-    assert tags["type"] == "array" and tags["maxItems"] == 3 and tags["items"]["type"] == "string"
+    assert tags["type"] == "array" and tags["maxItems"] == MAX_TAGS_PER_CARD and tags["items"]["type"] == "string"
 
 
 # ---- guard --------------------------------------------------------------------
@@ -159,7 +159,15 @@ def test_too_many_tags_is_a_violation_and_keeps_the_primary(ctx):
     ctx.vocabulary += [{"label": x, "definition": "d"} for x in ("A", "B")]
     raw = _row("Sol Ring", ["Ramp", "Removal", "A", "B"], primary="B")
     row = guard.check_tags(_full(sol=raw), ctx).rows[1]
-    assert row.tags == ["B", "Ramp", "Removal"] and "at most 3" in row.violations[0]
+    assert row.tags == ["B", "Ramp"] and "at most 2" in row.violations[0]
+
+
+def test_removal_and_interaction_are_exclusive_and_the_primary_wins(ctx):
+    ctx.vocabulary.append({"label": "Interaction", "definition": "d"})
+    raw = _row("Lightning Bolt", ["Removal", "Interaction"], primary="Interaction", quote="deals 3 damage")
+    row = guard.check_tags(_full(bolt=raw), ctx).rows[2]
+    assert row.tags == ["Interaction"] and "exclusive" in row.violations[0] and not row.verified
+    assert row.primary == "Interaction"
 
 
 @pytest.mark.parametrize("raw,message", [
@@ -274,7 +282,7 @@ def test_run_asks_for_room_for_a_whole_deck(ctx):
     assert p.calls[0]["max_tokens"] == tagging.MAX_OUTPUT_TOKENS
     assert p.calls[0]["timeout"] == tagging.TIMEOUT_SECONDS
     assert p.calls[0]["schema"]["properties"]["cards"]
-    assert "Prefer one or two tags" in p.calls[0]["system"]
+    assert "never both" in p.calls[0]["system"]
 
 
 def test_retry_names_problems_and_merges_only_the_flagged_cards(ctx):
@@ -355,3 +363,39 @@ def test_anthropic_output_limit_and_timeout_can_be_set_per_call():
     p.chat([{"role": "user", "content": "hi"}])
     p.chat([{"role": "user", "content": "hi"}], max_tokens=16000, timeout=300)
     assert seen == [(4096, 120), (16000, 300)]
+
+
+# ---- batching and failures ------------------------------------------------------
+
+def test_batches_are_even_and_cover_every_card():
+    cards = list(range(101))
+    parts = tagging._batches(cards, 50)
+    assert [len(p) for p in parts] == [34, 34, 33] and sum(parts, []) == cards
+    assert tagging._batches(cards[:50], 50) == [cards[:50]]
+
+
+def test_a_big_deck_goes_out_in_batches_and_comes_back_as_one_result(ctx, monkeypatch):
+    monkeypatch.setattr(tagging, "BATCH_SIZE", 3)
+    names = ctx.card_names()
+    p = FakeProvider([{"cards": [_empty(n) for n in names[:3]]}, {"cards": [_empty(n) for n in names[3:]]}])
+    res = tagging.run_tag_proposals(p, ctx)
+    assert len(p.calls) == 2 and not res.error and not res.checked.missing and not res.retried
+    assert len(res.checked.rows) == 5 and res.input_tokens == 200
+    # Each request's schema only offers its own batch's cards.
+    enum = lambda call: call["schema"]["properties"]["cards"]["items"]["properties"]["card"]["enum"]
+    assert enum(p.calls[0]) == names[:3] and enum(p.calls[1]) == names[3:]
+
+
+def test_a_failed_batch_keeps_the_finished_ones_and_says_what_failed(ctx, monkeypatch, caplog):
+    monkeypatch.setattr(tagging, "BATCH_SIZE", 3)
+    names = ctx.card_names()
+    with caplog.at_level("WARNING"):
+        res = tagging.run_tag_proposals(FakeProvider([{"cards": [_empty(n) for n in names[:3]]}]), ctx)
+    assert "batch 2 of 2" in res.error and names[3] in res.error and "1 of 2 batches finished" in res.error
+    assert len(res.checked.rows) == 3 and res.checked.missing == names[3:]
+    assert "batch 2 of 2" in caplog.text
+
+
+def test_a_first_batch_failure_returns_the_error_alone(ctx):
+    res = tagging.run_tag_proposals(FakeProvider([]), ctx)
+    assert res.checked is None and "the request" in res.error and "no more scripted" in res.error

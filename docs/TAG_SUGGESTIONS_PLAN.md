@@ -20,7 +20,8 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
   copied to the live database).
 - [x] **Phase 2** — Proposal engine: prompt, schema, guard, no database writes
   (done 2026-11-01; offline only, no real model call yet).
-- [ ] **Phase 3** — Backtest against your existing tags, before any UI.
+- [~] **Phase 3** — Backtest against your existing tags, before any UI (script built
+  2026-11-01; the real run is still to do).
 - [ ] **Phase 4** — Review panel in the Deck Editor, with Apply.
 - [ ] **Phase 5** — Show a chosen layer on the deck board and in counts.
 - [ ] **Phase 6** — Two-pass mode: propose a vocabulary for an untagged deck.
@@ -449,6 +450,16 @@ honest test. Each run spends money, so the script prints a token estimate and wa
 for a go-ahead before the first call. Gemini is the model under test. If a
 Claude key is ever added, rerunning the same script on it is the way to find out
 whether the quality differs enough to matter.
+
+**As built:** `scripts/backtest_tags.py`. Hold-out is the first two tagged cards
+by name for each label (by primary), used as the prompt's examples and not
+scored. It prints the token estimate (about 5,700–6,100 input for decks 12, 2 and
+9) and asks before spending. Scores are exact, any-match and primary-match over
+tagged, non-held-out cards; cards you left untagged are counted as extras, not
+scored. It also prints tags per card, thin and broad labels, unverified rows, and
+every disagreement with the model's reason. `--card NAME` prints one card's full
+row. Checked offline with a scripted provider; no real call has been made yet.
+Run: `python scripts/backtest_tags.py --deck 12 --deck 2 --deck 9`.
 
 ### Phase 4 — Review panel
 

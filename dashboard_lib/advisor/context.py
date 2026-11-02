@@ -10,6 +10,9 @@ Roles ("ramp", "draw", "removal", ...) come from conservative oracle-text
 heuristics in `mechanical_roles`. They are a cross-check, not ground truth:
 guard.py flags a model claim that disagrees with them, and the UI says so.
 
+`build_tag_context` is the lighter counterpart for tag proposals: the deck's
+cards, one layer's vocabulary and current tags, and no candidate pool.
+
 The deck's own notes (win conditions, strengths, weaknesses, themes) and its
 cached Commander Spellbook combos are loaded here too. They steer which
 candidates are offered (`candidate_pool`) and feed guard.py's warnings.
@@ -40,6 +43,9 @@ LOW_COMBO_BRACKETS = (1, 2)
 
 # Most Game Changers a deck of this bracket should run. No entry = no limit.
 GAME_CHANGER_LIMITS = {1: 0, 2: 0, 3: 3}
+
+# Most tags the model may give a card in one layer.
+MAX_TAGS_PER_CARD = 3
 
 # Weight of a commander's / the deck notes' words in deck_profile, relative
 # to one card in the deck: they state the plan, so one mention counts as
@@ -134,6 +140,8 @@ class CardFact:
     # Candidates only: the 'almost' combos (context dicts) this card finishes.
     completes_combos: list = field(default_factory=list)
     fit: float = 0.0              # Candidates only: deck_profile score
+    is_basic: bool = False
+    scryfall_ids: list = field(default_factory=list)   # the printings behind this entry
 
 
 @dataclass
@@ -160,6 +168,22 @@ class DeckContext:
         return [c for c in self.combos if c["category"] == "included"]
 
 
+@dataclass
+class TagContext:
+    deck_id: int
+    meta: dict
+    tag_type: str
+    vocabulary: list     # [{"label", "definition"}], the labels offered to the model
+    cards: list          # CardFact, mainboard without basics, one entry per card name
+    current: dict        # {card name: [label, ...]} in this layer, primary first
+
+    def card_names(self):
+        return [c.name for c in self.cards]
+
+    def labels(self):
+        return [v["label"] for v in self.vocabulary]
+
+
 def _records(df):
     """DataFrame -> list of dicts with SQL NULLs as None (pandas yields NaN,
     which is truthy and breaks every `value or default` below)."""
@@ -172,6 +196,7 @@ def _card_from_row(r, **kw):
         mana_cost=r.get("mana_cost") or "", cmc=float(r.get("cmc") or 0),
         oracle_text=r.get("oracle_text") or "",
         price=r.get("current_price_usd"), game_changer=bool(r.get("is_game_changer")),
+        is_basic=bool(r.get("is_basic_land")), scryfall_ids=[r["scryfall_id"]],
         roles=mechanical_roles(r.get("oracle_text"), r.get("type_line")), **kw)
 
 
@@ -354,11 +379,8 @@ def candidate_pool(conn, meta, in_deck_keys, cap=DEFAULT_CANDIDATE_CAP, cards=()
     return _select_candidates(out, combo_cards, cap)
 
 
-def build_deck_context(conn, deck_id, candidate_cap=DEFAULT_CANDIDATE_CAP):
-    """Everything the deck-doctor skill needs for one deck."""
-    meta = q.deck_meta(conn, deck_id)
-    if not meta:
-        raise ValueError(f"No deck with id {deck_id}")
+def _deck_card_facts(conn, deck_id, meta):
+    """The deck's mainboard as CardFacts, one per printing."""
     df = q.deck_cards_dataframe(conn, deck_id)
     oracle = {}
     if len(df):
@@ -372,9 +394,43 @@ def build_deck_context(conn, deck_id, candidate_cap=DEFAULT_CANDIDATE_CAP):
         r["oracle_id"] = oracle.get(r["scryfall_id"])
         cards.append(_card_from_row(r, quantity=int(r["quantity"] or 1),
                                     is_commander=front_face(r["name"]) in commanders))
+    return cards
+
+
+def build_deck_context(conn, deck_id, candidate_cap=DEFAULT_CANDIDATE_CAP):
+    """Everything the deck-doctor skill needs for one deck."""
+    meta = q.deck_meta(conn, deck_id)
+    if not meta:
+        raise ValueError(f"No deck with id {deck_id}")
+    cards = _deck_card_facts(conn, deck_id, meta)
     in_deck = {c.oracle_id or c.name for c in cards}
     goals = deck_goals(conn, deck_id)
     combos = deck_combo_facts(conn, deck_id)
     candidates = candidate_pool(conn, meta, in_deck, candidate_cap, cards, goals, combos)
     stats = compute_stats(meta, cards, q.deck_stats_row(conn, deck_id))
     return DeckContext(deck_id, meta, cards, candidates, stats, goals, combos)
+
+
+def build_tag_context(conn, deck_id, tag_type):
+    """What a tag proposal needs for one deck and layer. Basic lands are
+    skipped, the same as untagged_deck_cards. Tags are keyed by printing but
+    the model sees names, so several printings of a card become one entry
+    carrying all their tags."""
+    meta = q.deck_meta(conn, deck_id)
+    if not meta:
+        raise ValueError(f"No deck with id {deck_id}")
+    tags = q.get_card_tags_by_type(conn, deck_id, tag_type)
+    by_name, current = {}, {}
+    for c in _deck_card_facts(conn, deck_id, meta):
+        if c.is_basic:
+            continue
+        labels = current.setdefault(c.name, [])
+        labels += [t for t in tags.get(c.scryfall_ids[0], []) if t not in labels]
+        kept = by_name.get(c.name)
+        if kept:
+            kept.quantity += c.quantity
+            kept.scryfall_ids += c.scryfall_ids
+        else:
+            by_name[c.name] = c
+    return TagContext(deck_id, meta, tag_type, q.deck_tag_vocabulary(conn, deck_id, tag_type, defined_only=True),
+                      list(by_name.values()), {name: t for name, t in current.items() if t})

@@ -7,7 +7,8 @@ describes what is built.
 **Status: Phase 5** — analysis mode (four skills) and tool-based chat, on
 Gemini or Anthropic (Claude Sonnet/Opus), switchable from the page sidebar.
 No Ollama adapter (skipped, see docs/archive/ADVISOR_PLAN.md). Read-only: nothing here
-writes to the database.
+writes to the database. Tag proposals are built but no page calls them yet
+([TAG_SUGGESTIONS_PLAN.md](../../docs/TAG_SUGGESTIONS_PLAN.md)).
 
 ## How it works
 
@@ -51,6 +52,8 @@ Gated off per provider: the page only offers the Chat tab when
 | `providers.py` | `GeminiProvider` (REST, `x-goog-api-key` header, backoff on 429/5xx, function calling). `AnthropicProvider` (Phase 5; Messages API, forces a "respond" tool for schema output since Claude has no native schema param, caches the system prompt and tool definitions). `FakeProvider` for tests. |
 | `analysis.py` | Analysis mode: prompt building and the validate/retry loop. |
 | `chat.py` | Chat mode: the tool-call loop, its iteration/token budget, and the restate-then-check step. |
+| `tagging.py` | Tag proposals: `run_tag_proposals` for one deck and layer, `classify` (new / same / conflict / none), `focus_report` (thin and broad labels). Returns proposals only. |
+| `skills/tag_suggester.md` | System prompt for tag proposals. Not in `analysis.SKILLS`, since it has its own schema and guard. |
 | `skills/deck_doctor.md` | System prompt: general health check, up to 5 cuts and 5 adds. |
 | `skills/upgrade_finder.md` | System prompt: assumes the deck's plan is fine, looks only for single-for-single power upgrades. |
 | `skills/build_from_collection.md` | System prompt: maximise the deck using only owned cards, weighted toward thin computed roles and available (not sleeved) candidates. |

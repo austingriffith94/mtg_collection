@@ -30,15 +30,7 @@ from dashboard_lib import db, loaders, writes
 from dashboard_lib import card_view as cv, nav
 from dashboard_lib.advisor import analysis, chat
 from dashboard_lib.advisor.context import build_deck_context
-from dashboard_lib.advisor.providers import ANTHROPIC_MODELS, AnthropicProvider, GeminiProvider, ProviderError
-
-PROVIDER_CHOICES = ["Gemini"] + list(ANTHROPIC_MODELS)
-
-
-def make_provider(choice):
-    if choice == "Gemini":
-        return GeminiProvider()
-    return AnthropicProvider(model=ANTHROPIC_MODELS[choice])
+from dashboard_lib.advisor.providers import PROVIDER_CHOICES, ProviderError, make_provider
 
 
 def show_analysis_item(i, conn=None, deck_id=None, skill=None, key=None):

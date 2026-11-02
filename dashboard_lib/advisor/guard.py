@@ -20,6 +20,12 @@ a combo, passes the bracket's Game Changer limit, adds a combo to a
 low-bracket deck). The suggestion can still be right, so a warning neither
 unverifies an item nor triggers the retry.
 
+`check_tags` is the tag-proposal counterpart: name, tags, primary and quote
+are checked per card, and a card sent but not returned is listed as missing.
+The quote may come from the type line too, since a creature type is often
+only there. A rejected tag is left off the row, which is otherwise kept and
+marked unverified. A tag whose computed role disagrees is only a warning.
+
 `check_chat_answer` is the chat-mode (Phase 3) counterpart: no cut/add
 structure, no pre-filtered pool — name, quote and roles are all checked
 against the whole database via context.lookup_card_text instead of one
@@ -30,7 +36,8 @@ our miss, not the model's.
 import re
 from dataclasses import dataclass, field
 
-from .context import GAME_CHANGER_LIMITS, front_face, lookup_card_text, mechanical_roles
+from .. import tag_vocab
+from .context import GAME_CHANGER_LIMITS, MAX_TAGS_PER_CARD, front_face, lookup_card_text, mechanical_roles
 
 
 def _norm(text):
@@ -207,6 +214,117 @@ def check_chat_answer(conn, parsed):
     mentions = [CheckedMention(raw, _check_mention(conn, raw))
                 for raw in parsed.get("mentions") or [] if isinstance(raw, dict)]
     return CheckedChat(str(parsed.get("answer") or ""), mentions)
+
+
+@dataclass
+class CheckedTagRow:
+    data: dict                    # the model's raw row
+    card: object = None           # CardFact; None if the name is unknown or repeated
+    tags: list = field(default_factory=list)    # legal labels, primary first
+    primary: str | None = None
+    violations: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)
+    status: str = ""              # set by tagging.classify: new / same / conflict / none
+
+    @property
+    def verified(self):
+        return not self.violations
+
+
+@dataclass
+class CheckedTags:
+    rows: list                    # CheckedTagRow
+    missing: list                 # names sent but not returned: not reviewed, unlike an empty `tags`
+
+    @property
+    def violations(self):
+        return [(r, v) for r in self.rows for v in r.violations]
+
+    def retry_keys(self):
+        """front_face keys of the cards a retry should redo."""
+        return {front_face(r.data.get("card")) for r in self.rows if r.violations} | {
+            front_face(n) for n in self.missing}
+
+
+def _check_tag_labels(row, labels):
+    """Fill row.tags and row.primary with the legal labels, in their
+    vocabulary spelling, and record what was wrong with the rest."""
+    raw = row.data.get("tags")
+    raw = raw if isinstance(raw, list) else []
+    for t in raw:
+        label = labels.get(str(t).strip().casefold())
+        if label is None:
+            row.violations.append(f"tag '{t}' is not in the allowed labels")
+        elif label not in row.tags:
+            row.tags.append(label)
+    claimed = str(row.data.get("primary") or "").strip()
+    primary = labels.get(claimed.casefold())
+    if row.tags:
+        if not claimed:
+            row.violations.append("no primary tag")
+        elif primary not in row.tags:
+            row.violations.append(f"primary '{claimed}' is not one of the card's tags")
+        row.primary = primary if primary in row.tags else row.tags[0]
+        row.tags.sort(key=lambda t: t != row.primary)
+    elif claimed and not raw:
+        row.violations.append(f"primary '{claimed}' given with no tags")
+    if len(row.tags) > MAX_TAGS_PER_CARD:
+        row.violations.append(f"{len(row.tags)} tags (at most {MAX_TAGS_PER_CARD})")
+        del row.tags[MAX_TAGS_PER_CARD:]
+
+
+def _check_tag_row(raw, pool, seen, labels, tag_type):
+    """One model row checked against the deck and vocabulary. `seen` holds the
+    cards already answered for, and gains this one."""
+    row = CheckedTagRow(raw)
+    key = front_face(raw.get("card"))
+    if key not in pool:
+        row.violations.append(f"unknown card '{raw.get('card')}' (not in the deck)")
+        return row
+    if key in seen:
+        row.violations.append(f"'{raw.get('card')}' was returned more than once")
+        return row
+    seen.add(key)
+    row.card = card = pool[key]
+    _check_tag_labels(row, labels)
+    if not row.tags:
+        return row
+    quote = _norm(raw.get("evidence_quote"))
+    if not quote:
+        row.violations.append("missing evidence_quote")
+    elif quote not in _norm(card.oracle_text) and quote not in _norm(card.type_line):
+        row.violations.append(f"quote not found in {card.name}'s type line or oracle text: "
+                              f"\"{raw.get('evidence_quote')}\"")
+    if tag_type == tag_vocab.FUNCTION_LAYER:
+        for label in row.tags:
+            role = tag_vocab.FUNCTION_ROLES.get(label.casefold())
+            if role and role not in card.roles:
+                row.warnings.append(f"{label}: the text check does not read this card as {role}")
+    return row
+
+
+def check_tags(parsed, ctx):
+    """Validate a parsed tag answer against a TagContext; never raises on bad
+    model output."""
+    parsed = parsed if isinstance(parsed, dict) else {}
+    pool = _index(ctx.cards)
+    labels = {label.casefold(): label for label in ctx.labels()}
+    seen = set()
+    rows = [_check_tag_row(raw, pool, seen, labels, ctx.tag_type)
+            for raw in parsed.get("cards") or [] if isinstance(raw, dict)]
+    return CheckedTags(rows, [c.name for c in ctx.cards if front_face(c.name) not in seen])
+
+
+def tag_retry_prompt(checked):
+    """The one corrective follow-up. It asks only for the cards with a
+    problem: a deck's whole answer is long and each retry is paid for."""
+    lines = [f"- '{r.data.get('card')}': {v}" for r, v in checked.violations]
+    lines += [f"- '{name}': not returned" for name in checked.missing]
+    return ("Your answer had problems that I verified against the database:\n"
+            + "\n".join(lines)
+            + "\n\nReturn rows for these cards only, corrected. Use only the listed card names and labels, "
+              "copy evidence quotes exactly from the type line or oracle text shown, and give every tagged "
+              "card a primary. Return an empty tags list for a card you cannot support.")
 
 
 def retry_prompt(checked):

@@ -1,5 +1,5 @@
 """
-Structured-output schema for analysis mode.
+Structured-output schemas for analysis mode, chat restating and tag proposals.
 
 Card-name fields are string enums built from the deck and the pre-filtered
 candidate pool, so a provider that honours schemas cannot name a card
@@ -7,7 +7,7 @@ outside them. guard.py still re-checks (providers differ in how strictly
 they enforce enums). Written in Gemini's responseSchema dialect (uppercase
 type names); other adapters translate it.
 """
-from .context import ROLES
+from .context import MAX_TAGS_PER_CARD, ROLES
 
 _CLAIMABLE_ROLES = [r for r in ROLES if r != "land"]
 
@@ -52,6 +52,32 @@ def analysis_schema(ctx):
             "adds": {"type": "ARRAY", "items": add},
         },
         "required": ["summary", "strengths", "weaknesses", "cuts", "adds"],
+    }
+
+
+def tag_schema(ctx):
+    """JSON schema for one tag-proposal answer: card names and tags are enums
+    of the deck and the layer's vocabulary. `primary` is optional because a
+    card with no tags has none, and an enum can't hold a blank."""
+    labels = ctx.labels()
+    row = {
+        "type": "OBJECT",
+        "properties": {
+            "card": _s(enum=ctx.card_names()),
+            "tags": {"type": "ARRAY", "items": _s(enum=labels), "maxItems": MAX_TAGS_PER_CARD,
+                     "description": "Empty if no label clearly fits."},
+            "primary": _s(enum=labels, description="The one of `tags` that is this card's main job. "
+                                                   "Omit when `tags` is empty."),
+            "evidence_quote": _s(description="Exact substring of the card's type line or oracle text. "
+                                             "Empty string when `tags` is empty."),
+            "reason": _s(description="One short sentence. Empty string when `tags` is empty."),
+        },
+        "required": ["card", "tags", "evidence_quote", "reason"],
+    }
+    return {
+        "type": "OBJECT",
+        "properties": {"cards": {"type": "ARRAY", "items": row}},
+        "required": ["cards"],
     }
 
 

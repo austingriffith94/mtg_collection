@@ -1,0 +1,370 @@
+"""Tag proposals (docs/TAG_SUGGESTIONS_PLAN.md Phase 2): context, schema, guard,
+the retry path, diff classification and the thin / broad report. Offline with
+a scripted FakeProvider, as in test_advisor.py."""
+import pytest
+
+from dashboard_lib import writes
+from dashboard_lib.advisor import guard, providers, tagging
+from dashboard_lib.advisor.context import MAX_TAGS_PER_CARD, build_tag_context
+from dashboard_lib.advisor.providers import AnthropicProvider, FakeProvider
+from dashboard_lib.advisor.schemas import tag_schema
+
+SOL_RING = "{T}: Add {C}{C}."
+BOLT = "Lightning Bolt deals 3 damage to any target."
+
+
+@pytest.fixture
+def deck(conn, add_card):
+    """Deck 1 (commander Rakdos): the commander, Sol Ring tagged Ramp, Bolt
+    tagged Removal, Changeling Bear, Bear Hug (an MDFC) and a Swamp."""
+    def card(name, text, type_line, basic=0):
+        sid = add_card(name)
+        conn.execute("UPDATE cards SET oracle_text=?, type_line=?, mana_cost='{1}', is_basic_land=? WHERE scryfall_id=?",
+                     (text, type_line, basic, sid))
+        conn.execute("INSERT INTO deck_cards (deck_id, scryfall_id, quantity) VALUES (1,?,1)", (sid,))
+        return sid
+    conn.execute("INSERT INTO decks (deck_id, name, commander, color_identity, description)"
+                 " VALUES (1, 'Test', 'Rakdos', 'BR', 'Aggro')")
+    card("Rakdos", "Haste", "Legendary Creature — Demon")
+    sol = card("Sol Ring", SOL_RING, "Artifact")
+    bolt = card("Lightning Bolt", BOLT, "Instant")
+    card("Changeling Bear", "Changeling", "Creature — Shapeshifter")
+    card("Bear Hug // Bear Rug", "Draw a card. // Trample", "Sorcery // Enchantment")
+    card("Swamp", "", "Basic Land — Swamp", basic=1)
+    writes.set_card_tags(conn, 1, sol, "function", ["Ramp"])
+    writes.set_card_tags(conn, 1, bolt, "function", ["Removal"])
+    conn.commit()
+    return 1
+
+
+@pytest.fixture
+def ctx(conn, deck):
+    return build_tag_context(conn, deck, "function")
+
+
+def _row(card, tags=("Ramp",), primary=None, quote="Add {C}{C}"):
+    row = {"card": card, "tags": list(tags), "evidence_quote": quote, "reason": "r"}
+    if tags:
+        row["primary"] = primary or tags[0]
+    return row
+
+
+def _empty(card):
+    return {"card": card, "tags": [], "evidence_quote": "", "reason": ""}
+
+
+def _full(**over):
+    """A clean answer; `over` swaps in rows by short name."""
+    rows = {
+        "rakdos": _empty("Rakdos"),
+        "sol": _row("Sol Ring"),
+        "bolt": _row("Lightning Bolt", ["Removal"], quote="deals 3 damage to any target"),
+        "bear": _empty("Changeling Bear"),
+        "hug": _empty("Bear Hug // Bear Rug"),
+    }
+    rows.update(over)
+    return {"cards": [r for r in rows.values() if r]}
+
+
+def _by_card(checked):
+    return {r.card.name: r for r in checked.rows if r.card}
+
+
+# ---- context, prompt, schema ------------------------------------------------
+
+def test_context_skips_basics_keeps_the_commander_and_loads_tags(ctx):
+    assert ctx.card_names() == ["Bear Hug // Bear Rug", "Changeling Bear", "Lightning Bolt", "Rakdos", "Sol Ring"]
+    assert ctx.current == {"Sol Ring": ["Ramp"], "Lightning Bolt": ["Removal"]}
+    assert ctx.labels() == ["Ramp", "Removal"]
+
+
+def test_two_printings_are_one_entry_with_both_sets_of_tags(conn, deck, add_card):
+    other = add_card("Sol Ring", set_code="xyz", collector_number="9")
+    conn.execute("UPDATE cards SET oracle_text=?, type_line='Artifact', is_basic_land=0 WHERE scryfall_id=?",
+                 (SOL_RING, other))
+    conn.execute("INSERT INTO deck_cards (deck_id, scryfall_id, quantity) VALUES (1,?,2)", (other,))
+    writes.set_card_tags(conn, 1, other, "function", ["Removal"])
+    conn.commit()
+    ctx = build_tag_context(conn, deck, "function")
+    assert ctx.card_names().count("Sol Ring") == 1
+    assert sorted(ctx.current["Sol Ring"]) == ["Ramp", "Removal"]
+    sol = next(c for c in ctx.cards if c.name == "Sol Ring")
+    assert sol.quantity == 3 and len(sol.scryfall_ids) == 2
+
+
+def test_undefined_labels_are_not_offered(conn, deck):
+    sol = next(c for c in build_tag_context(conn, deck, "strategy").cards if c.name == "Sol Ring")
+    writes.set_card_tags(conn, 1, sol.scryfall_ids[0], "strategy", ["Rakdos Target"])
+    conn.commit()
+    ctx = build_tag_context(conn, deck, "strategy")
+    assert ctx.current == {"Sol Ring": ["Rakdos Target"]} and ctx.labels() == []
+
+
+def test_prompt_has_the_plan_definitions_examples_and_current_tags(ctx):
+    prompt = tagging.build_prompt(ctx)
+    assert "Stated plan: Aggro" in prompt
+    assert "- Ramp: Produces extra mana" in prompt
+    assert "EXAMPLES OF HOW THE USER USES THESE LABELS:\n- Removal: Lightning Bolt" in prompt
+    assert "Sol Ring | {1} | Artifact [current tags: Ramp]" in prompt
+    assert "Rakdos | {1} | Legendary Creature — Demon [COMMANDER; current tags: none]" in prompt
+    assert "Swamp" not in prompt
+
+
+def test_hidden_current_tags_leave_no_answers_in_the_prompt(ctx):
+    prompt = tagging.build_prompt(ctx, hide_current=True)
+    assert "current tags" not in prompt and "EXAMPLES" not in prompt
+    held_out = tagging.build_prompt(ctx, hide_current=True, examples={"Ramp": ["Sol Ring"]})
+    assert "- Ramp: Sol Ring" in held_out and "Lightning Bolt\n" not in held_out.split("CARDS")[0]
+
+
+def test_schema_is_enum_constrained(ctx):
+    item = tag_schema(ctx)["properties"]["cards"]["items"]["properties"]
+    assert item["card"]["enum"] == ctx.card_names()
+    assert item["tags"]["items"]["enum"] == ["Ramp", "Removal"]
+    assert item["tags"]["maxItems"] == MAX_TAGS_PER_CARD
+    assert "primary" not in tag_schema(ctx)["properties"]["cards"]["items"]["required"]
+
+
+def test_schema_survives_translation_for_claude(ctx):
+    out = providers._gemini_schema_to_json_schema(tag_schema(ctx))
+    tags = out["properties"]["cards"]["items"]["properties"]["tags"]
+    assert tags["type"] == "array" and tags["maxItems"] == 3 and tags["items"]["type"] == "string"
+
+
+# ---- guard --------------------------------------------------------------------
+
+def test_clean_answer_has_no_violations(ctx):
+    checked = guard.check_tags(_full(), ctx)
+    assert not checked.violations and not checked.missing
+    assert all(r.verified for r in checked.rows)
+
+
+def test_unknown_card_is_kept_marked_and_carries_no_tags(ctx):
+    checked = guard.check_tags({"cards": [_row("Black Lotus")]}, ctx)
+    row = checked.rows[0]
+    assert "unknown card" in row.violations[0] and row.card is None and row.tags == []
+
+
+def test_out_of_vocabulary_tag_is_left_off_the_row(ctx):
+    row = guard.check_tags(_full(sol=_row("Sol Ring", ["Banana", "Ramp"], primary="Ramp")), ctx).rows[1]
+    assert row.tags == ["Ramp"] and "'Banana'" in row.violations[0]
+
+
+def test_labels_take_the_vocabulary_spelling(ctx):
+    row = guard.check_tags(_full(sol=_row("Sol Ring", ["ramp"], primary="RAMP")), ctx).rows[1]
+    assert row.tags == ["Ramp"] and row.primary == "Ramp" and row.verified
+
+
+def test_too_many_tags_is_a_violation_and_keeps_the_primary(ctx):
+    ctx.vocabulary += [{"label": x, "definition": "d"} for x in ("A", "B")]
+    raw = _row("Sol Ring", ["Ramp", "Removal", "A", "B"], primary="B")
+    row = guard.check_tags(_full(sol=raw), ctx).rows[1]
+    assert row.tags == ["B", "Ramp", "Removal"] and "at most 3" in row.violations[0]
+
+
+@pytest.mark.parametrize("raw,message", [
+    ({"card": "Sol Ring", "tags": ["Ramp"], "primary": "Removal", "evidence_quote": "Add {C}{C}"}, "not one of"),
+    ({"card": "Sol Ring", "tags": ["Ramp"], "evidence_quote": "Add {C}{C}"}, "no primary"),
+    ({"card": "Sol Ring", "tags": [], "primary": "Ramp", "evidence_quote": ""}, "with no tags"),
+])
+def test_primary_must_belong_to_the_card(ctx, raw, message):
+    row = guard.check_tags(_full(sol=raw), ctx).rows[1]
+    assert message in row.violations[0]
+
+
+def test_a_card_returned_twice_counts_once(ctx):
+    checked = guard.check_tags({"cards": _full()["cards"] + [_row("Sol Ring", ["Removal"])]}, ctx)
+    assert "more than once" in checked.rows[-1].violations[0]
+    assert checked.rows[-1].tags == [] and _by_card(checked)["Sol Ring"].tags == ["Ramp"]
+
+
+def test_failed_quote_marks_the_row_but_keeps_it(ctx):
+    row = guard.check_tags(_full(sol=_row("Sol Ring", quote="makes lots of mana")), ctx).rows[1]
+    assert not row.verified and row.tags == ["Ramp"] and "quote not found" in row.violations[0]
+
+
+def test_empty_quote_only_matters_on_a_tagged_row(ctx):
+    assert guard.check_tags(_full(), ctx).rows[0].verified
+    row = guard.check_tags(_full(sol=_row("Sol Ring", quote="")), ctx).rows[1]
+    assert row.violations == ["missing evidence_quote"]
+
+
+def test_quote_may_come_from_the_type_line(ctx):
+    ctx.vocabulary.append({"label": "Demon", "definition": "Is a Demon."})
+    row = guard.check_tags(_full(rakdos=_row("Rakdos", ["Demon"], quote="Creature - Demon")), ctx).rows[0]
+    assert row.verified                                  # also proves the dash is normalised
+
+
+def test_either_face_of_a_card_resolves(ctx):
+    row = guard.check_tags(_full(hug=_row("Bear Hug", ["Ramp"], quote="Draw a card")), ctx).rows[-1]
+    assert row.card.name == "Bear Hug // Bear Rug"
+
+
+def test_role_mismatch_is_a_warning_that_leaves_the_row_verified(ctx):
+    checked = guard.check_tags(_full(bolt=_row("Lightning Bolt", ["Ramp"], quote="deals 3 damage")), ctx)
+    row = _by_card(checked)["Lightning Bolt"]
+    assert row.verified and "does not read this card as ramp" in row.warnings[0]
+    assert not checked.violations
+
+
+def test_role_warning_is_only_for_the_function_layer(ctx):
+    ctx.tag_type = "strategy"
+    row = guard.check_tags(_full(bolt=_row("Lightning Bolt", ["Ramp"], quote="deals 3 damage")), ctx).rows[2]
+    assert row.warnings == []
+
+
+def test_a_skipped_card_is_missing_while_an_empty_tag_list_is_an_answer(ctx):
+    checked = guard.check_tags(_full(bear=None), ctx)
+    assert checked.missing == ["Changeling Bear"]
+
+
+def test_malformed_answers_do_not_raise(ctx):
+    for parsed in (None, [], {"cards": None}, {"cards": ["x", 3]}):
+        assert guard.check_tags(parsed, ctx).rows == []
+    assert guard.check_tags({"cards": [{"card": "Sol Ring", "tags": "Ramp"}]}, ctx).rows[0].tags == []
+
+
+# ---- classification and the focus report --------------------------------------
+
+@pytest.mark.parametrize("tags,current,status", [
+    ([], [], "none"),
+    ([], ["Ramp"], "none"),
+    (["Ramp"], [], "new"),
+    (["Ramp"], ["ramp"], "same"),
+    (["Ramp"], ["Ramp", "Removal"], "same"),
+    (["Ramp", "Fixing"], ["Ramp"], "new"),
+    (["Removal"], ["Ramp"], "conflict"),
+])
+def test_classify(tags, current, status):
+    assert tagging.classify(tags, current) == status
+
+
+def _checked_rows(ctx, answer):
+    return guard.check_tags(answer, ctx).rows
+
+
+def test_focus_report_adds_rows_to_current_tags(ctx):
+    rows = _checked_rows(ctx, {"cards": [_row("Changeling Bear", ["Ramp"], quote="Changeling")]})
+    report = tagging.focus_report(ctx, rows)
+    assert report.counts == {"Ramp": 2, "Removal": 1}
+    assert report.tags_per_card == 1.0
+    assert report.thin == ["Ramp", "Removal"]
+
+
+def test_focus_report_counts_copies_and_finds_broad_labels(ctx):
+    sol = next(c for c in ctx.cards if c.name == "Sol Ring")
+    sol.quantity = 4                                     # 4 of 8 copies is past 40%
+    report = tagging.focus_report(ctx, [])
+    assert report.counts["Ramp"] == 4
+    assert report.broad == ["Ramp"] and report.thin == ["Removal"]
+
+
+def test_focus_report_ignores_rows_without_a_card(ctx):
+    report = tagging.focus_report(ctx, _checked_rows(ctx, {"cards": [_row("Black Lotus")]}))
+    assert report.counts == {"Ramp": 1, "Removal": 1}
+
+
+# ---- the run loop ---------------------------------------------------------------
+
+def test_clean_run_makes_one_call_and_classifies(ctx):
+    answer = _full(bear=_row("Changeling Bear", ["Ramp"], quote="Changeling"),
+                   bolt=_row("Lightning Bolt", ["Ramp"], quote="deals 3 damage"))
+    p = FakeProvider([answer])
+    res = tagging.run_tag_proposals(p, ctx)
+    assert len(p.calls) == 1 and not res.retried and not res.error
+    assert res.input_tokens == 100 and res.output_tokens == 50
+    rows = _by_card(res.checked)
+    assert rows["Sol Ring"].status == "same"
+    assert rows["Changeling Bear"].status == "new"
+    assert rows["Lightning Bolt"].status == "conflict"
+    assert rows["Rakdos"].status == "none"
+    assert res.focus.counts == {"Ramp": 2, "Removal": 1}  # only verified `new` rows count
+
+
+def test_run_asks_for_room_for_a_whole_deck(ctx):
+    p = FakeProvider([_full()])
+    tagging.run_tag_proposals(p, ctx)
+    assert p.calls[0]["max_tokens"] == tagging.MAX_OUTPUT_TOKENS
+    assert p.calls[0]["timeout"] == tagging.TIMEOUT_SECONDS
+    assert p.calls[0]["schema"]["properties"]["cards"]
+    assert "Prefer one or two tags" in p.calls[0]["system"]
+
+
+def test_retry_names_problems_and_merges_only_the_flagged_cards(ctx):
+    bad = _full(sol=_row("Sol Ring", quote="made up"), bear=None)
+    fixed = {"cards": [_row("Sol Ring"), _empty("Changeling Bear"),
+                       _row("Lightning Bolt", ["Ramp"], quote="deals 3")]}   # not flagged: ignored
+    p = FakeProvider([bad, fixed])
+    res = tagging.run_tag_proposals(p, ctx)
+    assert res.retried and len(p.calls) == 2
+    retry = p.calls[1]["messages"][-1]["content"]
+    assert "quote not found" in retry and "'Changeling Bear': not returned" in retry
+    assert "these cards only" in retry
+    assert not res.checked.violations and not res.checked.missing
+    assert _by_card(res.checked)["Lightning Bolt"].tags == ["Removal"]
+    assert res.input_tokens == 200
+
+
+def test_a_failing_retry_keeps_the_first_answer_marked(ctx):
+    bad = _full(sol=_row("Sol Ring", quote="made up"))
+    for script in ([bad], [bad, "not json"]):
+        res = tagging.run_tag_proposals(FakeProvider(list(script)), ctx)
+        assert res.retried and not res.error
+        assert not _by_card(res.checked)["Sol Ring"].verified
+
+
+def test_rows_still_bad_after_the_retry_stay_marked(ctx):
+    bad = _full(sol=_row("Sol Ring", quote="made up"))
+    res = tagging.run_tag_proposals(FakeProvider([bad, {"cards": []}]), ctx)
+    row = _by_card(res.checked)["Sol Ring"]
+    assert not row.verified and row.tags == ["Ramp"] and row.status == "same"
+
+
+def test_retry_keeps_an_unknown_card_visible(ctx):
+    res = tagging.run_tag_proposals(FakeProvider([{"cards": _full()["cards"] + [_row("Black Lotus")]}, {"cards": []}]), ctx)
+    assert [r.status for r in res.checked.rows if r.card is None] == ["none"]
+    assert res.checked.violations
+
+
+def test_provider_failure_and_bad_json_are_errors(ctx):
+    assert "no more scripted" in tagging.run_tag_proposals(FakeProvider([]), ctx).error
+    assert "valid JSON" in tagging.run_tag_proposals(FakeProvider(["nope"]), ctx).error
+
+
+def test_nothing_to_ask_makes_no_call(conn, deck, ctx):
+    p = FakeProvider([])
+    assert "no labels" in tagging.run_tag_proposals(p, build_tag_context(conn, deck, "strategy")).error.lower()
+    ctx.cards = []
+    assert "no cards" in tagging.run_tag_proposals(p, ctx).error
+    assert p.calls == []
+
+
+def test_a_run_writes_nothing(conn, ctx):
+    count = lambda: conn.execute("SELECT COUNT(*) FROM card_tags").fetchone()[0]
+    before = count()
+    tagging.run_tag_proposals(FakeProvider([_full(bear=_row("Changeling Bear", ["Ramp"], quote="Changeling"))]), ctx)
+    assert count() == before
+
+
+def test_examples_skip_labels_outside_the_vocabulary(ctx):
+    ctx.current["Rakdos"] = ["Not Offered"]
+    assert tagging.pick_examples(ctx) == {"Removal": ["Lightning Bolt"], "Ramp": ["Sol Ring"]}
+
+
+# ---- providers ------------------------------------------------------------------
+
+def test_make_provider_picks_by_choice(monkeypatch):
+    monkeypatch.setattr(providers, "load_advisor_secrets", lambda: {"google_api_key": "k", "anthropic_api_key": "k"})
+    assert providers.make_provider("Gemini").name == "gemini"
+    p = providers.make_provider("Claude Opus 5.5")
+    assert p.name == "anthropic" and p.model == "claude-opus-5-5"
+
+
+def test_anthropic_output_limit_and_timeout_can_be_set_per_call():
+    seen = []
+    p = AnthropicProvider(api_key="k", model="m")
+    p._post = lambda body, timeout: seen.append((body["max_tokens"], timeout)) or {
+        "content": [{"type": "text", "text": "ok"}]}
+    p.chat([{"role": "user", "content": "hi"}])
+    p.chat([{"role": "user", "content": "hi"}], max_tokens=16000, timeout=300)
+    assert seen == [(4096, 120), (16000, 300)]

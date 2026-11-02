@@ -404,20 +404,8 @@ def remove_location_from_catalog(conn, location):
 # ------------------------------------------------------------------
 # Card tags (deck-scoped: card_tags PK is deck_id+scryfall_id+tag_id)
 # ------------------------------------------------------------------
-def get_card_tags_by_type(conn, deck_id, tag_type):
-    """{scryfall_id: [label, ...]} for every card in this deck currently
-    carrying a tag of tag_type, primary first."""
-    rows = conn.execute(
-        """SELECT ct.scryfall_id, t.label
-           FROM card_tags ct JOIN tags t ON t.tag_id = ct.tag_id
-           WHERE ct.deck_id=? AND t.tag_type=?
-           ORDER BY ct.position, t.label""",
-        (deck_id, tag_type),
-    ).fetchall()
-    result = {}
-    for scryfall_id, label in rows:
-        result.setdefault(scryfall_id, []).append(label)
-    return result
+# A read, kept in queries.py so the Advisor can use it without this module.
+get_card_tags_by_type = q.get_card_tags_by_type
 
 
 def get_all_card_tags(conn, deck_id, scryfall_id):

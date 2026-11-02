@@ -1951,6 +1951,22 @@ def deck_tag_labels(conn, tag_type=None):
     return {d: sorted(ls, key=str.casefold) for d, ls in out.items()}
 
 
+def get_card_tags_by_type(conn, deck_id, tag_type):
+    """{scryfall_id: [label, ...]} for every card in this deck currently
+    carrying a tag of tag_type, primary first."""
+    rows = conn.execute(
+        """SELECT ct.scryfall_id, t.label
+           FROM card_tags ct JOIN tags t ON t.tag_id = ct.tag_id
+           WHERE ct.deck_id=? AND t.tag_type=?
+           ORDER BY ct.position, t.label""",
+        (deck_id, tag_type),
+    ).fetchall()
+    result = {}
+    for scryfall_id, label in rows:
+        result.setdefault(scryfall_id, []).append(label)
+    return result
+
+
 def active_tag_vocab(conn, deck_id, tag_type):
     """{label: definition or None} — the deck_tag_vocab rows for one deck and
     tag type: its active labels, without the ones that are only on cards."""

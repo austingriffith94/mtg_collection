@@ -18,7 +18,8 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] **Phase 1b** — Layer vocabularies and definitions (the model's allowed
   list), and the one-time copy into `function` (done 2026-11-01; 343 tags
   copied to the live database).
-- [ ] **Phase 2** — Proposal engine: prompt, schema, guard, no database writes.
+- [x] **Phase 2** — Proposal engine: prompt, schema, guard, no database writes
+  (done 2026-11-01; offline only, no real model call yet).
 - [ ] **Phase 3** — Backtest against your existing tags, before any UI.
 - [ ] **Phase 4** — Review panel in the Deck Editor, with Apply.
 - [ ] **Phase 5** — Show a chosen layer on the deck board and in counts.
@@ -382,6 +383,48 @@ automatically; re-running the script picks up new ones.
 - The thin / broad report (see "Keeping tags focused") is computed here, in
   code, from the proposals and the deck's current tags.
 
+**As built:** `tagging.run_tag_proposals(provider, ctx, hide_current, examples)`
+with `context.build_tag_context`, `schemas.tag_schema`, `guard.check_tags` and
+`skills/tag_suggester.md`. `hide_current` and held-out `examples` are what the
+backtest needs. `make_provider` and `PROVIDER_CHOICES` moved to `providers.py`.
+`get_card_tags_by_type` moved to `queries.py`, so the Advisor doesn't import
+`writes`; `writes` keeps the name.
+
+Changes from the design above:
+
+- **The retry asks only for the cards with a problem,** and its rows are merged
+  over the first answer. Failed quotes will be common, and a full second answer
+  would pay for the whole deck again and could lose good rows.
+- **`chat` takes `max_tokens` and `timeout` per call.** The timeout is new: the
+  answer arrives all at once, so a long one could pass the 120s default.
+  Tagging uses 16,000 and 300s. Gemini ignores `max_tokens`, because hidden
+  thinking tokens would count against it.
+- **There is a fourth status, `none`,** for a row that proposes nothing. `same`
+  also covers a proposal that is a subset of the card's tags. `new` covers one
+  that adds a label and keeps at least one existing label; `conflict` shares none.
+- **A row's `tags` hold only legal labels, primary first.** A rejected label stays
+  in the row's violations and the raw `data`, so Apply can't write it. An
+  unknown or repeated card keeps its row with no tags.
+- **Several printings of a card are one entry,** carrying all their tags and
+  `scryfall_ids`. No deck has this today; Apply will need to write to each.
+- **`focus_report` counts copies,** so a 30-copy card is not thin, and only
+  reports vocabulary labels. `TagResult.focus` assumes the verified `new` rows
+  are applied; Phase 4 recomputes it from the ticked rows.
+
+Found by a read-only dry run over the live decks:
+
+- **The role warning is too noisy to show yet.** It fires on 144 of your 280
+  existing tags that map to a role: Wipe 15 of 19, Removal 55 of 92, Card Adv 61
+  of 110, Ramp 13 of 59. These are misses in the regexes (fight, "each creature",
+  impulse draw, and lands are never `ramp`), not bad tags. The regexes also
+  drive analysis mode's role check, so they were left alone. Tune them or hide
+  the warning before Phase 4.
+- **Input is smaller than the Risks section guessed:** about 3,500–6,100 tokens
+  of prompt plus about 700 of schema (estimated at 4 characters per token). The
+  real numbers come from the first run.
+- **Decks don't all have six `function` labels.** They have 2–6, and Nalia and
+  Ayara have none, so a run on either stops with an error before any call.
+
 ### Phase 3 — Backtest
 
 A script in `scripts/` (run by hand, uses the real API): for one tagged deck,
@@ -398,6 +441,10 @@ Decided 2026-11-01: the first backtest uses only the six labels already on each
 deck's cards (Card Adv, Interaction, Ramp, Removal, Protection, Wipe), the cleanest
 comparison with your data. Activate more menu labels per deck only if the results
 look too narrow.
+
+Nalia has no `function` tags (see the Phase 2 notes), so it can't be scored on
+that layer as planned: it needs labels activated and something to compare
+against, or a different third deck.
 
 Run it on `function` only at this stage: `strategy` labels have no definitions
 until Phase 4, and a `strategy` vocabulary built from the deck's own labels

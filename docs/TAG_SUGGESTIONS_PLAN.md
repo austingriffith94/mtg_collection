@@ -20,9 +20,9 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
   copied to the live database).
 - [x] **Phase 2** — Proposal engine: prompt, schema, guard, no database writes
   (done 2026-11-01; offline only, no real model call yet).
-- [~] **Phase 3** — Backtest against your existing tags, before any UI (script built
-  2026-11-01, Gemini run on three decks; waiting on the decision to build the UI,
-  and the Nalia check is not done).
+- [x] **Phase 3** — Backtest against your existing tags, before any UI (done
+  2026-11-01: Gemini run on three decks; the Nalia changeling / Mutavault check
+  waits for Phase 6, when Nalia gets a vocabulary).
 - [ ] **Phase 4** — Review panel in the Deck Editor, with Apply.
 - [ ] **Phase 5** — Show a chosen layer on the deck board and in counts.
 - [ ] **Phase 6** — Two-pass mode: propose a vocabulary for an untagged deck.

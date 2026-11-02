@@ -200,19 +200,6 @@ def test_either_face_of_a_card_resolves(ctx):
     assert row.card.name == "Bear Hug // Bear Rug"
 
 
-def test_role_mismatch_is_a_warning_that_leaves_the_row_verified(ctx):
-    checked = guard.check_tags(_full(bolt=_row("Lightning Bolt", ["Ramp"], quote="deals 3 damage")), ctx)
-    row = _by_card(checked)["Lightning Bolt"]
-    assert row.verified and "does not read this card as ramp" in row.warnings[0]
-    assert not checked.violations
-
-
-def test_role_warning_is_only_for_the_function_layer(ctx):
-    ctx.tag_type = "strategy"
-    row = guard.check_tags(_full(bolt=_row("Lightning Bolt", ["Ramp"], quote="deals 3 damage")), ctx).rows[2]
-    assert row.warnings == []
-
-
 def test_a_skipped_card_is_missing_while_an_empty_tag_list_is_an_answer(ctx):
     checked = guard.check_tags(_full(bear=None), ctx)
     assert checked.missing == ["Changeling Bear"]

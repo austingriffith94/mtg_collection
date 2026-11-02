@@ -41,10 +41,6 @@ FUNCTION_MENU = {
     "Fixing": "Produces or finds mana of the deck's different colors.",
 }
 
-# `function` labels that map to a role context.mechanical_roles computes. The
-# guard warns when a card given one of these doesn't compute to that role.
-FUNCTION_ROLES = {"card adv": "draw", "ramp": "ramp", "removal": "removal", "tutor": "tutor", "wipe": "wipe"}
-
 # The labels that already sit in `strategy` and are copied once into
 # `function` (writes.copy_strategy_tags_to_function).
 COPIED_FUNCTION_LABELS = ("Card Adv", "Interaction", "Ramp", "Removal", "Protection", "Wipe")

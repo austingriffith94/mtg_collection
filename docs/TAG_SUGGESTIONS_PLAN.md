@@ -174,10 +174,6 @@ One request per deck and layer, modelled on `analysis.run_analysis`:
      because a creature type is often only there. For plan-based labels the
      quote is a weak proof, so a failed quote marks the row **unverified**, it
      does not drop it;
-   - for function labels that map to a computed role (Ramp → `ramp`, Removal →
-     `removal`, Wipe → `wipe`, ...), a tag the text does not support per
-     `mechanical_roles` becomes a **warning**. The regexes can be wrong, so
-     this never blocks a row.
 4. **One retry** that lists the violations, then unverified rows are returned
    marked, never silently dropped (same rule as analysis mode).
 5. **Diff, not a list.** Each result row is classified against the card's
@@ -199,7 +195,7 @@ A "Suggest tags" button opens the pop-up:
 - A summary line above the table: tags per card on average, and the thin and
   broad labels.
 - A table of proposals: Accept checkbox, card, current tags, proposed tags,
-  reason and quote, verified / warning badge. Verified `new` rows start
+  reason and quote, a verified / unverified badge. Verified `new` rows start
   ticked; unverified rows and `conflict` rows start unticked.
 - A per-row "replace instead of add" choice for conflicts.
 - **Apply** writes only ticked rows, in one transaction, through a new
@@ -371,7 +367,7 @@ automatically; re-running the script picks up new ones.
 - `advisor/tagging.py` and a `skills/tag_suggester.md` system prompt.
 - Schema in `schemas.py`, checks in `guard.py`, diff classification.
 - `FakeProvider` tests: out-of-vocabulary tag, unknown card, too many tags,
-  failed quote, role warning, the retry path, `same` / `new` / `conflict`.
+  failed quote, the retry path, `same` / `new` / `conflict`.
 - No page changes. Move `make_provider` out of `pages/10_Advisor.py` into the
   advisor package so the Deck Editor can use it too.
 - Let a caller set the output limit. `AnthropicProvider` hardcodes `max_tokens`
@@ -413,12 +409,11 @@ Changes from the design above:
 
 Found by a read-only dry run over the live decks:
 
-- **The role warning is too noisy to show yet.** It fires on 144 of your 280
-  existing tags that map to a role: Wipe 15 of 19, Removal 55 of 92, Card Adv 61
-  of 110, Ramp 13 of 59. These are misses in the regexes (fight, "each creature",
-  impulse draw, and lands are never `ramp`), not bad tags. The regexes also
-  drive analysis mode's role check, so they were left alone. Tune them or hide
-  the warning before Phase 4.
+- **The role warning was dropped.** It fired on 144 of your 280 existing tags
+  that map to a role: Wipe 15 of 19, Removal 55 of 92, Card Adv 61 of 110, Ramp
+  13 of 59. These were misses in the regexes (fight, "each creature", impulse
+  draw, and lands are never `ramp`), not bad tags. The guard keeps its other
+  checks, and the backtest will show a contradicted tag better than a regex.
 - **Input is smaller than the Risks section guessed:** about 3,500–6,100 tokens
   of prompt plus about 700 of schema (estimated at 4 characters per token). The
   real numbers come from the first run.

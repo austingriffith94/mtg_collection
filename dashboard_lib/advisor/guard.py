@@ -24,7 +24,7 @@ unverifies an item nor triggers the retry.
 are checked per card, and a card sent but not returned is listed as missing.
 The quote may come from the type line too, since a creature type is often
 only there. A rejected tag is left off the row, which is otherwise kept and
-marked unverified. A tag whose computed role disagrees is only a warning.
+marked unverified. Roles are not checked: the regexes miss too many real tags.
 
 `check_chat_answer` is the chat-mode (Phase 3) counterpart: no cut/add
 structure, no pre-filtered pool — name, quote and roles are all checked
@@ -36,7 +36,6 @@ our miss, not the model's.
 import re
 from dataclasses import dataclass, field
 
-from .. import tag_vocab
 from .context import GAME_CHANGER_LIMITS, MAX_TAGS_PER_CARD, front_face, lookup_card_text, mechanical_roles
 
 
@@ -223,7 +222,6 @@ class CheckedTagRow:
     tags: list = field(default_factory=list)    # legal labels, primary first
     primary: str | None = None
     violations: list = field(default_factory=list)
-    warnings: list = field(default_factory=list)
     status: str = ""              # set by tagging.classify: new / same / conflict / none
 
     @property
@@ -273,7 +271,7 @@ def _check_tag_labels(row, labels):
         del row.tags[MAX_TAGS_PER_CARD:]
 
 
-def _check_tag_row(raw, pool, seen, labels, tag_type):
+def _check_tag_row(raw, pool, seen, labels):
     """One model row checked against the deck and vocabulary. `seen` holds the
     cards already answered for, and gains this one."""
     row = CheckedTagRow(raw)
@@ -295,11 +293,6 @@ def _check_tag_row(raw, pool, seen, labels, tag_type):
     elif quote not in _norm(card.oracle_text) and quote not in _norm(card.type_line):
         row.violations.append(f"quote not found in {card.name}'s type line or oracle text: "
                               f"\"{raw.get('evidence_quote')}\"")
-    if tag_type == tag_vocab.FUNCTION_LAYER:
-        for label in row.tags:
-            role = tag_vocab.FUNCTION_ROLES.get(label.casefold())
-            if role and role not in card.roles:
-                row.warnings.append(f"{label}: the text check does not read this card as {role}")
     return row
 
 
@@ -310,7 +303,7 @@ def check_tags(parsed, ctx):
     pool = _index(ctx.cards)
     labels = {label.casefold(): label for label in ctx.labels()}
     seen = set()
-    rows = [_check_tag_row(raw, pool, seen, labels, ctx.tag_type)
+    rows = [_check_tag_row(raw, pool, seen, labels)
             for raw in parsed.get("cards") or [] if isinstance(raw, dict)]
     return CheckedTags(rows, [c.name for c in ctx.cards if front_face(c.name) not in seen])
 

@@ -793,6 +793,10 @@ def _dirty_key(key):
     return f"{key}__edited"
 
 
+def _group_by_key(key):
+    return f"{key}__group_by"
+
+
 def run_board_action(conn, deck_id, key, action, *, is_undo=False, undo_moves=None):
     """Apply one action for the page: remember the inverse (and the moves it
     must put back) for the Undo button, stash the outcome and drop stale
@@ -882,7 +886,11 @@ def render_deck_board(cards_df, deck_meta, owned_qty, *, key, editable=False, co
     if editable and (conn is None or deck_id is None):
         raise ValueError("An editable board needs conn and deck_id.")
     saved = st.session_state.get(key)
-    group_by = (saved.get("group_by") if saved else None) or DEFAULT_GROUP_BY
+    # The component's own state is dropped on a run that ends before drawing
+    # it (rerun_if_edited, after every edit), so the choice is also kept under
+    # a plain key that Streamlit leaves alone.
+    group_by = ((saved.get("group_by") if saved else None)
+                or st.session_state.get(_group_by_key(key)) or DEFAULT_GROUP_BY)
     if group_by not in GROUP_BY_OPTIONS:
         group_by = DEFAULT_GROUP_BY
 
@@ -891,7 +899,12 @@ def render_deck_board(cards_df, deck_meta, owned_qty, *, key, editable=False, co
         if action:
             run_board_action(conn, deck_id, key, action)
 
-    callbacks = {"on_group_by_change": lambda: None}
+    def _on_group_by():
+        choice = (st.session_state.get(key) or {}).get("group_by")
+        if choice:
+            st.session_state[_group_by_key(key)] = choice
+
+    callbacks = {"on_group_by_change": _on_group_by}
     if editable:
         callbacks["on_action_change"] = _on_action
     leaving = leaving or []
@@ -917,7 +930,7 @@ def render_deck_board(cards_df, deck_meta, owned_qty, *, key, editable=False, co
             "copies_move": editable and not (loaders.load_deck_meta(conn, deck_id).get("build_state")),
         },
         # Registering a callback is what makes its field a result field.
-        # group_by's does nothing: it only has to persist across reruns.
+        # group_by's only copies the choice to a key that survives an edit.
         **callbacks,
     )
 

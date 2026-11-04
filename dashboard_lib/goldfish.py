@@ -42,15 +42,22 @@ _SYMBOL_RE = re.compile(r"\{([^}]+)\}")
 def parse_cost(mana_cost):
     """A mana cost string ('{2}{G}{G}') as
     {"generic": n, "W": n, "U": n, "B": n, "R": n, "G": n, "C": n,
-     "hybrid": [["W", "U"]], "phyrexian": ["B"], "x": bool},
-    or None when blank or when any symbol can't be read (snow, {2/W}), so the
-    caller never marks a spell castable on a guess."""
+     "hybrid": [["W", "U"]], "twobrid": ["W"], "phyrexian": ["B"],
+     "snow": n, "x": bool},
+    or None when blank or when any symbol can't be read, so the caller never
+    marks a spell castable on a guess.
+
+    `twobrid` ({2/W}) is paid with that color or 2 generic. `snow` ({S}) is
+    also counted in `generic`: snow sources aren't tracked, so a snow pip is
+    paid like any generic one and `snow` only says how many there were.
+    Hybrid may include colorless ({C/W})."""
     text = _clean_str(mana_cost)
     if not text:
         return None
     if _SYMBOL_RE.sub("", text).strip():
         return None
-    cost = {"generic": 0, **{c: 0 for c in COLORS}, "C": 0, "hybrid": [], "phyrexian": [], "x": False}
+    cost = {"generic": 0, **{c: 0 for c in COLORS}, "C": 0, "hybrid": [], "twobrid": [],
+            "phyrexian": [], "snow": 0, "x": False}
     for symbol in _SYMBOL_RE.findall(text):
         symbol = symbol.upper()
         parts = symbol.split("/")
@@ -58,13 +65,18 @@ def parse_cost(mana_cost):
             cost["generic"] += int(symbol)
         elif symbol in ("X", "Y", "Z"):
             cost["x"] = True
+        elif symbol == "S":
+            cost["generic"] += 1
+            cost["snow"] += 1
         elif symbol in COLORS or symbol == "C":
             cost[symbol] += 1
         elif parts[-1] == "P" and parts[0] in COLORS:
             # {W/P} and hybrid-Phyrexian {G/W/P}: 2 life always pays, so the
             # pip never blocks a cast; the first color is all that is kept.
             cost["phyrexian"].append(parts[0])
-        elif len(parts) == 2 and all(p in COLORS for p in parts):
+        elif len(parts) == 2 and parts[0] == "2" and parts[1] in COLORS:
+            cost["twobrid"].append(parts[1])
+        elif len(parts) == 2 and all(p in COLORS or p == "C" for p in parts):
             cost["hybrid"].append(parts)
         else:
             return None

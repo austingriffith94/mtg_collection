@@ -134,7 +134,7 @@ def test_dryad_arbor_style_land_creature_is_a_land():
 def test_cost_plain_colored():
     assert parse_cost("{2}{G}{G}") == {
         "generic": 2, "W": 0, "U": 0, "B": 0, "R": 0, "G": 2, "C": 0,
-        "hybrid": [], "phyrexian": [], "x": False}
+        "hybrid": [], "twobrid": [], "phyrexian": [], "snow": 0, "x": False}
 
 
 def test_cost_hybrid_phyrexian_x_and_colorless():
@@ -146,8 +146,15 @@ def test_cost_hybrid_phyrexian_x_and_colorless():
     assert parse_cost("{0}")["generic"] == 0
 
 
+def test_cost_twobrid_snow_and_colorless_hybrid():
+    assert parse_cost("{2/W}{2/W}{2/W}")["twobrid"] == ["W", "W", "W"]
+    snow = parse_cost("{1}{S}{S}")
+    assert (snow["generic"], snow["snow"]) == (3, 2)
+    assert parse_cost("{C/W}")["hybrid"] == [["C", "W"]]
+
+
 def test_cost_unreadable_is_none():
-    for bad in (None, "", float("nan"), "{S}", "{2/W}", "junk"):
+    for bad in (None, "", float("nan"), "junk", "{Q}"):
         assert parse_cost(bad) is None
 
 

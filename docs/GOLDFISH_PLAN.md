@@ -127,7 +127,7 @@ Each face holds:
 | Field | Meaning |
 |---|---|
 | `name`, `type_line`, `kind` | `kind` is `land`, `creature`, `permanent` (artifact, enchantment, planeswalker, battle) or `spell` (instant, sorcery) |
-| `cost` | `{"generic": n, "W": n, …, "C": n, "hybrid": [["W","U"]], "phyrexian": ["B"], "x": bool}`, or `null` when the cost can't be read |
+| `cost` | `{"generic": n, "W": n, …, "C": n, "hybrid": [["W","U"]], "twobrid": ["W"], "phyrexian": ["B"], "snow": n, "x": bool}`, or `null` when the cost can't be read |
 | `mana` | what the face taps for, see below, or `null` for no mana ability |
 | `enters_tapped` | `"always"`, `"maybe"` or `null` |
 

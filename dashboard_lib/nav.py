@@ -64,6 +64,8 @@ PAGES = [
              "Game Changers, mana tags, and Scryfall/Spellbook refreshes."),
     PageSpec("pages/7_Commander_Game_Tracking.py", "COMMANDER GAME TRACKING", "🏆", "Commander_Game_Tracking", "Play",
              "Log games, then see win rates, ELO and head-to-head."),
+    PageSpec("pages/11_Goldfish.py", "GOLDFISH", "🐟", "Goldfish", "Play",
+             "Play a deck's first turns alone: draw, mulligan, play and tap by clicking."),
 ]
 
 
@@ -84,6 +86,7 @@ DECK_LINKS = [
     ("Deck_Editor", "✏️ Edit deck"),
     ("Land_Probability", "🎲 Probabilities"),
     ("Advisor", "🧠 Ask the Advisor"),
+    ("Goldfish", "🐟 Goldfish"),
 ]
 
 

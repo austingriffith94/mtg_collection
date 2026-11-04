@@ -15,7 +15,7 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 
 - [x] **Phase 0** — Branch and plan.
 - [x] **Phase 1** — Deck payload and mana parsing (pure Python, tested).
-- [ ] **Phase 2** — The Goldfish page and component: zones, turns, mulligan, tap, log, undo.
+- [x] **Phase 2** — The Goldfish page and component: zones, turns, mulligan, tap, log, undo.
 - [ ] **Phase 3** — Hints and library actions: castable marks, search, scry, extra draw.
 - [ ] **Phase 4** — Turn summary, docs and wrap-up.
 
@@ -359,6 +359,26 @@ totals as a minimum.
       pre-run values.
     - Run the driver with `PYTHONIOENCODING=utf-8` and kill Edge with
       `taskkill /T /F`.
+
+- **As built (2026-11-03):**
+  - `render_goldfish(cards_df, deck_meta, deck_id, layer_tags=None)` shows the
+    payload's warnings with `st.warning` and mounts the component keyed by
+    `component_key(deck_id)`. The page adds a caption when the mainboard
+    isn't 100 cards.
+  - The store on `parentElement.__goldfish` holds `state`, `history`, `rules`
+    (the rules part) and `act(name, ...args)`, which is what every click calls
+    and what the browser check calls too. A refused action returns `{error}`,
+    shows it as a toast and leaves no undo step.
+  - Two buttons start over: **New hand** keeps the play/draw choice and draws
+    7, **Reset** goes back to choosing. A tapped card is dimmed and turned 8°.
+    A click outside an open menu only closes it; the click doesn't also play
+    or tap the card under it.
+  - `tests/test_pages_smoke.py`'s `_forget_deck_board()` now also drops
+    `dashboard_lib.goldfish`, since it registers a component at import too.
+  - Checks run: the full suite (954 passed), AppTest on all 12 real decks (on
+    a copy), esprima, and a 38-item headless Edge run on a copy with the
+    server's DB path checked first and the live file's size and mtime
+    unchanged after.
 
 ### Phase 3 — Hints and library actions
 

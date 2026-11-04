@@ -1,4 +1,5 @@
-"""Goldfish payload + mana parsing (docs/GOLDFISH_PLAN.md, Phase 1).
+"""Goldfish payload, mana parsing and page wrapper (docs/GOLDFISH_PLAN.md,
+Phases 1-2).
 
 The Goldfish page lets you play out a deck's first turns alone, entirely in
 the browser. This module is the Python half: it turns a deck into the plain
@@ -14,6 +15,9 @@ never reads a mana cost or an oracle text and the parsing is unit-tested.
     read (the card then gets no castable mark).
   - mana_abilities(): one face's oracle text -> the mana abilities it taps for.
   - enters_tapped(): one face's oracle text -> "always" / "maybe" / None.
+  - render_goldfish(): the page-facing wrapper. Shows the payload's warnings
+    and mounts the component (components/goldfish.js / .css), keyed per
+    deck and with no callbacks.
 
 Every text rule is applied PER FACE. `type_line` and `oracle_text` hold both
 faces joined by " // ", and the back land's "Add {B}" must never be read as
@@ -22,11 +26,21 @@ multi-face card whose `mana_cost` is NULL has no readable cost on any face.
 
 The game itself (shuffle, draw, tap, undo) lives in the component; Python
 never hears back from it. Nothing here writes to the database.
+
+The component is declared ONCE at import, like the deck board's.
 """
 import re
 
+import streamlit as st
+
 from dashboard_lib import card_view, formatting as fmt
-from dashboard_lib.deck_board import _clean_str, _front_face, _split_csv
+from dashboard_lib.deck_board import _clean_str, _front_face, _read_component_file, _split_csv
+
+_GOLDFISH = st.components.v2.component(
+    "mtg_goldfish",
+    css=_read_component_file("goldfish.css"),
+    js=_read_component_file("goldfish.js"),
+)
 
 FACE_SEP = " // "
 COLORS = ("W", "U", "B", "R", "G")
@@ -276,3 +290,25 @@ def goldfish_payload(cards_df, deck_meta, layer_tags=None):
         warnings.append(f"The library has only {library_size} card{'s' if library_size != 1 else ''} "
                         f"(fewer than {MIN_LIBRARY}); an opening hand will be short.")
     return {"commanders": commanders, "library": library, "warnings": warnings}
+
+
+# ------------------------------------------------------------------
+# Page wrapper
+# ------------------------------------------------------------------
+def component_key(deck_id):
+    """One component per deck: changing deck mounts a fresh one, which is the
+    whole "new game" reset (the game lives in the browser, not here)."""
+    return f"goldfish_{deck_id}"
+
+
+def render_goldfish(cards_df, deck_meta, deck_id, layer_tags=None):
+    """Show the payload's warnings, then mount the game. No callbacks: the
+    component never sends anything back, so no game state reaches
+    st.session_state and a rerun only re-sends the same deck."""
+    payload = goldfish_payload(cards_df, deck_meta, layer_tags)
+    for warning in payload["warnings"]:
+        st.warning(warning)
+    return _GOLDFISH(
+        key=component_key(deck_id),
+        data={"commanders": payload["commanders"], "library": payload["library"]},
+    )

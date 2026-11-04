@@ -5,7 +5,7 @@ Personal SQLite + Streamlit dashboard replacing an Excel/Office 365-based MTG co
 
 ## Status: fully built and tested (within sandbox constraints — see caveat at bottom)
 
-Migration/data-layer foundation is complete and validated. The Streamlit dashboard is built out across **10 pages**, all backed by a shared library, all writable directly (no CSV editing required for day-to-day use anymore).
+Migration/data-layer foundation is complete and validated. The Streamlit dashboard is built out across **11 pages**, all backed by a shared library, all writable directly (no CSV editing required for day-to-day use anymore).
 
 **Migration removed, Moxfield list import added (2026-11-03):** `scripts/migrate.py` and its offline test are deleted, and `run.py` no longer has the `migrate` / `REBUILD` path, so nothing in the tool can wipe and rebuild `mtg_collection.db` (the daily/manual/pre-delete snapshots in `backups/` stay). In its place, Deck Editor's sidebar has **Import a Moxfield list**: paste a list, name the deck, and `dashboard_lib/moxfield_import.py` creates the deck with every card as a Shortlist idea (exact printing when the paste names one, else by name; a Commander section fills `commander`/`partner`; unresolved lines are reported, the rest still import). It writes only the new deck and its `deck_changes` rows, never the collection or the deck's real list. Tests: `tests/test_moxfield_import.py` plus a Deck Editor AppTest. Historical mentions of `migrate.py` below and in `docs/archive/` describe the removed script. The `data/*.csv` files are no longer read by anything except the Card Database's "Export lists to CSV" backup, which still writes two of them.
 
@@ -109,7 +109,7 @@ mtg_dashboard/
 
 Because of this, schema changes can no longer ride in on a re-migration. `queries.ensure_schema()` (called automatically inside `get_connection()`) applies additive, non-destructive upgrades on every connect: `ALTER TABLE` for new columns, `CREATE TABLE`/`CREATE VIEW` for new tables/views. This is how `cards.is_reserved` reached existing databases in Phase 1, and how the Phase 2 additions (`is_showcase`/`is_borderless`/`edhrec_salt`/`cover_image_path`/`player_name`, plus the `theme_catalog`/`game_changer_category_catalog` tables and `player_stats` view) reached them too. **Important nuance caught during Phase 2 testing:** a brand-new install via `migrate.py` builds straight from `schema.sql`, so `theme_catalog`/`game_changer_category_catalog` already exist (empty) before `ensure_schema()` ever runs its "seed on first creation" logic — which only fires for *upgrading* a pre-Phase-2 database that doesn't have the table yet. `migrate.py` itself was updated to seed both catalogs directly (right after loading `deck_themes`/`game_changer_tags` from their CSVs), so fresh installs and upgraded databases both end up with a populated dropdown. Confirmed by re-running the project's own offline migration test against the real CSVs — 39 themes / 6 categories seeded correctly.
 
-## The 10 pages, in brief
+## The 11 pages, in brief
 
 Plus **Home** (`pages/0_Home.py`), the default page. Since UI plan Phase 1 the sidebar is a grouped `st.navigation` router (Browse / Plan / Edit / Play) built from `dashboard_lib/nav.py`; the ALL-CAPS labels are uppercase `st.Page` titles there, replacing Prompt Pass 8's nav-caps CSS. Every page's `url_path` is explicit — `Decks` must stay `Decks` for the Home tiles' `Decks?deck_id=N` links.
 

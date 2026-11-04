@@ -1,5 +1,5 @@
 """Tag vocabularies and the one-time copy into `function`
-(docs/TAG_SUGGESTIONS_PLAN.md Phase 1b)."""
+(docs/archive/TAG_SUGGESTIONS_PLAN.md Phase 1b)."""
 import pytest
 
 from dashboard_lib import queries as q, tag_vocab, writes

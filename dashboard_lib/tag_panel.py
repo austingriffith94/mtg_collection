@@ -1,5 +1,5 @@
 """
-The Deck Editor's tag tools (docs/TAG_SUGGESTIONS_PLAN.md Phase 4): the "Suggest
+The Deck Editor's tag tools (docs/archive/TAG_SUGGESTIONS_PLAN.md Phase 4): the "Suggest
 tags" pop-up, its Undo, and the vocabulary editor, all in the Card Tags tab.
 
 The Advisor package only proposes. This module holds its proposals in session

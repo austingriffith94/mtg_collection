@@ -539,7 +539,7 @@ def undo_tag_proposals(conn, deck_id, tag_type, changes):
 
 
 # ------------------------------------------------------------------
-# Tag vocabularies (docs/TAG_SUGGESTIONS_PLAN.md) — a deck's active labels in
+# Tag vocabularies (docs/archive/TAG_SUGGESTIONS_PLAN.md) — a deck's active labels in
 # a tag type and their definitions. Reads are queries.active_tag_vocab and
 # queries.deck_tag_vocabulary.
 # ------------------------------------------------------------------

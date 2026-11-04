@@ -1,5 +1,5 @@
 """
-Backtest of the tag suggester (docs/TAG_SUGGESTIONS_PLAN.md Phase 3). Hand-run,
+Backtest of the tag suggester (docs/archive/TAG_SUGGESTIONS_PLAN.md Phase 3). Hand-run,
 uses the real API and costs money; it never writes to the database.
 
 For each deck the model re-tags the `function` layer from the deck's own label

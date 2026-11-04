@@ -1,4 +1,4 @@
-"""Tag layers on the deck board and in the counts (docs/TAG_SUGGESTIONS_PLAN.md
+"""Tag layers on the deck board and in the counts (docs/archive/TAG_SUGGESTIONS_PLAN.md
 Phase 5): the payload carries every layer's tags, a tag edit writes the layer
 the board is showing, and counts cover primary and secondary tags alike."""
 import pandas as pd

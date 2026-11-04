@@ -1,4 +1,4 @@
-"""The tag review panel (docs/TAG_SUGGESTIONS_PLAN.md Phase 4): Apply and Undo,
+"""The tag review panel (docs/archive/TAG_SUGGESTIONS_PLAN.md Phase 4): Apply and Undo,
 the rows that start ticked, definition drafts, and an AppTest pass over the pop-up
 with a scripted provider. Offline; the pages run against a temp database."""
 import json

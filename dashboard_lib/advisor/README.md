@@ -8,7 +8,7 @@ describes what is built.
 Gemini or Anthropic (Claude Sonnet/Opus), switchable from the page sidebar.
 No Ollama adapter (skipped, see docs/archive/ADVISOR_PLAN.md). Tag
 suggestions (`tagging.py`) are used by the Deck Editor's Card Tags tab, not the
-Advisor page ([TAG_SUGGESTIONS_PLAN.md](../../docs/TAG_SUGGESTIONS_PLAN.md)).
+Advisor page ([TAG_SUGGESTIONS_PLAN.md](../../docs/archive/TAG_SUGGESTIONS_PLAN.md)).
 
 **Read-only: nothing in this package writes to the database.** It returns
 proposals; the page (`dashboard_lib/tag_panel.py`) calls `writes.*` only after

@@ -1,4 +1,4 @@
-"""Tag proposals (docs/TAG_SUGGESTIONS_PLAN.md Phase 2): context, schema, guard,
+"""Tag proposals (docs/archive/TAG_SUGGESTIONS_PLAN.md Phase 2): context, schema, guard,
 the retry path, diff classification and the thin / broad report. Offline with
 a scripted FakeProvider, as in test_advisor.py."""
 import pytest

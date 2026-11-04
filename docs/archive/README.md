@@ -12,6 +12,7 @@ active work.
 | [VISUAL_DECK_PLAN.md](VISUAL_DECK_PLAN.md) | Moxfield-style Stacks deck board: read-only view, edit in place, Shortlist alongside (Phases A-C) | 2026-10-12 |
 | [EDIT_FLOW_PLAN.md](EDIT_FLOW_PLAN.md) | Edit flow: one write path for every deck/collection edit, copy sources and destinations, takes, buys, build, move log (Phases 0-7) | 2026-10-14 |
 | [UNOWNED_LOTS_PLAN.md](UNOWNED_LOTS_PLAN.md) | Unowned cards: no collection row for a card you don't own, buy list split into decks and ideas, Bought with a printing picker, blank-lot removal (Phases 0-5) | 2026-11-01 |
+| [TAG_SUGGESTIONS_PLAN.md](TAG_SUGGESTIONS_PLAN.md) | AI-proposed tags applied only by you: primary/secondary order, layer vocabularies, proposal engine and guard, review panel, board layers, two-pass vocabulary (Phases 0-7) | 2026-11-03 |
 
 Open items from the first two were moved to the backlog in
 `UI_ACTION_PLAN.md` rather than left here.

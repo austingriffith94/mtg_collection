@@ -1,6 +1,6 @@
 """
 One-time copy of the functional labels from the `strategy` tag layer into
-`function` (docs/TAG_SUGGESTIONS_PLAN.md Phase 1b). `strategy` rows are not
+`function` (docs/archive/TAG_SUGGESTIONS_PLAN.md Phase 1b). `strategy` rows are not
 touched, and a copied tag is never added twice, so this is safe to re-run.
 
     python scripts/copy_function_tags.py           # show what would be copied

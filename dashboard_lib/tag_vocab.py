@@ -1,4 +1,4 @@
-"""The `function` tag layer's menu (docs/TAG_SUGGESTIONS_PLAN.md).
+"""The `function` tag layer's menu (docs/archive/TAG_SUGGESTIONS_PLAN.md).
 
 A tag type is a layer, and a layer's vocabulary is the labels the Advisor's
 model may use. FUNCTION_MENU holds the default labels and definitions for the

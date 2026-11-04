@@ -327,7 +327,7 @@ jump to the same deck's other views.
     written until you tick rows and press **Apply** (with an Undo). **Labels
     and definitions** sets each layer's allowed labels; a layer with none can
     **Propose a vocabulary** first. A card's first tag in a layer is its
-    primary; the rest are secondary. See `docs/TAG_SUGGESTIONS_PLAN.md`.
+    primary; the rest are secondary. See `docs/archive/TAG_SUGGESTIONS_PLAN.md`.
   - **Mainboard** — add a card (by name, or an exact set + collector
     number — resolves against your existing `cards` table first, falling
     back to a live Scryfall lookup only for a card the dashboard hasn't

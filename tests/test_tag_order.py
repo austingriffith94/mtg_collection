@@ -1,4 +1,4 @@
-"""Primary and secondary tags (docs/TAG_SUGGESTIONS_PLAN.md Phase 1a): a card's
+"""Primary and secondary tags (docs/archive/TAG_SUGGESTIONS_PLAN.md Phase 1a): a card's
 tags keep the order they were given, the first one is its primary, and every
 path that reads, compares or rewrites tags respects that."""
 import sqlite3

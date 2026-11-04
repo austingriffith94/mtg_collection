@@ -323,7 +323,7 @@ def test_decks_page_stacks_view(smoke_db_path, tmp_path, monkeypatch):
 
 
 def test_workbench_untagged_list_follows_the_tag_type(smoke_db_path, tmp_path, monkeypatch):
-    # docs/TAG_SUGGESTIONS_PLAN.md Phase 1b: a card fully tagged in one layer
+    # docs/archive/TAG_SUGGESTIONS_PLAN.md Phase 1b: a card fully tagged in one layer
     # leaves that layer's list only, and an empty list keeps the type picker.
     from dashboard_lib import db, writes
 
@@ -356,7 +356,7 @@ def test_workbench_untagged_list_follows_the_tag_type(smoke_db_path, tmp_path, m
 
 
 def test_decks_page_groups_a_two_tag_card_under_its_primary(smoke_db_path, tmp_path, monkeypatch):
-    # docs/TAG_SUGGESTIONS_PLAN.md Phase 1a: the whole "Zebra,Apple" text must
+    # docs/archive/TAG_SUGGESTIONS_PLAN.md Phase 1a: the whole "Zebra,Apple" text must
     # not become a group of its own.
     from dashboard_lib import db, writes
 

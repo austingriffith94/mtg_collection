@@ -76,7 +76,7 @@ _SCHEMA_UPGRADES = [
     # land supply" rather than "new copy record" / "deleted". Every earlier
     # row is a real lot's step, so the default 0 is right for them.
     ("collection_moves", "bulk", "ALTER TABLE collection_moves ADD COLUMN bulk INTEGER DEFAULT 0"),
-    # docs/TAG_SUGGESTIONS_PLAN.md Phase 1a: a card's tag order within a tag
+    # docs/archive/TAG_SUGGESTIONS_PLAN.md Phase 1a: a card's tag order within a tag
     # type; the lowest position is its primary tag. Every earlier row was the
     # only tag of its type on that card, so the default 0 makes it the primary.
     ("card_tags", "position", "ALTER TABLE card_tags ADD COLUMN position INTEGER NOT NULL DEFAULT 0"),
@@ -327,7 +327,7 @@ _SCHEMA_TABLE_UPGRADES = [
            )""",
         None,
     ),
-    # docs/TAG_SUGGESTIONS_PLAN.md Phase 1b. Nothing to seed: a deck's
+    # docs/archive/TAG_SUGGESTIONS_PLAN.md Phase 1b. Nothing to seed: a deck's
     # vocabulary already includes the labels on its cards.
     (
         "deck_tag_vocab",

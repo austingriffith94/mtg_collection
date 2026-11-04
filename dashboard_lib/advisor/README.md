@@ -6,9 +6,13 @@ describes what is built.
 
 **Status: Phase 5** — analysis mode (four skills) and tool-based chat, on
 Gemini or Anthropic (Claude Sonnet/Opus), switchable from the page sidebar.
-No Ollama adapter (skipped, see docs/archive/ADVISOR_PLAN.md). Read-only: nothing here
-writes to the database. Tag proposals are built but no page calls them yet
-([TAG_SUGGESTIONS_PLAN.md](../../docs/TAG_SUGGESTIONS_PLAN.md)).
+No Ollama adapter (skipped, see docs/archive/ADVISOR_PLAN.md). Tag
+suggestions (`tagging.py`) are used by the Deck Editor's Card Tags tab, not the
+Advisor page ([TAG_SUGGESTIONS_PLAN.md](../../docs/TAG_SUGGESTIONS_PLAN.md)).
+
+**Read-only: nothing in this package writes to the database.** It returns
+proposals; the page (`dashboard_lib/tag_panel.py`) calls `writes.*` only after
+you tick rows and press Apply.
 
 ## How it works
 
@@ -52,8 +56,10 @@ Gated off per provider: the page only offers the Chat tab when
 | `providers.py` | `GeminiProvider` (REST, `x-goog-api-key` header, backoff on 429/5xx, function calling). `AnthropicProvider` (Phase 5; Messages API, forces a "respond" tool for schema output since Claude has no native schema param, caches the system prompt and tool definitions). `FakeProvider` for tests. |
 | `analysis.py` | Analysis mode: prompt building and the validate/retry loop. |
 | `chat.py` | Chat mode: the tool-call loop, its iteration/token budget, and the restate-then-check step. |
-| `tagging.py` | Tag proposals: `run_tag_proposals` for one deck and layer, `classify` (new / same / conflict / none), `focus_report` (thin and broad labels). Returns proposals only. |
+| `tagging.py` | Tag proposals: `run_tag_proposals` for one deck and layer (batches of 50 cards, one retry for problem cards), `classify` (new / same / conflict / none), `focus_report` (thin and broad labels), `starts_ticked`, `estimate_tokens`. Also `draft_definitions` (one line per undefined label) and `propose_vocabulary` (pass one for a layer with no defined labels). Returns proposals only. |
 | `skills/tag_suggester.md` | System prompt for tag proposals. Not in `analysis.SKILLS`, since it has its own schema and guard. |
+| `skills/tag_definitions.md` | System prompt for drafting a definition for each undefined label from sample cards. |
+| `skills/tag_vocabulary.md` | System prompt for proposing up to 10 labels for a layer with none defined (Phase 6 pass one). |
 | `skills/deck_doctor.md` | System prompt: general health check, up to 5 cuts and 5 adds. |
 | `skills/upgrade_finder.md` | System prompt: assumes the deck's plan is fine, looks only for single-for-single power upgrades. |
 | `skills/build_from_collection.md` | System prompt: maximise the deck using only owned cards, weighted toward thin computed roles and available (not sleeved) candidates. |
@@ -63,6 +69,13 @@ Gated off per provider: the page only offers the Chat tab when
 All four analysis skills share `analysis.run_analysis`, `schemas.analysis_schema`
 and `guard.check_analysis` — a skill is just a system prompt registered in
 `analysis.SKILLS`; add a new one there without touching the grounding code.
+
+Tag suggestions have their own schemas (`tag_schema`, `vocabulary_schema`) and
+guards (`check_tags`, `check_vocabulary`). A tag row's evidence quote must be a
+substring of the card's type line or oracle text; a failed quote marks the row
+unverified, never drops it. Tag rows are capped at 2 per card, and Removal and
+Interaction exclude each other (`EXCLUSIVE_LABELS`). Tests: `test_tagging.py`,
+`test_tag_panel.py`.
 
 Page: `pages/10_Advisor.py` (model toggle in the sidebar, Analysis and Chat
 tabs). Tests: `tests/test_advisor.py` (offline, includes the starter eval

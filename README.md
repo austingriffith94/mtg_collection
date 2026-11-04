@@ -321,6 +321,13 @@ jump to the same deck's other views.
     tag_type in one table (create new tag types on the fly, e.g. Rule 0
     categories). There's no deck-level tags feature — use the Deck Info
     tab's description/tutors fields for anything deck-wide instead.
+    The tab also has **Suggest tags**, which asks the Advisor's model (Gemini
+    by default) to propose tags for one layer from each card's type line and
+    oracle text. Proposals open in a pop-up review table and nothing is
+    written until you tick rows and press **Apply** (with an Undo). **Labels
+    and definitions** sets each layer's allowed labels; a layer with none can
+    **Propose a vocabulary** first. A card's first tag in a layer is its
+    primary; the rest are secondary. See `docs/TAG_SUGGESTIONS_PLAN.md`.
   - **Mainboard** — add a card (by name, or an exact set + collector
     number — resolves against your existing `cards` table first, falling
     back to a live Scryfall lookup only for a card the dashboard hasn't

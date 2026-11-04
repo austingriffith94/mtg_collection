@@ -1,7 +1,7 @@
 # Tag Suggestions Plan — AI-proposed tags, applied only by you
 
-Working plan from the discussion of 2026-11-01. **The tag feature is not
-built.** Some Advisor changes it relies on are; see "Already built". Goal: the Advisor's model reads the oracle text of a deck's mainboard cards
+Working plan from the discussion of 2026-11-01. **The tag feature is built
+(Phases 0–7).** See "Already built" for the earlier Advisor changes it relies on. Goal: the Advisor's model reads the oracle text of a deck's mainboard cards
 and proposes tags, in one or more tag layers. The proposals appear in a review
 panel. A tag is written only when you accept it and press Apply.
 
@@ -29,7 +29,7 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
   2026-11-03).
 - [x] **Phase 6** — Two-pass mode: propose a vocabulary for an untagged deck (done
   2026-11-03; checked with a scripted model, not yet with a real Gemini call or on Ayara).
-- [ ] **Phase 7** — Docs and wrap-up.
+- [x] **Phase 7** — Docs and wrap-up (done 2026-11-03).
 
 ## Decisions
 
@@ -612,6 +612,8 @@ tags, whose empty-layer message now points to the button. Tests: 907 pass.
 `advisor/README.md` (new file, new skill, and that the package stays read-only
 while the page does the writing), a README note for the Card Tags tab, and a
 line in `PROJECT_STATE.md`.
+
+**As built:** all three, plus README rows for the two new skills.
 
 ## Already built (outside the phases above)
 

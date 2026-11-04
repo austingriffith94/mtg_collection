@@ -441,3 +441,10 @@ def test_propose_vocabulary_without_a_menu_and_on_failure(ctx):
     assert "choose your own labels" in p.calls[0]["messages"][0]["content"]
     assert "no more scripted" in tagging.propose_vocabulary(FakeProvider([]), ctx).error
     assert tagging.propose_vocabulary(FakeProvider([{"labels": []}]), ctx).error == "The model returned no usable labels."
+
+
+def test_temporary_http_errors_read_as_try_again_and_others_keep_the_detail():
+    for status in (429, 503):
+        msg = providers._http_error(status, '{"error": {"message": "raw json"}}')
+        assert msg.startswith(f"HTTP {status}") and "try again" in msg and "raw json" not in msg
+    assert providers._http_error(400, "API key not valid") == "HTTP 400: API key not valid"

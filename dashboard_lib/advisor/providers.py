@@ -177,11 +177,22 @@ class GeminiProvider:
             else:
                 if r.ok:
                     return r.json()
-                err = f"HTTP {r.status_code}: {r.text[:300]}"
+                err = _http_error(r.status_code, r.text)
                 if r.status_code not in (429, 500, 502, 503, 504):
                     break
             time.sleep(2 ** attempt)
         raise ProviderError(f"Gemini ({self.model}) failed: {err}")
+
+
+def _http_error(status, text):
+    """A failed response as one line. Rate limits and server errors are
+    temporary, so they say so and that nothing was saved; anything else keeps
+    the provider's own words, which is what a bad key or model needs."""
+    if status == 429:
+        return "HTTP 429: rate limit reached. Nothing was saved; try again in a few minutes."
+    if status in (500, 502, 503, 504):
+        return f"HTTP {status}: the service is overloaded or down. Nothing was saved; try again in a few minutes."
+    return f"HTTP {status}: {text[:300]}"
 
 
 def _gemini_schema_to_json_schema(node):
@@ -304,7 +315,7 @@ class AnthropicProvider:
             else:
                 if r.ok:
                     return r.json()
-                err = f"HTTP {r.status_code}: {r.text[:300]}"
+                err = _http_error(r.status_code, r.text)
                 if r.status_code not in (429, 500, 502, 503, 504):
                     break
             time.sleep(2 ** attempt)

@@ -13,8 +13,8 @@ half-converted at a phase boundary. Go in order. Work happens on the
 
 Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 
-- [ ] **Phase 0** — Branch and plan.
-- [ ] **Phase 1** — Deck payload and mana parsing (pure Python, tested).
+- [x] **Phase 0** — Branch and plan.
+- [x] **Phase 1** — Deck payload and mana parsing (pure Python, tested).
 - [ ] **Phase 2** — The Goldfish page and component: zones, turns, mulligan, tap, log, undo.
 - [ ] **Phase 3** — Hints and library actions: castable marks, search, scry, extra draw.
 - [ ] **Phase 4** — Turn summary, docs and wrap-up.

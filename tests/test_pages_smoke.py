@@ -184,6 +184,32 @@ def test_create_deck_selects_new_deck(smoke_db_path, tmp_path, monkeypatch):
         st.cache_data.clear()
 
 
+def test_import_moxfield_list_creates_a_deck_with_shortlist_ideas(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "4_Deck_Editor.py"), default_timeout=15)
+        at.run()
+        at.sidebar.button(key="editor_import_open").click().run()
+        at.text_input(key="editor_import_name").set_value("Pasted Deck")
+        at.text_area(key="editor_import_text").set_value("1 Sol Ring (CMD) 1\n")
+        at.button(key="editor_import_go").click().run()
+        assert not at.exception
+        c = sqlite3.connect(path)
+        deck_id = c.execute("SELECT deck_id FROM decks WHERE name = 'Pasted Deck'").fetchone()[0]
+        assert c.execute("SELECT COUNT(*) FROM deck_changes WHERE deck_id=? AND status='idea'",
+                         (deck_id,)).fetchone()[0] == 1
+        assert at.session_state["current_deck_id"] == deck_id
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
 # Phase 5: the delete-game dialog adds a confirm checkbox the old inline
 # expander didn't have — cancel must leave the game, confirming removes it.
 def test_delete_game_dialog_cancel_leaves_game_confirm_removes_it(smoke_db_path, tmp_path, monkeypatch):

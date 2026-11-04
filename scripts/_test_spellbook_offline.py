@@ -646,17 +646,6 @@ def main():
           'st.text_area("Combos"' not in editor_src)
     check("the Deck Editor's save call no longer writes decks.combos",
           "combos=combos.strip()" not in editor_src)
-    # DECK_META_FIELDS must still ACCEPT "combos" even though nothing in
-    # the UI sends it anymore — scripts/migrate.py still seeds it from the
-    # CSV's Combos column on initial import (the one-way CSV->DB path is
-    # untouched), and removing it from the whitelist would silently drop
-    # that seed on a fresh migration.
-    writes_src = open(os.path.join(PROJECT_ROOT, "dashboard_lib", "writes.py"), encoding="utf-8").read()
-    check('DECK_META_FIELDS still whitelists "combos" for scripts/migrate.py\'s initial CSV import',
-          '"combos"' in writes_src)
-    migrate_src = open(os.path.join(PROJECT_ROOT, "scripts", "migrate.py"), encoding="utf-8").read()
-    check("migrate.py's one-way CSV import still seeds decks.combos from the CSV (untouched)",
-          "combos=row.get(\"Combos\")" in migrate_src)
 
     printout_src = open(os.path.join(PROJECT_ROOT, "dashboard_lib", "deck_printout.py"), encoding="utf-8").read()
     check("the printable deck sheet no longer renders the old Combos field",

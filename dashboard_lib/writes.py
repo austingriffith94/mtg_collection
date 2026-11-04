@@ -7,11 +7,8 @@ the Card Database page's Card Data "Refresh" action). Plain sqlite3, no
 Streamlit dependency, so it can be unit-tested directly against a
 scratch copy of mtg_collection.db.
 
-Migration is one-way, CSV -> DB: scripts/migrate.py wipes and rebuilds
-the whole database from the CSVs on every run, with no attempt to
-preserve anything written here. That's intentional — see migrate.py's
-module docstring and the README. Use the CSVs + migrate.py for your
-initial import, then manage things here from then on.
+The database is the source of truth: nothing rebuilds it from CSVs, so
+everything written here is kept (see the README's Backups).
 """
 import datetime
 import logging

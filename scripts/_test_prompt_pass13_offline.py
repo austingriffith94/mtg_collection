@@ -383,14 +383,6 @@ def main():
         < loaders_text.index("load_location_options.clear()", loaders_text.index("def invalidate_deck_caches")),
     )
 
-    migrate_path = os.path.join(PROJECT_ROOT, "scripts", "migrate.py")
-    with open(migrate_path, encoding="utf-8") as f:
-        migrate_text = f.read()
-    check(
-        "migrate.py seeds location_catalog on a fresh CSV import (schema.sql already has the empty table)",
-        "INSERT OR IGNORE INTO location_catalog" in migrate_text,
-    )
-
     print("\nAll Prompt Pass 13 offline checks passed.")
 
 

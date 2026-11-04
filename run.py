@@ -13,16 +13,13 @@ and tells you what's missing if something is.
 Handles launching the Streamlit dashboard, exporting a deck or your
 collection to Moxfield format, syncing the local image cache, and
 refreshing Scryfall-derived card fields (Reserved List/Game
-Changer/legality/price) without a full migration. The one-time/rare CSV
-migration is intentionally NOT a numbered menu option — it's destructive
-(wipes and rebuilds mtg_collection.db, discarding any dashboard-made
-edits) so it's tucked behind typing the word 'migrate' instead of a
-number, with its own confirmation prompt before it actually runs.
+Changer/legality/price). Nothing here rebuilds or overwrites the
+database. (Importing a Moxfield list happens inside the dashboard: Deck
+Editor -> Import a Moxfield list.)
 
 The database is also protected by dashboard_lib/backup.py: an integrity
 check and a once-a-day snapshot (backups/) whenever the dashboard is
-launched from here, a "Back up the database now" menu option, and a
-snapshot before 'migrate'.
+launched from here, and a "Back up the database now" menu option.
 """
 import os
 import sys
@@ -66,28 +63,6 @@ def require(*modules, label):
         print("Install into your active environment, then try again.\n")
         return False
     return True
-
-
-def run_migration():
-    if not require("pandas", "requests", label="the migration"):
-        return
-    print(
-        "\n⚠ This deletes and rebuilds mtg_collection.db from scratch from the "
-        "CSVs in data/ — it will silently discard any decks/collection/tags/cover "
-        "images/etc. you've added or edited in the dashboard since your last "
-        "migration. Only do this for your very first import, or if you actually "
-        "want to throw away everything the dashboard itself has stored.\n"
-    )
-    confirm = input("Type REBUILD to confirm, or anything else to cancel: ").strip()
-    if confirm != "REBUILD":
-        print("Cancelled — nothing was touched.\n")
-        return
-    saved = backup.snapshot_path(DB_PATH, "before", "migrate")
-    if saved:
-        print(f"Backed up the current database first: {saved}")
-    print("\nRunning migration — this hits the Scryfall API for each unique "
-          "printing and can take a few minutes.\n")
-    subprocess.run([sys.executable, "migrate.py"], cwd=SCRIPTS_DIR)
 
 
 def run_export():
@@ -167,8 +142,7 @@ def run_dashboard():
 
 
 # Numbered menu: (label, function, needs_db). The Exit entry is appended by
-# main() so it is always last. Migration is deliberately not here — it's
-# destructive, so it's only reachable by typing the word 'migrate'.
+# main() so it is always last.
 MENU = [
     ("Launch dashboard", run_dashboard, True),
     ("Export a deck to Moxfield format", run_export, True),
@@ -183,8 +157,7 @@ MENU = [
 def launch_dashboard_directly():
     """`python run.py --dashboard`: skip the menu and start the app."""
     if not os.path.exists(DB_PATH):
-        print("No database found yet — run `python run.py` and type 'migrate' "
-              "first.")
+        print("No database found yet — restore mtg_collection.db from a backup.")
         sys.exit(1)
     run_dashboard()
 
@@ -197,7 +170,7 @@ def main():
 
     while True:
         db_exists = os.path.exists(DB_PATH)
-        # With no DB nothing but migrate/Exit can work, so don't list the rest.
+        # With no DB nothing but Exit can work, so don't list the rest.
         items = [(label, func) for label, func, needs_db in MENU
                  if db_exists or not needs_db]
         items.append(("Exit", None))
@@ -207,20 +180,15 @@ def main():
         print(f"(using: {sys.executable})")
         print("=" * 50)
         if not db_exists:
-            print("No database found yet — type 'migrate' below to run the initial "
-                  "migration from your CSVs in data/.\n")
+            print("No database found yet — restore mtg_collection.db from a backup "
+                  "(see README: Backups).\n")
 
         for n, (label, _func) in enumerate(items, start=1):
             print(f"{n}) {label}")
         print()
-        print("Rarely needed once you're up and running — type the word, not a number:")
-        print("  migrate) Rebuild the database from CSVs in data/ "
-              "(⚠ discards any dashboard-made edits since your last migration)")
         choice = input("> ").strip()
 
-        if choice.lower() == "migrate":
-            run_migration()
-        elif choice.isdigit() and 1 <= int(choice) <= len(items):
+        if choice.isdigit() and 1 <= int(choice) <= len(items):
             func = items[int(choice) - 1][1]
             if func is None:
                 break

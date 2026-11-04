@@ -100,8 +100,7 @@ def resolve_or_fetch_card(conn, name=None, set_code=None, collector_number=None,
         return None, False, (
             "Not found in your local database, and the `requests` package isn't "
             "installed, so a live Scryfall lookup isn't possible. Run "
-            "`pip install requests` to enable adding brand-new cards, or add this "
-            "one via the CSV migration instead."
+            "`pip install requests` to enable adding brand-new cards."
         )
 
     client = client or scryfall_lookup.ScryfallClient(verbose=False)

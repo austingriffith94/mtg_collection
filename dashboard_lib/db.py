@@ -1,6 +1,6 @@
 """
 Streamlit-facing DB helpers: cached connection, "no DB yet" guard, and a
-manual cache-clear used after re-running the migration.
+manual cache-clear used after restoring a backup.
 """
 import os
 import streamlit as st
@@ -30,17 +30,16 @@ def require_db():
     if not db_exists():
         st.error(
             "No database found yet (`mtg_collection.db` is missing).\n\n"
-            "Run the migration first: from a terminal in the project folder, "
-            "run `python run.py` and choose **1) Run / refresh database "
-            "migration**, then relaunch the dashboard."
+            "Restore it from a backup in `backups/` (see the README's Backups "
+            "section), then relaunch the dashboard."
         )
         st.stop()
 
 
 def refresh_data_button(container=None):
     """Sidebar button to drop cached query results (and the cached
-    connection) after re-running migrate.py while the app is already
-    running — otherwise a rebuilt mtg_collection.db can be masked by a
+    connection) after restoring a database from a backup while the app is already
+    running — otherwise a replaced mtg_collection.db can be masked by a
     stale open file handle / cached data. Also resets every active
     sidebar filter (search text, facet selections, bool toggles,
     price/CMC range, and any bespoke filter a page registered) back to
@@ -50,7 +49,7 @@ def refresh_data_button(container=None):
     c = container or st.sidebar
     if c.button(
         "🔄 Refresh data",
-        help="Click after re-running the migration so the dashboard picks up the rebuilt database. Also resets all active sidebar filters.",
+        help="Click after replacing the database file so the dashboard picks it up. Also resets all active sidebar filters.",
     ):
         cv.reset_filters()
         st.cache_data.clear()

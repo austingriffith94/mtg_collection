@@ -34,7 +34,7 @@ from dashboard_lib import queries as q
 
 def main():
     if not os.path.exists(DB_PATH):
-        print(f"No database found at {DB_PATH} — run migrate.py first.")
+        print(f"No database found at {DB_PATH} — restore mtg_collection.db from a backup.")
         sys.exit(1)
 
     conn = q.open_connection(DB_PATH)  # also applies any pending schema upgrades

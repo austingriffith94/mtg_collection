@@ -160,7 +160,7 @@ def main():
     args = parser.parse_args()
 
     if not os.path.exists(DB_PATH):
-        print("No database found — run migrate.py first.")
+        print("No database found — restore mtg_collection.db from a backup.")
         sys.exit(1)
 
     moved, _kept = move_legacy_image_cache()

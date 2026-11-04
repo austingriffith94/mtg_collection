@@ -7,6 +7,8 @@ Personal SQLite + Streamlit dashboard replacing an Excel/Office 365-based MTG co
 
 Migration/data-layer foundation is complete and validated. The Streamlit dashboard is built out across **10 pages**, all backed by a shared library, all writable directly (no CSV editing required for day-to-day use anymore).
 
+**Migration removed, Moxfield list import added (2026-11-03):** `scripts/migrate.py` and its offline test are deleted, and `run.py` no longer has the `migrate` / `REBUILD` path, so nothing in the tool can wipe and rebuild `mtg_collection.db` (the daily/manual/pre-delete snapshots in `backups/` stay). In its place, Deck Editor's sidebar has **Import a Moxfield list**: paste a list, name the deck, and `dashboard_lib/moxfield_import.py` creates the deck with every card as a Shortlist idea (exact printing when the paste names one, else by name; a Commander section fills `commander`/`partner`; unresolved lines are reported, the rest still import). It writes only the new deck and its `deck_changes` rows, never the collection or the deck's real list. Tests: `tests/test_moxfield_import.py` plus a Deck Editor AppTest. Historical mentions of `migrate.py` below and in `docs/archive/` describe the removed script. The `data/*.csv` files are no longer read by anything except the Card Database's "Export lists to CSV" backup, which still writes two of them.
+
 **UI plan Phase 8 (data hygiene) applied:** Card Database's Game Changers / Mana Tags tabs now list the whole tag table (name-keyed) rather than only names with a `cards` row, with filters, a Delete column, add-by-name, "fetch card data" and "Export lists to CSV" (writes `data/game_changers.csv` / `data/mana_tags.csv` in the formats `migrate.py` reads). The Card Data tab has a Clean up panel (unreferenced `cards`, stale `card_tags`, orphan/missing image files; nothing deletes without a confirm). `sync_images.py` prune keeps tag-listed art, prints what it removes and supports `--dry-run`. No schema change.
 
 **Phase 1 refactor applied:** the Retired Decks concept (`is_active`/`successor_deck_id`) was removed entirely — every tracked deck is now assumed active. The standalone Tag Editor page was folded into the Editor page as a new "Card Tags" tab, and the separate "Deck Tags" feature (the `deck_tags` table) was removed outright — deck-level notes live in the description/combos/tutors fields instead. The Editor's Card Data "Refresh" action now also automatically prunes the collection (see below). Databases built before this change keep their old `is_active`/`successor_deck_id`/`deck_tags` columns physically in place (nothing is destructively dropped from a live SQLite file); `ensure_schema()` just normalizes the data (every deck → active, no successor) on connect, and the app code no longer reads or writes any of it.
@@ -78,7 +80,6 @@ mtg_dashboard/
 ├── moxfield_exports/       # created on first use
 ├── static/image_cache/     # created on first use; deck_covers/<deck_id>.png added in Phase 2; moved under static/ in UI plan Phase 4
 └── scripts/
-    ├── migrate.py             # ONE-WAY, run once for initial import
     ├── scryfall_lookup.py     # Scryfall API client
     ├── export_moxfield.py     # CLI version of Moxfield DECK export
     ├── export_moxfield_collection.py  # CLI version of Moxfield COLLECTION CSV export (Prompt Pass 6)

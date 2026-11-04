@@ -8,7 +8,7 @@ plain file copy (or a file-level backup tool) that can catch a write
 half-done.
 
 Pure stdlib, no Streamlit: used by run.py (menu option, once-a-day
-snapshot at launch, before 'migrate') and by writes.py (before a deck
+snapshot at launch) and by writes.py (before a deck
 delete or a collection prune). In-memory databases are skipped, so tests
 that use them are unaffected.
 

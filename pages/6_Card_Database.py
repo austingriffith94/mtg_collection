@@ -7,8 +7,7 @@ The Game Changers and Mana Tags tabs show the WHOLE hand-maintained list
 (the tag tables), not just names that happen to have a `cards` row. Each
 has ownership / tag / "needs attention" filters, a Delete column, an "add by
 name" form, a "fetch card data" button for names with no card row, and an
-"Export lists to CSV" backup (migrate.py rebuilds the DB from CSVs and would
-otherwise discard these lists). The Card Data tab also has a "Clean up" panel
+"Export lists to CSV" backup. The Card Data tab also has a "Clean up" panel
 listing stale rows (unreferenced cards, tags for cards no longer in a deck,
 orphaned image files) with a confirm step before anything is deleted.
 
@@ -21,11 +20,6 @@ for the same reason. See dashboard_lib/spellbook.py.
 Split out from the original combined Editor page — deck-level editing
 lives in Deck Editor, and collection/inventory management lives in
 Collection Editor.
-
-Migration is one-way (CSV -> DB): re-running scripts/migrate.py wipes and
-rebuilds the whole database from the CSVs, discarding anything edited
-here since the last migration. Use the CSVs + migrate.py for your initial
-import, then manage everything here from then on — see the README.
 """
 import sys
 import os
@@ -203,7 +197,7 @@ def _render_reference_list(cfg):
     st.divider()
     if st.button("💾 Export lists to CSV", key=f"{pre}_export",
                  help="Writes data/game_changers.csv and data/mana_tags.csv from the database, "
-                      "so re-running the migration can't discard your edits to these lists."):
+                      "as a plain-text copy of these lists."):
         counts = writes.export_reference_lists(conn, DATA_DIR)
         st.toast("Wrote " + ", ".join(f"data/{f} ({n} rows)" for f, n in counts.items()), icon="✅")
 

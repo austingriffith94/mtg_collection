@@ -164,22 +164,14 @@ def test_prune_orphaned_keeps_tag_listed_and_dry_run(conn, add_card, tmp_path, m
 
 
 # ------------------------------ CSV export ------------------------------
-def test_export_round_trips_through_migrate_loader(conn, tmp_path, monkeypatch):
-    import migrate
-
+def test_export_writes_both_reference_lists(conn, tmp_path):
     _tag(conn, "game_changer_tags", "Ad Nauseam", "Combo")
     _tag(conn, "game_changer_tags", "Rhystic Study", "Value")
     _tag(conn, "mana_tags", "Sol Ring", "Fast")
     counts = writes.export_reference_lists(conn, str(tmp_path))
     assert counts == {"game_changers.csv": 2, "mana_tags.csv": 1}
-
-    monkeypatch.setattr(migrate, "DATA_DIR", str(tmp_path))
-    stub = types.SimpleNamespace(conn=conn, log=lambda *_: None)
-    conn.execute("DELETE FROM game_changer_tags")
-    conn.execute("DELETE FROM mana_tags")
-    migrate.Migrator.load_static_reference_lists(stub)
-    assert writes.get_game_changer_tags_map(conn) == {"Ad Nauseam": ["Combo"], "Rhystic Study": ["Value"]}
-    assert writes.get_mana_tags_map(conn) == {"Sol Ring": ["Fast"]}
+    assert "Ad Nauseam" in (tmp_path / "game_changers.csv").read_text(encoding="utf-8")
+    assert "Sol Ring" in (tmp_path / "mana_tags.csv").read_text(encoding="utf-8")
 
 
 # ------------------------------ page (AppTest) ------------------------------

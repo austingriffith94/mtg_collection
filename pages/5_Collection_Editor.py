@@ -13,11 +13,6 @@ Split out from the original combined Editor page — deck-level editing
 lives in Deck Editor, and whole-database reference data (Game Changers,
 Mana Tags, Card Data refresh) lives in Card Database.
 
-Migration is one-way (CSV -> DB): re-running scripts/migrate.py wipes and
-rebuilds the whole database from the CSVs, discarding anything edited
-here since the last migration. Use the CSVs + migrate.py for your initial
-import, then manage everything here from then on — see the README.
-
 docs/archive/EDIT_FLOW_PLAN.md Phase 6: an import or add whose Location is a deck's name
 sleeves the copies there already, so it asks whether that deck's list
 should gain the card (card_view.show_deck_sync). Imports are logged as

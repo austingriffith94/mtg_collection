@@ -14,7 +14,7 @@ __pycache__/
 
 # SQLite databases — these churn on every run (card data refreshes,
 # combo checks, collection edits) and aren't meant to be versioned.
-# mtg_collection.db is rebuilt from scratch via migrate.py + your CSVs;
+# mtg_collection.db is backed up to backups/ (also ignored);
 # _test_mtg_collection.db is the offline test harnesses' scratch copy.
 *.db
 # SQLite side files (rollback journal / WAL) — transient while the app writes.

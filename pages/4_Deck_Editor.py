@@ -77,10 +77,10 @@ pages (UI plan Phase 2): it holds the deck's id, so a rename keeps it and
 creating a deck selects the new one. Cross-links to the same deck's
 other views sit above the tabs.
 
-Migration is one-way (CSV -> DB): re-running scripts/migrate.py wipes and
-rebuilds the whole database from the CSVs, discarding anything edited
-here since the last migration. Use the CSVs + migrate.py for your initial
-import, then manage everything here from then on — see the README.
+Import a Moxfield list (sidebar button): paste a list copied from Moxfield
+and it becomes a new deck with every card on its Shortlist as an idea
+(dashboard_lib/moxfield_import.py). Nothing is added to the collection or to
+a deck's real list.
 """
 import sys
 import os
@@ -90,7 +90,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pandas as pd
 import streamlit as st
 
-from dashboard_lib import db, loaders, writes, card_resolver, formatting as fmt, queries as q
+from dashboard_lib import db, loaders, writes, card_resolver, formatting as fmt, queries as q, moxfield_import
 from dashboard_lib import card_view as cv, nav, deck_board, tag_panel
 
 # Under static/ so the cover can be served by URL (UI plan Phase 4).
@@ -146,6 +146,42 @@ if st.sidebar.button("➕ Create a new deck", key="editor_newdeck_open"):
     cv.open_dialog("editor_newdeck_dialog")
 if cv.dialog_is_open("editor_newdeck_dialog"):
     _create_deck_dialog()
+
+
+@st.dialog("📥 Import a Moxfield list")
+def _import_list_dialog():
+    """Paste a list copied from Moxfield; it becomes a new deck with every
+    card on its Shortlist (moxfield_import.py). Nothing touches the
+    collection or a deck's real list."""
+    st.caption("Paste the list as text (e.g. `1 Sol Ring (C21) 263`). A Commander section fills "
+               "in the commander; every card lands on the new deck's Shortlist as an idea.")
+    name = st.text_input("Deck name (required)", key="editor_import_name")
+    text = st.text_area("Moxfield list", height=300, key="editor_import_text")
+    if st.button("Import list", key="editor_import_go"):
+        if not name.strip():
+            st.warning("Enter a deck name.")
+        else:
+            bar = st.progress(0.0, text="Looking up cards…")
+            new_id, summary, err = moxfield_import.import_list(
+                conn, name.strip(), text,
+                progress_callback=lambda i, n, card: bar.progress(i / n, text=f"{i}/{n} · {card}"),
+            )
+            bar.empty()
+            if err:
+                st.error(err)
+            else:
+                st.session_state[cv.CURRENT_DECK_KEY] = new_id
+                cv.close_dialog("editor_import_dialog")
+                cv.finish_edit({
+                    "message": f"Imported '{name.strip()}' — {summary['cards']} cards on its Shortlist.",
+                    "errors": [f"Couldn't add {line}: {why}" for line, why in summary["failed"]],
+                })
+
+
+if st.sidebar.button("📥 Import a Moxfield list", key="editor_import_open"):
+    cv.open_dialog("editor_import_dialog")
+if cv.dialog_is_open("editor_import_dialog"):
+    _import_list_dialog()
 
 if deck_id is not None:
     nav.render_deck_links("Deck_Editor")

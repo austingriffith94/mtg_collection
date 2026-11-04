@@ -1,7 +1,7 @@
 # MTG Collection & Deck Dashboard
 
-The foundation layer (SQLite schema + migration scripts converting your CSV
-exports into a real relational database) is complete and validated. The
+The foundation layer (the SQLite schema and the card/deck/collection data in it)
+is complete and validated. The
 Streamlit dashboard is built out across seven pages — Collection, Decks &
 Maybeboard, Land & Color Probability, Deck Editor, Collection Editor, Card
 Database, Commander Game Tracking, Workbench, and Card Lookup (see
@@ -48,15 +48,9 @@ mtg_dashboard/
 │   ├── deck_board.py                 # Moxfield-style Stacks view of a deck + its Shortlist (custom component; JS/CSS in components/)
 │   └── nav.py                        # page registry: sidebar sections, titles, URLs, Home link cards
 ├── tests/                             # pytest suite on an in-memory DB (python -m pytest tests) — see tests/README.md
-├── data/                              # your source CSVs go here
-│   ├── decks.csv
-│   ├── maybeboard.csv
-│   ├── collection.csv
-│   ├── deck_mapping.csv
-│   ├── games_played.csv
+├── data/                              # written by Card Database -> "Export lists to CSV"
 │   ├── game_changers.csv             # your custom Game Changer categories
-│   ├── mana_tags.csv                 # your optimized-mana categories
-│   └── deck_themes.csv               # main/sub theme per deck
+│   └── mana_tags.csv                 # your optimized-mana categories
 ├── moxfield_exports/                  # created on first use — .txt files saved from the dashboard
 ├── static/                            # served by Streamlit at app/static/ — see static/README.md
 │   └── image_cache/                   # created on first use — one .jpg per printing (sync_images.py),
@@ -64,17 +58,12 @@ mtg_dashboard/
 └── scripts/
     ├── scryfall_lookup.py            # Scryfall API client (lazy fetch + cache) — also
     │                                  # reused directly by dashboard_lib/card_resolver.py
-    ├── migrate.py                    # main migration script — one-way, CSV -> DB, run once
     ├── export_moxfield.py            # deck → Moxfield paste format (CLI; dashboard has this too)
     ├── export_moxfield_collection.py  # collection → Moxfield CSV import format (CLI; dashboard has this too)
     ├── refresh_card_data.py          # refresh Scryfall fields for existing cards (CLI; dashboard has this too)
     ├── copy_function_tags.py         # copy functional labels from strategy tags into the function tag type
     ├── sync_images.py                 # local image cache: download + prune
-    ├── move_image_cache.py            # one-time move of an old image_cache/ into static/ (run.py does it for you)
-    └── _test_migrate_offline.py      # dev-only: validates logic with fake
-                                       # data, no network needed. Not part
-                                       # of your real workflow — ignore unless
-                                       # you're modifying the schema/scripts.
+    └── move_image_cache.py            # one-time move of an old image_cache/ into static/ (run.py does it for you)
 ```
 
 `dashboard_lib` is split deliberately: `formatting.py`, `queries.py`,
@@ -87,7 +76,7 @@ caching and widgets.
 
 ## Setup
 
-The migration/export/sync scripts need exactly two third-party packages;
+The export/sync scripts need exactly two third-party packages;
 the dashboard itself additionally needs `streamlit`. Everything else used
 is Python standard library. Install into whatever environment you're
 managing yourself (conda, venv, VS Code's env picker, etc.):
@@ -106,7 +95,6 @@ tightly:
 
 | Script/page | pandas | requests | streamlit |
 |---|:---:|:---:|:---:|
-| `migrate.py` | ✅ | ✅ (via `scryfall_lookup.py`) | — |
 | `sync_images.py` | — | ✅ | — |
 | `export_moxfield.py` | — | — | — |
 | `export_moxfield_collection.py` | — | — | — |
@@ -114,7 +102,7 @@ tightly:
 | `copy_function_tags.py` | ✅ | — | — |
 | `dashboard.py` + `pages/*.py` | ✅ | optional* | ✅ |
 
-`pandas` is used by migration and the dashboard, but not image sync or
+`pandas` is used by the dashboard, but not image sync or
 either Moxfield export. `streamlit` is dashboard-only. Both Moxfield
 exports are pure stdlib — no install needed at all for those two.
 
@@ -163,18 +151,10 @@ Opens straight into a menu:
 4) Sync image cache (download new + prune unused)
 5) Refresh Scryfall card data (Reserved List/Game Changer/legality/price)
 6) Exit
-
-Rarely needed once you're up and running — type the word, not a number:
-  migrate) Rebuild the database from CSVs in data/ (⚠ discards any dashboard-made edits since your last migration)
 ```
 
-The one-time/rare CSV migration is deliberately **not** a numbered option —
-`migrate.py` wipes and rebuilds `mtg_collection.db` from scratch every
-run (see "Migration is one-way" below), so it's tucked behind typing the
-word `migrate` instead of a digit, and asks you to type `REBUILD` to
-confirm before it actually touches anything. The first time you run
-`run.py` with no `mtg_collection.db` yet, the menu shows only Exit and
-tells you to type `migrate` to get started.
+Nothing in the launcher rebuilds or overwrites `mtg_collection.db`. If the file
+is missing, the menu shows only Exit — restore it from `backups/` (see below).
 
 ### Backups
 
@@ -187,7 +167,7 @@ backup API:
   (also runs an integrity check first; a damaged database is flagged, with the
   newest good snapshot named, and no snapshot is taken). Newest 14 kept.
 - **Manual** — menu option "Back up the database now". Newest 10 kept.
-- **Before risky actions** — before `migrate`, deleting a deck and pruning
+- **Before risky actions** — deleting a deck and pruning
   collection lots (at most one per action every 10 minutes). Newest 10 kept.
 
 **Restoring:** close the dashboard, then copy the snapshot you want over
@@ -206,7 +186,7 @@ for you, in keeping with staying out of your environment management.
 
 Option 1 launches the real Streamlit dashboard (`dashboard.py`, plus
 everything under `pages/`) — make sure `streamlit` is installed (see
-"Setup" above), then run the migration first if you haven't already.
+"Setup" above), and that `mtg_collection.db` exists.
 
 The sidebar groups the pages into four sections (the list lives in
 `dashboard_lib/nav.py`):
@@ -374,15 +354,15 @@ jump to the same deck's other views.
     no card data show without art; a *Scryfall says* column flags entries
     Scryfall no longer lists). Filter by ownership, category or "needs
     attention", delete stale names, add a name directly, fetch missing card
-    data, and **Export lists to CSV** so a re-migration can't lose your
-    edits. The Mana Tags tab works the same way. Edit categories
+    data, and **Export lists to CSV** for a plain-text copy of
+    them. The Mana Tags tab works the same way. Edit categories
     per card (picked from a master category dropdown you manage, same
     pattern as Themes), and see at a glance how many copies you own and
     how many of your decks currently run it.
   - **Card Data** — re-fetches every card already in your database by its
     permanent Scryfall ID and refreshes its Reserved List flag, Game
     Changer flag, Showcase/Borderless flags, Commander legality, and
-    price — without the wipe-and-rebuild `migrate.py` does. Afterward it
+    price, leaving everything else alone. Afterward it
     also automatically prunes the collection: any non-basic lot with no
     assigned location and a quantity of 0/none is deleted, even if a deck
     lists the card (see *Cards you don't own* below). Same underlying logic (and same
@@ -495,26 +475,17 @@ already in your database). Those remain later-phase work. (Printable
 output is no longer on this list: the deck sheet and the brew pull sheet
 both ship as self-contained HTML you print or save as PDF from a browser.)
 
-### Migration is one-way: CSV → database, not the reverse
+### The database is the source of truth
 
-`migrate.py` is meant for your **initial import only**. It always wipes
-and rebuilds `mtg_collection.db` from scratch from the CSVs — there's no
-attempt to preserve anything you've since edited in the dashboard (card
-tags, deck metadata, mainboard/shortlist, themes, collection lots). If
-you re-run it after you've started managing things in the dashboard, it
-will silently overwrite those edits back to whatever the CSVs say, and
-it'll print a one-line warning to that effect right before it does.
+The old one-way CSV migration has been removed from the tool, so nothing can
+wipe and rebuild `mtg_collection.db`. Manage decks, card tags,
+mainboard/shortlist, themes, and the collection directly in the dashboard's
+Deck Editor and Collection Editor pages. To bring in a list from Moxfield, use
+Deck Editor → **Import a Moxfield list** (see "Moxfield import" below).
 
-**The rule going forward: once you've moved your data over, don't run
-`migrate.py` again.** Manage decks, card tags, mainboard/shortlist,
-themes, and the collection directly in the dashboard's Deck Editor and
-Collection Editor pages from then on — that's now the source of truth,
-and there's no CSV round-trip needed for any of it.
+### Schema changes: additive upgrades on connect
 
-### Schema changes without re-migrating: additive upgrades on connect
-
-With `migrate.py` retired as a re-runnable tool, the schema still needs a
-way to grow occasionally without wiping your database.
+The schema still needs a way to grow occasionally without wiping your database.
 `dashboard_lib/queries.open_connection()` — the one function everything
 else connects through — checks for a short list of expected
 columns/tables/views on every connect and applies a plain `ALTER TABLE`
@@ -536,82 +507,7 @@ follow the same pattern (see `_SCHEMA_UPGRADES` / `_SCHEMA_TABLE_UPGRADES`
 The same path added `deck_changes` — the unified idea → planned → applied
 change lifecycle described under "Deck change lifecycle" below — seeding it
 from your existing maybeboard and swap-queue rows on first connect, so
-nothing had to be retyped and no re-migration was needed.
-
-I tested every menu path against a mocked environment: normal exit,
-blocked options before migration, invalid input, and the missing-package
-warning correctly firing only for actions that actually need pandas/
-requests (confirmed Moxfield export triggers no warning at all, since
-it's pure stdlib). The one thing I can't verify here is a real `pip`/
-`conda install` in your actual environment, since this sandbox doesn't
-have one to test against.
-
-### Manual alternative
-
-If you'd rather not use the launcher, everything still works the way it
-did before — see "Running the migration" and "Moxfield export" below.
-
-## Running the migration (manual)
-
-```bash
-cd scripts
-python migrate.py
-```
-
-This will:
-1. Wipe and rebuild `../mtg_collection.db` from `schema.sql`
-2. Load decks, win conditions/strengths/weaknesses, themes (if present)
-3. Load your collection — **one Scryfall API call per unique printing**
-   (~1,950 calls, exact `set/collector_number` lookups, so this is a real
-   printing match, not a fuzzy guess). At ~100ms/call this takes roughly
-   3-4 minutes.
-4. Load decklists + maybeboards, preferring the exact printing you already
-   own (matched from step 3) so Moxfield exports show the correct art.
-   Only cards you don't yet own trigger a fresh by-name Scryfall lookup
-   (~1,415 of these, based on your current data — same time cost as above).
-5. Load the game log
-6. Print a full resolution report — **read this**. It'll flag anything
-   that didn't match cleanly (mostly typo'd "Replace" targets in your
-   maybeboard notes — those are kept as free text, not FK-linked, and
-   don't block anything else).
-
-Re-running `migrate.py` deletes and rebuilds the `.db` file from scratch
-every time — see "Migration is one-way" above. It'll print a warning if
-a database already exists, since a re-run at that point discards any
-dashboard-made edits.
-
-## What I already validated
-
-I dry-ran the full migration logic against your real CSVs using a mocked
-Scryfall client (no live API calls, synthetic card data) to catch bugs
-before handing this off. Confirmed:
-- Raktres totals exactly 100 cards, matching your data
-- The two decks that predate `deck_mapping.csv` (Rakdos Showstopper,
-  Vorevold, Sac Master — see `FORMER_DECK_NAMES` in `migrate.py`) still
-  get registered as ordinary decks, so their entries in
-  `games_played.csv` link to a real `deck_id` instead of falling through
-  to the free-text "unmatched opponent" path
-- Strategy tag counts for Raktres match your PDF **exactly** (Card Adv 18,
-  Pinger 12, Rakdos Target 10, Removal 6, Utility 6, Ramp 5, Interaction 5,
-  Protection 4, Big Damage 4)
-- Win conditions parse correctly (`"Big Bois: Big Mana Threats..."` →
-  label/description split)
-- 465 of 1,879 decklist rows already resolve straight from your owned
-  collection with zero extra API calls; only 1 maybeboard card
-  ("Cantankerous Keepers") couldn't be found on Scryfall at all — worth
-  double-checking that name
-- `game_changer_tags` (63 rows) and `mana_tags` (89 rows) load cleanly,
-  and the drift-detection view correctly flags disagreements between
-  your custom list and the (mocked, for this test) Scryfall flag in
-  both directions
-- `deck_themes.csv` loads correctly — 74 theme assignments across all 22
-  tracked decks, and Raktres's main theme resolves to "Group Slug",
-  matching your PDF exactly
-
-What I *couldn't* test here: the real Scryfall responses, since this
-sandbox has no network access. Read the resolution report closely on your
-first real run — synthetic data can't catch things like a real 404 or an
-unexpected card-face format.
+nothing had to be retyped.
 
 ## Game Changers and Reserved List — pulled straight from Scryfall
 
@@ -621,8 +517,7 @@ fetch time — no manual list to maintain for either one. "At fetch time"
 matters: once a card is in your database, its flags stay whatever they
 were when you last fetched it — they don't silently update on their own.
 If WotC revises the Bracket list or adds to the Reserved List later, your
-existing cards won't reflect that until you either re-run `migrate.py`
-(which, per above, wipes and rebuilds everything) or use the **Card
+existing cards won't reflect that until you use the **Card
 Database page's "Card Data" tab** (or `scripts/refresh_card_data.py` from
 the command line), which re-fetches every card by its permanent Scryfall ID
 and updates just these fields — Reserved List, Game Changer, Commander
@@ -1081,6 +976,20 @@ JOIN cards c ON c.scryfall_id = dc.scryfall_id
 WHERE c.commander_legal = 0;
 ```
 
+## Moxfield import
+
+Deck Editor → sidebar → **📥 Import a Moxfield list**: give the new deck a name,
+paste a list copied from Moxfield (`1 Sol Ring (C21) 263`, `1x Sol Ring`, with
+optional `Commander` / `Mainboard` / `Sideboard` / `Maybeboard` headings and
+`//` comment lines), and it creates the deck with every card on its **Shortlist**
+as an idea. A Commander section fills in the deck's commander (and partner).
+Nothing is added to your collection or to the deck's real list, so the Workbench
+buy list and the Shortlist show what the list would take from your cards and
+what you'd have to buy. Cards are matched to the exact printing when the paste
+names one (looked up on Scryfall if the database has never seen it), otherwise
+by name; lines that can't be found are listed after the import and the rest are
+still imported. Logic lives in `dashboard_lib/moxfield_import.py`.
+
 ## Moxfield export
 
 There are two, separate Moxfield export features: a **deck** paste-format
@@ -1216,7 +1125,7 @@ a card from a deck and it isn't sitting anywhere else. It clears
 so if that printing gets referenced again later, it just re-downloads
 cleanly rather than pointing at a dangling path.
 
-Run it via the launcher (option 4) any time after a migration that adds
+Run it via the launcher (option 4) any time after adding
 new cards, or periodically to clear out anything orphaned by deck edits.
 I validated the full download → link → prune → re-link cycle against the
 mock database (including deliberately orphaning 5 cached images and
@@ -1224,21 +1133,15 @@ confirming both the files and their DB paths were cleaned up correctly)
 — the one thing I couldn't test here is a real Scryfall image download,
 since this sandbox has no network access.
 
-## Custom fields & editable data: CSV for initial import, dashboard from then on
+## Editable data
 
 Deck names/metadata, mainboard, maybeboard, themes, collection lots, card
 tags, Game Changer categories, and (Prompt Pass 12) mana tags are all
 editable directly in the dashboard (Deck Editor and Card Database pages —
 there's no separate Tag Editor page anymore; it was folded into Deck
-Editor's Card Tags tab) — no CSV round-trip
-needed for any of it. (EDHREC salt scores used to be hand-editable here
+Editor's Card Tags tab). (EDHREC salt scores used to be hand-editable here
 too; that feature was retired dashboard-wide — see "EDHREC Salt Score"
 below.)
-
-`migrate.py` wipes and rebuilds the whole database on every run, with no
-attempt to preserve dashboard edits — see "Migration is one-way" above.
-Use it for your initial CSV import, then manage everything through the
-dashboard from then on.
 
 ## Next steps (not built yet)
 

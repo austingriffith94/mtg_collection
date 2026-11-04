@@ -39,6 +39,8 @@
 .piles { margin-left: auto; display: flex; align-items: center; gap: 6px; }
 .pile-count { opacity: 0.75; margin-right: 4px; }
 .pile-btn { padding: 2px 10px; font-size: 13px; }
+.pile-btn:disabled { opacity: 0.45; cursor: default; }
+.mana-colors { opacity: 0.8; margin-left: -6px; letter-spacing: 0.02em; }
 .banner {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 8px 10px; margin-bottom: 10px;
@@ -104,6 +106,38 @@
 }
 .b-sick { background: #5a4a1f; }
 .b-maybe { background: #1f4f7a; }
+.b-cast { background: #2f6b3a; font-size: 12px; padding: 1px 4px; }
+.gcard.castable .gcard-img, .gcard.castable .gcard-noimg { box-shadow: 0 0 0 2px #4caf6a, 0 1px 4px rgba(0, 0, 0, 0.45); }
+
+/* ---- library panels (search, look at top) ---- */
+.panel { border-color: var(--st-primary-color, #c0392b); }
+.panel-tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.panel-tools .gbtn { padding: 2px 10px; }
+.panel-filter {
+  flex: 1; min-width: 180px; padding: 4px 8px; font: inherit; color: inherit;
+  background: var(--st-background-color, #0e1117);
+  border: 1px solid var(--st-border-color, #444); border-radius: var(--st-base-radius, 8px);
+}
+.panel-check { opacity: 0.85; cursor: pointer; }
+.search-list { max-height: 340px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.search-count { opacity: 0.6; font-size: 12px; margin-bottom: 4px; }
+.search-row { display: flex; align-items: center; gap: 8px; padding: 3px 4px; border-radius: 6px; }
+.search-row:hover { background: rgba(127, 127, 127, 0.12); }
+.search-label { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.search-name { font-weight: 600; }
+.search-type { opacity: 0.7; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search-acts { display: flex; gap: 4px; flex: none; }
+.search-acts .menu-item { padding: 2px 8px; font-size: 12px; }
+.look-n { min-width: 1.5em; text-align: center; font-weight: 600; }
+.look-col { display: flex; flex-direction: column; align-items: center; gap: 4px; width: var(--card-w); }
+.look-label { font-size: 12px; opacity: 0.8; text-align: center; }
+.look-picks { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; width: 100%; }
+.look-pick {
+  font: inherit; font-size: 11px; padding: 2px 0; cursor: pointer; color: inherit;
+  background: var(--st-secondary-background-color, #1b1f27);
+  border: 1px solid var(--st-border-color, #444); border-radius: 5px;
+}
+.look-pick.active { background: var(--st-primary-color, #c0392b); border-color: var(--st-primary-color, #c0392b); color: #fff; }
 .more {
   position: absolute; top: 3px; left: 3px; padding: 0 6px; line-height: 18px; font-size: 14px;
   background: rgba(0, 0, 0, 0.72); color: #fff; border: 1px solid rgba(255, 255, 255, 0.35);

@@ -16,7 +16,7 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] **Phase 0** — Branch and plan.
 - [x] **Phase 1** — Deck payload and mana parsing (pure Python, tested).
 - [x] **Phase 2** — The Goldfish page and component: zones, turns, mulligan, tap, log, undo.
-- [ ] **Phase 3** — Hints and library actions: castable marks, search, scry, extra draw.
+- [x] **Phase 3** — Hints and library actions: castable marks, search, scry, extra draw.
 - [ ] **Phase 4** — Turn summary, docs and wrap-up.
 
 ## Decisions
@@ -390,6 +390,37 @@ totals as a minimum.
   `{W}{G}`), Sol Ring paying only generic, too little mana, a `?` source, and
   a `null` cost; a scripted Cultivate-style search; scry keeps the order you
   chose; undo after a search restores the library order.
+
+- **As built (2026-11-03):**
+  - Rules added: `manaSources`, `manaAvailable` (now with `colors`),
+    `canPay`, `castable`, `drawExtra`, `shuffleLibrary`, `searchLibrary`,
+    `arrangeTop`.
+  - **One change from the plan:** a source making more than 1 (Sol Ring) can
+    pay one pip it covers, with the rest going to generic, instead of paying
+    generic only. Sol Ring can pay `{C}{1}` that way. The rule still never
+    claims more mana than is there; a `{G}{G}` source paying `{G}{G}` gets no
+    ✦ (it's left out, not marked wrong). "Any color" never pays `{C}`. Each
+    twobrid `{2/W}` is tried both as `{W}` and as 2 generic.
+  - The readout lists one label per mana in WUBRG order, multicolor sources
+    as `W/G`, then `✱` and `?`: `Mana available: 4 + ? (G C C W/G ?)`.
+  - **Draw**, **Search** and **Look at top** sit next to the library count.
+    Search groups copies (`Swamp ×18`), filters as you type without losing
+    focus, and offers Hand · Battlefield · Battlefield tapped (the two-face
+    chooser shows the non-spell faces only). Each pick shuffles the library,
+    so a Cultivate is two picks. The panel stays open until Close, and its
+    **Shuffle library** button covers a search that finds nothing. Searching
+    doesn't use the land drop.
+  - Look at top starts at 2 (− / + from 1 to 10). The choices are Top,
+    Bottom, Graveyard and Hand (Hand covers impulse effects). Top and bottom
+    follow the order you click, clicking a choice again clears it, and an
+    undecided card stays on top after the chosen ones. Done applies it all as
+    one undo step. It's refused if the top of the library changed underneath.
+  - Checks run: the full suite (954 passed), AppTest on all 12 real decks (on
+    a copy), esprima, and the headless Edge run grown to 81 items (Phase 2's
+    38 + the castable matrix, readout, scripted Cultivate / scry / surveil,
+    and the DOM: ✦ matches the rules on every hand card, search filter /
+    basics / pick / undo, look order / undo), on a copy with the server's DB
+    path checked first and the live file's size and mtime unchanged after.
 
 ### Phase 4 — Turn summary, docs
 

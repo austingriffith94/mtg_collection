@@ -56,8 +56,15 @@ cv.how_it_works(
     "**Undo** steps back one action at a time, **New hand** starts over with a fresh 7, "
     "and **Reset** goes back to choosing play or draw.",
     "Rules are shown, not enforced: a second land in a turn warns but is allowed, and "
-    "**Mana available** is what your untapped sources could make (`?` for a source whose output "
-    "can't be read from its text). You tap your own sources; nothing is paid for you.",
+    "**Mana available** is what your untapped sources could make, with their colors (`✱` for any "
+    "color, `?` for a source whose output can't be read from its text). A **✦** marks a card in "
+    "your hand or command zone that those sources could pay for, commander tax included. You tap "
+    "your own sources; nothing is paid for you.",
+    "Next to the library count: **Draw** draws an extra card, **Search** lists the library "
+    "(filter by name or type, or basic lands only) and puts the card you pick in your hand or "
+    "onto the battlefield, then shuffles, and **Look at top** shows the top cards to keep on top "
+    "(in the order you click), put on the bottom, mill or take into your hand: a scry, surveil "
+    "or impulse.",
     "The game lives in your browser and is never saved. Changing deck or leaving the page ends it.",
 )
 

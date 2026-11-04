@@ -1,5 +1,5 @@
 // Goldfish: play a deck's first turns alone by clicking (docs/GOLDFISH_PLAN.md,
-// Phase 2).
+// Phases 2-3).
 //
 // CCv2 module: `export default function(component)`. Everything is drawn
 // under `parentElement` (a shadow root, never `document`) and the function
@@ -15,8 +15,8 @@
 //                        "<id>#1" … "<id>#n", since each copy taps separately.
 //
 // The file has two parts. The RULES part (state, shuffle, draw, mulligan,
-// play, tap, move, next turn, mana count) has no DOM code, so a headless
-// check can call it directly. The DRAWING part reads the state and renders
+// play, tap, move, next turn, mana count, the castable check, search and
+// look-at-top) has no DOM code, so a headless check can call it directly. The DRAWING part reads the state and renders
 // it; every click goes through act(), which saves an undo snapshot first.
 //
 // The game survives reruns by living in a store on parentElement, not in
@@ -266,22 +266,192 @@ function nextTurn(state) {
   return drawCards(state, 1);
 }
 
-function manaAvailable(state, deck) {
-  // {amount, unknown}: untapped, non-sick sources. A source with several
-  // abilities (Talisman) counts its best readable one; one whose only
-  // abilities can't be read (Cabal Coffers) is an unknown, the "?".
-  let amount = 0;
-  let unknown = 0;
+function manaSources(state, deck) {
+  // The untapped, non-sick battlefield cards with a mana ability, as
+  // [{id, options, unknown}]. `options` are the abilities whose amount can be
+  // read; a source with none of those (Cabal Coffers) is `unknown`, the "?".
+  const sources = [];
   for (const id of state.lands.concat(state.permanents)) {
     const mark = state.marks[id] || {};
     if (mark.tapped || mark.sick) continue;
     const abilities = faceOf(state, deck, id).mana;
     if (!abilities || !abilities.length) continue;
-    const known = abilities.map(a => a.amount).filter(a => a != null);
-    if (known.length) amount += Math.max(...known);
-    else unknown++;
+    const options = abilities.filter(a => a.amount != null);
+    sources.push({ id, options, unknown: !options.length });
   }
-  return { amount, unknown };
+  return sources;
+}
+
+const COLOR_ORDER = "WUBRGC✱?";
+
+function sourceLabel(source) {
+  // "G", "G/W", "✱" (any color) or "?"; a source making 2 (Sol Ring) is
+  // listed twice, so the labels add up to the amount.
+  if (source.unknown) return ["?"];
+  const best = Math.max(...source.options.map(o => o.amount));
+  const any = source.options.some(o => o.any);
+  const colors = [];
+  for (const o of source.options) for (const c of o.colors) if (!colors.includes(c)) colors.push(c);
+  colors.sort((a, b) => COLOR_ORDER.indexOf(a) - COLOR_ORDER.indexOf(b));
+  return Array(best).fill(any ? "✱" : colors.join("/") || "?");
+}
+
+function manaAvailable(state, deck) {
+  // {amount, unknown, colors}: what untapped, non-sick sources could make.
+  // A source with several abilities (Talisman) counts its best readable one.
+  let amount = 0;
+  let unknown = 0;
+  const colors = [];
+  for (const source of manaSources(state, deck)) {
+    if (source.unknown) unknown++;
+    else amount += Math.max(...source.options.map(o => o.amount));
+    colors.push(...sourceLabel(source));
+  }
+  // Single colors in WUBRGC order first, then multi-color sources, then ✱ and ?.
+  const rank = label => (label === "✱" ? 2 : label === "?" ? 3 : label.includes("/") ? 1 : 0);
+  colors.sort((a, b) => (rank(a) - rank(b)) || (COLOR_ORDER.indexOf(a[0]) - COLOR_ORDER.indexOf(b[0])) || a.localeCompare(b));
+  return { amount, unknown, colors };
+}
+
+// ---- castable check ----
+const PIP_COLORS = ["W", "U", "B", "R", "G", "C"];
+
+function covers(option, color) {
+  // "Any color" makes W/U/B/R/G but never colorless.
+  return option.colors.includes(color) || (option.any && color !== "C");
+}
+
+function payPips(sources, pips, generic) {
+  // Each colored pip (a list of colors that pay it) gets its own source, by
+  // a small bipartite match (Kuhn's augmenting paths), so Forest + Temple
+  // Garden pays {W}{G} whichever pip is tried first. A source pays at most
+  // one pip, and the rest of what it makes (Sol Ring's second {C}) goes to
+  // generic, as do the unmatched sources. Never claims more than is there.
+  const owner = new Array(sources.length).fill(-1);   // source -> pip index
+  const pays = (s, p) => sources[s].options.some(o => pips[p].some(c => covers(o, c)));
+  const assign = (p, seen) => {
+    for (let s = 0; s < sources.length; s++) {
+      if (seen[s] || !pays(s, p)) continue;
+      seen[s] = true;
+      if (owner[s] < 0 || assign(owner[s], seen)) { owner[s] = p; return true; }
+    }
+    return false;
+  };
+  for (let p = 0; p < pips.length; p++) {
+    if (!assign(p, new Array(sources.length).fill(false))) return false;
+  }
+  let left = 0;
+  sources.forEach((source, s) => {
+    const p = owner[s];
+    const usable = p < 0 ? source.options : source.options.filter(o => pips[p].some(c => covers(o, c)));
+    left += Math.max(...usable.map(o => o.amount)) - (p < 0 ? 0 : 1);
+  });
+  return left >= generic;
+}
+
+function canPay(sources, cost, extraGeneric = 0) {
+  // True when the untapped `sources` can pay `cost` (+ commander tax as
+  // `extraGeneric`). A null cost is never castable. Unknown sources ("?")
+  // are left out, so the mark only shows when the spell is castable without
+  // them. Hybrid pips accept either color, Phyrexian pips always pass (2
+  // life), X counts as 0, and each {2/W} is tried both as {W} and as 2.
+  if (!cost) return false;
+  const known = sources.filter(s => !s.unknown);
+  const base = [];
+  for (const c of PIP_COLORS) for (let k = 0; k < (cost[c] || 0); k++) base.push([c]);
+  for (const h of cost.hybrid || []) base.push(h);
+  const twobrid = cost.twobrid || [];
+  const generic = (cost.generic || 0) + extraGeneric;
+  for (let mask = 0; mask < (1 << twobrid.length); mask++) {
+    const pips = base.slice();
+    let g = generic;
+    twobrid.forEach((c, i) => { if (mask & (1 << i)) pips.push([c]); else g += 2; });
+    if (payPips(known, pips, g)) return true;
+  }
+  return false;
+}
+
+function castable(state, deck, id, zone) {
+  // The ✦ mark: a hand or command-zone card with a non-land face the
+  // untapped sources can pay for. A commander pays its tax.
+  if (state.phase !== "play" || (zone !== "hand" && zone !== "command")) return false;
+  const extra = zone === "command" ? commanderTax(state, id) : 0;
+  const sources = manaSources(state, deck);
+  return (deck.defs[id].faces || []).some(f => f.kind !== "land" && canPay(sources, f.cost, extra));
+}
+
+// ---- library actions ----
+function drawExtra(state) {
+  // An extra draw, for card-draw spells.
+  if (state.phase !== "play") return { error: "Keep a hand first." };
+  const result = drawCards(state, 1);
+  if (result.drawn) logEntry(state, "Drew a card");
+  return result;
+}
+
+function shuffleLibrary(state) {
+  if (state.phase !== "play") return { error: "Keep a hand first." };
+  shuffle(state.library);
+  logEntry(state, "Shuffled library");
+  return {};
+}
+
+const SEARCH_DESTINATIONS = { hand: "hand", battlefield: "battlefield", tapped: "battlefield tapped" };
+
+function searchLibrary(state, deck, id, dest, face = 0) {
+  // Take one card from the library to the hand or onto the battlefield
+  // (tapped or not, whatever the card says; you chose), then shuffle, as a
+  // tutor or a Cultivate does. Doesn't use the land drop. A Cultivate is two
+  // searches; the shuffle after each one changes nothing you could see.
+  if (state.phase !== "play" || !state.library.includes(id)) return { error: "That card isn't in the library." };
+  if (!(dest in SEARCH_DESTINATIONS)) return { error: "Unknown destination." };
+  const card = deck.defs[id];
+  const f = card.faces[face] || card.faces[0];
+  if (dest !== "hand" && f.kind === "spell") return { error: "An instant or sorcery can't go onto the battlefield." };
+  removeFromZone(state, id);
+  if (dest === "hand") {
+    state.hand.push(id);
+  } else {
+    putOntoBattlefield(state, deck, id, face);
+    state.marks[id].tapped = dest === "tapped";
+  }
+  shuffle(state.library);
+  logEntry(state, "Searched: " + (dest === "hand" ? card.name : f.name) + " → " + SEARCH_DESTINATIONS[dest]);
+  return {};
+}
+
+const LOOK_DESTINATIONS = ["top", "bottom", "graveyard", "hand"];
+
+function arrangeTop(state, deck, plan) {
+  // Look at top N / scry / surveil, applied at once. plan:
+  //   ids   the top N as they were looked at (must still be the top N)
+  //   order [[id, dest]] in click order, dest one of LOOK_DESTINATIONS
+  // Cards kept on top go back in click order, with any card left undecided
+  // after them in its old order; bottom cards go under the library in
+  // click order.
+  const ids = plan.ids || [];
+  if (state.phase !== "play") return { error: "Keep a hand first." };
+  if (!ids.length || ids.some((id, i) => state.library[i] !== id)) {
+    return { error: "The top of the library changed; look again." };
+  }
+  const dest = {};
+  for (const [id, d] of plan.order || []) {
+    if (!ids.includes(id) || !LOOK_DESTINATIONS.includes(d)) return { error: "Not one of the cards looked at." };
+    dest[id] = d;
+  }
+  const clicked = (plan.order || []).map(([id]) => id).filter((id, i, all) => all.lastIndexOf(id) === i);
+  const pick = d => clicked.filter(id => dest[id] === d);
+  const top = pick("top").concat(ids.filter(id => !dest[id]));
+  const bottom = pick("bottom");
+  const rest = state.library.slice(ids.length);
+  state.library = top.concat(rest, bottom);
+  state.graveyard.push(...pick("graveyard"));
+  state.hand.push(...pick("hand"));
+  const parts = [top.length + " on top", bottom.length + " on the bottom"];
+  for (const id of pick("graveyard")) parts.push(deck.defs[id].name + " → graveyard");
+  for (const id of pick("hand")) parts.push(deck.defs[id].name + " → hand");
+  logEntry(state, "Top " + ids.length + ": " + parts.join(", "));
+  return {};
 }
 
 function counts(state) {
@@ -293,7 +463,8 @@ function counts(state) {
 const RULES = {
   shuffle, expandDeck, newGame, start, mulligan, mulliganBottomCount, keep, bottomCard,
   playFromHand, castCommander, commanderTax, toggleTap, moveCard, nextTurn, drawCards,
-  manaAvailable, faceOf, zoneOf, counts,
+  manaSources, manaAvailable, canPay, castable, drawExtra, shuffleLibrary, searchLibrary,
+  arrangeTop, faceOf, zoneOf, counts,
 };
 
 // ======================================================================
@@ -305,7 +476,9 @@ function makeStore(deck) {
     deck,
     state: newGame(deck),
     history: [],               // JSON snapshots, newest last
-    ui: { pile: null },        // which pile list is open (graveyard / exile)
+    // Open pile list (graveyard / exile), open library panel (search / look),
+    // the search filter, and the look-at-top picks not yet applied.
+    ui: { pile: null, panel: null, search: { query: "", basics: false }, look: null },
     rules: RULES,
     images: new Map(),         // copyId -> <img>, reused so redraws don't reload art
     render: () => {},
@@ -328,6 +501,7 @@ function makeStore(deck) {
   store.undo = () => {
     if (!store.history.length) return false;
     store.state = JSON.parse(store.history.pop());
+    store.ui.look = null;      // retaken from the restored top of the library
     store.render();
     return true;
   };
@@ -337,12 +511,14 @@ function makeStore(deck) {
     const { onPlay, freeMulligan } = store.state;
     store.state = newGame(deck, { onPlay, freeMulligan });
     store.history = [];
+    store.ui.panel = store.ui.look = null;
     start(store.state, onPlay);
     store.render();
   };
   store.reset = () => {
     store.state = newGame(deck, { freeMulligan: store.state.freeMulligan });
     store.history = [];
+    store.ui.panel = store.ui.look = null;
     store.render();
   };
   return store;
@@ -477,12 +653,14 @@ export default function (component) {
   window.addEventListener("pointerdown", onPointer, true);
   root.addEventListener("click", onClickCapture, true);
 
-  function faceChooser(anchor, id, run) {
-    // Single-face cards skip it. Escape or a click elsewhere cancels and
-    // leaves the card where it was.
-    const faces = deck.defs[id].faces;
-    if (faces.length < 2) { run(0); return; }
-    openMenu(anchor, faces.map((f, i) => ({
+  function faceChooser(anchor, id, run, allow = () => true) {
+    // Single-face cards skip it, as does a card with only one face that
+    // `allow` lets through. Escape or a click elsewhere cancels and leaves
+    // the card where it was.
+    const faces = deck.defs[id].faces.map((f, i) => [f, i]).filter(([f]) => allow(f));
+    if (!faces.length) return;
+    if (faces.length < 2) { run(faces[0][1]); return; }
+    openMenu(anchor, faces.map(([f, i]) => ({
       label: (f.kind === "land" ? "Play " : "Cast ") + f.name + " — " + (KIND_LABEL[f.kind] || f.kind),
       run: () => run(i),
     })));
@@ -531,6 +709,12 @@ export default function (component) {
       badges.appendChild(el("span", "badge b-maybe", "tapped?"));
     }
     if (zone === "command") badges.appendChild(el("span", "badge", "tax " + commanderTax(state, id)));
+    if (castable(state, deck, id, zone)) {
+      node.classList.add("castable");
+      const star = el("span", "badge b-cast", "✦");
+      star.title = "Castable with your untapped mana";
+      badges.appendChild(star);
+    }
     if (badges.childNodes.length) node.appendChild(badges);
 
     if (state.phase === "play" && zone !== "library") {
@@ -601,8 +785,24 @@ export default function (component) {
     const mana = manaAvailable(state, deck);
     const manaText = mana.unknown ? mana.amount + " + ?" : String(mana.amount);
     status.appendChild(el("span", "mana", "Mana available: " + manaText));
+    if (mana.colors.length) status.appendChild(el("span", "mana-colors", "(" + mana.colors.join(" ") + ")"));
     const piles = el("span", "piles");
     piles.appendChild(el("span", "pile-count", "Library " + state.library.length));
+    // Library actions: an extra draw, and the search / look-at-top panels.
+    const playing = state.phase === "play";
+    const draw = button("Draw", () => store.act("drawExtra"), "pile-btn");
+    draw.disabled = !playing;
+    draw.title = "Draw an extra card";
+    piles.appendChild(draw);
+    for (const [panel, label] of [["search", "Search"], ["look", "Look at top"]]) {
+      const b = button(label, () => {
+        store.ui.panel = store.ui.panel === panel ? null : panel;
+        store.ui.look = null;
+        store.render();
+      }, "pile-btn" + (store.ui.panel === panel ? " active" : ""));
+      b.disabled = !playing;
+      piles.appendChild(b);
+    }
     for (const [zone, label] of [["graveyard", "Graveyard"], ["exile", "Exile"]]) {
       const b = button(label + " " + state[zone].length, () => {
         store.ui.pile = store.ui.pile === zone ? null : zone;
@@ -650,6 +850,153 @@ export default function (component) {
     }
   }
 
+  // ---- library panels: search, look at top N ----
+  function panelShell(title, className) {
+    const section = el("section", "zone panel " + className);
+    const head = el("header", "zone-head");
+    head.appendChild(el("span", "zone-title", title));
+    section.appendChild(head);
+    return section;
+  }
+
+  function closePanel() {
+    store.ui.panel = null;
+    store.ui.look = null;
+    store.render();
+  }
+
+  function searchPanel() {
+    // One row per card name (copies grouped), filtered by name or type as
+    // you type; the list redraws on its own so the filter keeps its focus.
+    const state = store.state;
+    const filter = store.ui.search;
+    const section = panelShell("Search library", "panel-search");
+    const tools = el("div", "panel-tools");
+    const input = el("input", "panel-filter");
+    input.type = "search";
+    input.placeholder = "Filter by name or type";
+    input.value = filter.query;
+    const basics = el("label", "panel-check");
+    const box = el("input");
+    box.type = "checkbox";
+    box.checked = filter.basics;
+    basics.append(box, document.createTextNode(" Basic lands"));
+    tools.append(input, basics,
+      button("Shuffle library", () => store.act("shuffleLibrary")),
+      button("Close", closePanel));
+    const list = el("div", "search-list");
+
+    const groups = new Map();   // card id -> copy ids still in the library
+    for (const id of state.library) {
+      const key = deck.defs[id].id;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(id);
+    }
+    const fill = () => {
+      const needle = filter.query.trim().toLowerCase();
+      const rows = [...groups.values()].filter(ids => {
+        const card = deck.defs[ids[0]];
+        if (filter.basics && !card.faces.some(f => f.kind === "land" && /\bbasic\b/i.test(f.type_line || ""))) return false;
+        return !needle || card.name.toLowerCase().includes(needle)
+          || card.faces.some(f => (f.type_line || "").toLowerCase().includes(needle));
+      }).sort((a, b) => deck.defs[a[0]].name.localeCompare(deck.defs[b[0]].name));
+      list.replaceChildren(el("div", "search-count", rows.length + " of " + groups.size + " cards"));
+      for (const ids of rows) {
+        const id = ids[0];
+        const card = deck.defs[id];
+        const row = el("div", "search-row");
+        row.dataset.id = id;
+        const label = el("div", "search-label");
+        label.append(el("span", "search-name", card.name + (ids.length > 1 ? " ×" + ids.length : "")),
+          el("span", "search-type", card.faces.map(f => f.type_line).join(" // ")));
+        const acts = el("div", "search-acts");
+        acts.appendChild(button("Hand", () => store.act("searchLibrary", deck, id, "hand"), "menu-item"));
+        if (card.faces.some(f => f.kind !== "spell")) {
+          for (const [dest, text] of [["battlefield", "Battlefield"], ["tapped", "Battlefield tapped"]]) {
+            const b = button(text, () => faceChooser(b, id,
+              face => store.act("searchLibrary", deck, id, dest, face), f => f.kind !== "spell"), "menu-item");
+            acts.appendChild(b);
+          }
+        }
+        row.append(label, acts);
+        row.addEventListener("pointerenter", () => showPreview(id));
+        list.appendChild(row);
+      }
+    };
+    input.oninput = () => { filter.query = input.value; fill(); };
+    box.onchange = () => { filter.basics = box.checked; fill(); };
+    fill();
+    section.append(tools, list);
+    return section;
+  }
+
+  const LOOK_LABEL = { top: "Top", bottom: "Bottom", graveyard: "Graveyard", hand: "Hand" };
+
+  function lookPanel() {
+    // The top N with a Top / Bottom / Graveyard / Hand choice under each.
+    // Picks are kept in store.ui.look and applied together by Done; they are
+    // retaken whenever the top of the library changed under them.
+    const state = store.state;
+    let look = store.ui.look;
+    const n = look ? look.n : 2;
+    const top = state.library.slice(0, n);
+    if (!look || look.ids.length !== top.length || look.ids.some((id, i) => id !== top[i])) {
+      look = store.ui.look = { n, ids: top, order: [] };
+    }
+    const section = panelShell("Look at top", "panel-look");
+    const tools = el("div", "panel-tools");
+    const setN = value => {
+      store.ui.look = { n: value, ids: state.library.slice(0, value), order: [] };
+      store.render();
+    };
+    const minus = button("−", () => setN(Math.max(1, n - 1)));
+    minus.disabled = n <= 1;
+    const plus = button("+", () => setN(Math.min(10, n + 1)));
+    plus.disabled = n >= 10 || n >= state.library.length;
+    tools.append(minus, el("span", "look-n", String(n)), plus);
+    const done = button("Done", () => {
+      const plan = { ids: look.ids, order: look.order };
+      store.ui.panel = null;
+      store.ui.look = null;
+      const result = store.act("arrangeTop", deck, plan);
+      if (result.error) { store.ui.panel = "look"; store.render(); }
+    }, "gbtn primary");
+    done.disabled = !look.ids.length;
+    tools.append(done, button("Cancel", closePanel));
+    section.appendChild(tools);
+
+    const cards = el("div", "zone-cards look-cards");
+    if (!look.ids.length) cards.appendChild(el("div", "zone-empty", "Library is empty."));
+    const destOf = id => { const hit = look.order.filter(([x]) => x === id).pop(); return hit ? hit[1] : null; };
+    for (const id of look.ids) {
+      const dest = destOf(id);
+      const col = el("div", "look-col");
+      col.dataset.id = id;
+      let label = "Stays on top";
+      if (dest === "top" || dest === "bottom") {
+        const same = look.order.filter(([, d]) => d === dest).map(([x]) => x);
+        label = LOOK_LABEL[dest] + " " + (same.indexOf(id) + 1);
+      } else if (dest) {
+        label = LOOK_LABEL[dest];
+      }
+      const picks = el("div", "look-picks");
+      for (const d of LOOK_DESTINATIONS) {
+        const b = button(LOOK_LABEL[d], () => {
+          // A second click on the same choice clears it.
+          look.order = look.order.filter(([x]) => x !== id);
+          if (dest !== d) look.order.push([id, d]);
+          store.render();
+        }, "look-pick" + (dest === d ? " active" : ""));
+        b.dataset.dest = d;
+        picks.appendChild(b);
+      }
+      col.append(tile(id, "library"), el("div", "look-label", label), picks);
+      cards.appendChild(col);
+    }
+    section.appendChild(cards);
+    return section;
+  }
+
   function renderTable() {
     const state = store.state;
     table.replaceChildren();
@@ -661,6 +1008,8 @@ export default function (component) {
     top.append(left, right);
     table.appendChild(top);
     table.appendChild(zoneRow("Hand", "hand", state.phase === "bottom" ? "picking" : ""));
+    if (state.phase === "play" && store.ui.panel === "search") table.appendChild(searchPanel());
+    if (state.phase === "play" && store.ui.panel === "look") table.appendChild(lookPanel());
     if (store.ui.pile) table.appendChild(zoneRow(DESTINATIONS[store.ui.pile], store.ui.pile));
 
     const log = el("section", "log");

@@ -646,12 +646,17 @@ def _render_mana_curve(conn, deck_id):
                 chart_colors = fmt.category_colors(len(ordered_cols))
             st.bar_chart(pivot, color=chart_colors)
 
-        st.markdown("**Strategy tag breakdown**")
-        tag_counts = loaders.load_deck_strategy_tag_counts(conn, deck_id)
+        st.markdown("**Tag breakdown**")
+        layers = list(loaders.load_deck_tag_layers(conn, deck_id))
+        layers.sort(key=lambda t: (t != "strategy", t))
+        layer = (st.radio("Tag layer", layers, horizontal=True, key=f"deck_{deck_id}_tag_breakdown_layer")
+                 if len(layers) > 1 else "strategy")
+        tag_counts = loaders.load_deck_tag_counts(conn, deck_id, layer)
         if not tag_counts.empty:
             st.dataframe(tag_counts, hide_index=True, width="stretch")
+            st.caption("A card counts under every tag it carries, so these overlap and add up to more than the deck.")
         else:
-            st.caption("No strategy tags recorded for this deck.")
+            st.caption(f"No {layer} tags recorded for this deck.")
 
 
 @st.fragment

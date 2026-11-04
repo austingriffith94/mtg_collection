@@ -729,18 +729,37 @@ def deck_reserved_list_cards(conn, deck_id):
     )
 
 
-def deck_strategy_tag_counts(conn, deck_id):
+def deck_tag_counts(conn, deck_id, tag_type="strategy"):
+    """Cards per label in one tag layer. A card counts under every label it
+    carries, primary or secondary, so the counts overlap and must not be
+    summed into a deck total."""
     return pd.read_sql_query(
         """SELECT t.label AS tag, COUNT(*) AS card_count, ROUND(AVG(c.cmc), 2) AS avg_cmc
            FROM card_tags ct
            JOIN tags t ON t.tag_id = ct.tag_id
            JOIN cards c ON c.scryfall_id = ct.scryfall_id
-           WHERE ct.deck_id = ? AND t.tag_type = 'strategy'
+           WHERE ct.deck_id = ? AND t.tag_type = ?
            GROUP BY t.label
-           ORDER BY card_count DESC""",
+           ORDER BY card_count DESC, t.label""",
         conn,
-        params=(deck_id,),
+        params=(deck_id, tag_type),
     )
+
+
+def deck_strategy_tag_counts(conn, deck_id):
+    return deck_tag_counts(conn, deck_id, "strategy")
+
+
+def deck_tag_layers(conn, deck_id):
+    """{tag_type: {scryfall_id: [label, ...]}} for every layer this deck has
+    tags in, primary first. `strategy` is always a key, so the board's layer
+    picker has a default even on an untagged deck."""
+    layers = {"strategy": {}}
+    for (tag_type,) in conn.execute(
+            "SELECT DISTINCT t.tag_type FROM card_tags ct JOIN tags t ON t.tag_id = ct.tag_id "
+            "WHERE ct.deck_id=?", (deck_id,)).fetchall():
+        layers[tag_type] = get_card_tags_by_type(conn, deck_id, tag_type)
+    return layers
 
 
 def deck_mana_curve(conn, deck_id):

@@ -58,7 +58,7 @@ BOARD_TYPE_ORDER = [
     "Creature", "Instant", "Sorcery", "Artifact", "Enchantment",
     "Planeswalker", "Battle", "Land",
 ]
-GROUP_BY_OPTIONS = ["Type", "Mana value", "Strategy tag", "Color"]
+GROUP_BY_OPTIONS = ["Type", "Mana value", "Tag", "Color"]
 DEFAULT_GROUP_BY = "Type"
 
 
@@ -92,7 +92,7 @@ def _front_face(name):
     return (name or "").split(" // ")[0].strip().lower()
 
 
-def board_payload(cards_df, deck_meta, owned_qty, cut_for=None, leaving=None, buying=None):
+def board_payload(cards_df, deck_meta, owned_qty, cut_for=None, leaving=None, buying=None, layer_tags=None):
     """The mainboard as a list of card dicts for the component (one per
     deck_cards row — a card with quantity 30 is one dict with qty 30).
 
@@ -115,6 +115,9 @@ def board_payload(cards_df, deck_meta, owned_qty, cut_for=None, leaving=None, bu
                  carries `flags.buying` for its "buying" badge (Phase 4) and
                  is NOT flagged not_owned: that badge means owned zero with no
                  decision made, this one means the decision is made.
+    layer_tags : queries.deck_tag_layers() — {tag_type: {scryfall_id: [labels]}}.
+                 Each card carries `layers` ({tag_type: labels, primary first})
+                 for the layer picker; `tags` stays the strategy layer.
 
     Sorted commander(s) first, then mana value, then name; the JS relies on
     this order within each stack.
@@ -131,6 +134,7 @@ def board_payload(cards_df, deck_meta, owned_qty, cut_for=None, leaving=None, bu
     cut_for = cut_for or {}
     leaving = leaving or {}
     buying = buying or {}
+    layer_tags = layer_tags or {}
 
     cards = []
     for _, row in cards_df.iterrows():
@@ -152,6 +156,7 @@ def board_payload(cards_df, deck_meta, owned_qty, cut_for=None, leaving=None, bu
             "is_land": fmt.has_land_face(type_line),
             "colors": _split_csv(row.get("color_identity")),
             "tags": _split_csv(row.get("strategy_tags")),
+            "layers": {t: list(by_card.get(row["scryfall_id"], [])) for t, by_card in layer_tags.items()},
             "price": float(price) if pd.notna(price) else None,
             "cut_for": list(cut_for.get(row["scryfall_id"], [])),
             "leaving": list(leaving.get(row["scryfall_id"], [])),
@@ -452,6 +457,9 @@ def _validate_action(action):
         tags = action.get("tags")
         if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
             raise ValueError("That tag edit had no list of tags — nothing changed.")
+        layer = action.get("tag_type")
+        if layer is not None and (not isinstance(layer, str) or not layer.strip()):
+            raise ValueError("That tag edit had an invalid tag layer — nothing changed.")
     _validate_route(action)
     if op in UNDO_OPS:
         _positive_int(action.get("qty"), "quantity")
@@ -560,14 +568,16 @@ def _apply_card_action(conn, deck_id, op, sid, action, with_moves):
                 "moves": moves}
 
     if op == "set_tags":
-        old = writes.get_card_tags_by_type(conn, deck_id, STRATEGY_TAG_TYPE).get(sid, [])
+        # The layer the board is showing; absent means strategy, as before.
+        layer = (action.get("tag_type") or STRATEGY_TAG_TYPE).strip()
+        old = writes.get_card_tags_by_type(conn, deck_id, layer).get(sid, [])
         new = action["tags"]
         if writes.same_tags(old, new):
             return {"message": f"No tag changes on {name}", "undo": None, "changed": False}
-        writes.set_card_tags(conn, deck_id, sid, STRATEGY_TAG_TYPE, new)
+        writes.set_card_tags(conn, deck_id, sid, layer, new)
         labels = ", ".join(t.strip() for t in new if t.strip())
         return {"message": f"Tagged {name}: {labels}" if labels else f"Cleared tags on {name}",
-                "undo": {"op": "set_tags", "id": sid, "tags": list(old)}}
+                "undo": {"op": "set_tags", "id": sid, "tags": list(old), "tag_type": layer}}
 
     target = _positive_int(action["qty"], "quantity")
 
@@ -797,6 +807,10 @@ def _group_by_key(key):
     return f"{key}__group_by"
 
 
+def _layer_key(key):
+    return f"{key}__layer"
+
+
 def run_board_action(conn, deck_id, key, action, *, is_undo=False, undo_moves=None):
     """Apply one action for the page: remember the inverse (and the moves it
     must put back) for the Undo button, stash the outcome and drop stale
@@ -894,6 +908,15 @@ def render_deck_board(cards_df, deck_meta, owned_qty, *, key, editable=False, co
     if group_by not in GROUP_BY_OPTIONS:
         group_by = DEFAULT_GROUP_BY
 
+    # Tag layers (Phase 5): the picker only shows when the deck has more than
+    # one, and the choice is kept like group_by.
+    layer_tags = (loaders.load_deck_tag_layers(conn, deck_id)
+                  if conn is not None and deck_id is not None else {})
+    layer = ((saved.get("layer") if saved else None)
+             or st.session_state.get(_layer_key(key)) or STRATEGY_TAG_TYPE)
+    if layer_tags and layer not in layer_tags:
+        layer = STRATEGY_TAG_TYPE
+
     def _on_action():
         action = (st.session_state.get(key) or {}).get("action")
         if action:
@@ -904,7 +927,12 @@ def render_deck_board(cards_df, deck_meta, owned_qty, *, key, editable=False, co
         if choice:
             st.session_state[_group_by_key(key)] = choice
 
-    callbacks = {"on_group_by_change": _on_group_by}
+    def _on_layer():
+        choice = (st.session_state.get(key) or {}).get("layer")
+        if choice:
+            st.session_state[_layer_key(key)] = choice
+
+    callbacks = {"on_group_by_change": _on_group_by, "on_layer_change": _on_layer}
     if editable:
         callbacks["on_action_change"] = _on_action
     leaving = leaving or []
@@ -916,11 +944,14 @@ def render_deck_board(cards_df, deck_meta, owned_qty, *, key, editable=False, co
         data={
             "cards": board_payload(cards_df, deck_meta, owned_qty, cut_for=planned_cuts(shortlist or []),
                                    leaving=leaving_by_card,
-                                   buying=q.deck_buying(conn, deck_id) if conn is not None and deck_id is not None else None),
+                                   buying=q.deck_buying(conn, deck_id) if conn is not None and deck_id is not None else None,
+                                   layer_tags=layer_tags),
             "shortlist": shortlist or [],
             "leaving": leaving,
             "group_by": group_by,
             "group_options": GROUP_BY_OPTIONS,
+            "layer": layer,
+            "layer_options": sorted(layer_tags, key=lambda t: (t != STRATEGY_TAG_TYPE, t)),
             "type_order": BOARD_TYPE_ORDER,
             "editable": editable,
             # Phase 2: where a removed copy can be put, and whether copies

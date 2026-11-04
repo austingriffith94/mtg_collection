@@ -33,7 +33,14 @@
 //                   with basic:true (Phase 7) never asks either, and a
 //                   Shortlist row for one has can_buy:false and no options
 //   group_by      saved choice, one of group_options
-//   group_options ["Type","Mana value","Strategy tag","Color"]
+//   group_options ["Type","Mana value","Tag","Color"]
+//   layer         saved tag layer (a tag type) that "Tag" grouping, the preview
+//                   and the tag editor use; layer_options lists the layers the
+//                   deck has (the picker shows when there are two or more).
+//                   Each card's `layers` is {tag_type: labels, primary first};
+//                   the first label is the card's primary, and a stack holds
+//                   a card only under its primary, with "(+X)" counting the
+//                   copies that carry the label as a secondary.
 //   type_order    stack order for "Type"
 //   editable      true on the Deck Editor's Board tab only
 //
@@ -112,19 +119,28 @@ function groupByManaValue(cards) {
   return out;
 }
 
-function groupByTag(cards) {
-  // First tag only: a card with two tags in two stacks would double-count
-  // its copies in the headers.
+function groupByTag(cards, tagsOf) {
+  // Primary tag only: a card with two tags in two stacks would double-count
+  // its copies in the headers. The cards that carry a label as a secondary
+  // are kept on the group as `secondary`, for the header's "(+X)".
   const buckets = new Map();
+  const secondary = new Map();
   const untagged = [];
   for (const c of cards) {
-    if (!c.tags.length) { untagged.push(c); continue; }
-    if (!buckets.has(c.tags[0])) buckets.set(c.tags[0], []);
-    buckets.get(c.tags[0]).push(c);
+    const tags = tagsOf(c);
+    if (!tags.length) { untagged.push(c); continue; }
+    if (!buckets.has(tags[0])) buckets.set(tags[0], []);
+    buckets.get(tags[0]).push(c);
+    for (const t of tags.slice(1)) {
+      if (!secondary.has(t)) secondary.set(t, []);
+      secondary.get(t).push(c);
+    }
   }
+  // A label that is only ever secondary has no stack to put "(+X)" on; its
+  // cards show under their own primaries.
   const out = [...buckets.keys()].sort((a, b) => a.localeCompare(b))
-    .map(label => ({ label, cards: buckets.get(label) }));
-  out.push({ label: "Untagged", cards: untagged });
+    .map(label => ({ label, cards: buckets.get(label), secondary: secondary.get(label) || [] }));
+  out.push({ label: "Untagged", cards: untagged, secondary: [] });
   return out;
 }
 
@@ -150,12 +166,12 @@ function groupByColor(cards) {
     .map(label => ({ label, cards: buckets.get(label) }));
 }
 
-function buildStacks(cards, groupBy, typeOrder) {
+function buildStacks(cards, groupBy, typeOrder, tagsOf) {
   const commanders = cards.filter(c => c.flags.commander);
   const rest = cards.filter(c => !c.flags.commander);
   let groups;
   if (groupBy === "Mana value") groups = groupByManaValue(rest);
-  else if (groupBy === "Strategy tag") groups = groupByTag(rest);
+  else if (groupBy === "Tag") groups = groupByTag(rest, tagsOf);
   else if (groupBy === "Color") groups = groupByColor(rest);
   else groups = groupByType(rest, typeOrder);
   groups = groups.filter(g => g.cards.length);
@@ -186,6 +202,11 @@ export default function (component) {
   const copiesMove = data.copies_move !== false;
   const options = data.group_options || ["Type"];
   let groupBy = options.includes(data.group_by) ? data.group_by : options[0];
+  const layerOptions = data.layer_options || [];
+  let layer = layerOptions.includes(data.layer) ? data.layer : (layerOptions[0] || "strategy");
+  // A card's labels in the chosen layer, primary first. Without layer data
+  // (the read-only boards that pass none) it is the strategy tags.
+  const tagsOf = c => (c.layers && c.layers[layer]) || (c.layers && layerOptions.length ? [] : c.tags || []);
 
   // This function runs again on every data update with the SAME
   // parentElement, and the previous run's cleanup is not guaranteed to have
@@ -217,6 +238,24 @@ export default function (component) {
     };
     buttons.set(opt, btn);
     toolbar.appendChild(btn);
+  }
+  // Tag layer picker: only when the deck has more than one layer. Regroups
+  // and relabels in the browser; the choice is also sent back to survive reruns.
+  const layerButtons = new Map();
+  if (layerOptions.length > 1) {
+    toolbar.appendChild(el("span", "toolbar-label toolbar-gap", "Tags"));
+    for (const opt of layerOptions) {
+      const btn = el("button", "group-btn", opt);
+      btn.type = "button";
+      btn.onclick = () => {
+        layer = opt;
+        setStateValue("layer", opt);
+        closeMenu();
+        renderStacks();
+      };
+      layerButtons.set(opt, btn);
+      toolbar.appendChild(btn);
+    }
   }
   toolbar.appendChild(el("span", "toolbar-total", qtyOf(cards) + " cards"));
   root.appendChild(toolbar);
@@ -260,7 +299,8 @@ export default function (component) {
     if (card.flags.reserved) facts.push("Reserved List");
     if (card.flags.not_owned) facts.push("Not owned");
     preview.appendChild(el("div", "preview-facts", facts.join(" · ")));
-    if (card.tags.length) preview.appendChild(el("div", "preview-tags", card.tags.join(", ")));
+    const shown = tagsOf(card);
+    if (shown.length) preview.appendChild(el("div", "preview-tags", shown.join(", ")));
   }
 
   function renderPreviewHint() {
@@ -296,17 +336,17 @@ export default function (component) {
   function showTagEditor(card) {
     // Comma-separated, prefilled with the card's tags; the datalist offers
     // the tags already used elsewhere on this board.
-    const known = [...new Set(cards.flatMap(c => c.tags))].sort((a, b) => a.localeCompare(b));
+    const known = [...new Set(cards.flatMap(tagsOf))].sort((a, b) => a.localeCompare(b));
     const list = el("datalist");
     list.id = "board-tag-options";
     for (const t of known) { const o = el("option"); o.value = t; list.appendChild(o); }
     const input = el("input", "menu-input");
     input.type = "text";
-    input.value = card.tags.join(", ");
+    input.value = tagsOf(card).join(", ");
     input.placeholder = "Ramp, Removal";
     input.setAttribute("list", list.id);
     const save = () => send({
-      op: "set_tags", id: card.id,
+      op: "set_tags", id: card.id, tag_type: layer,
       tags: input.value.split(",").map(t => t.trim()).filter(Boolean),
     });
     input.addEventListener("keydown", ev => { if (ev.key === "Enter") save(); });
@@ -452,12 +492,22 @@ export default function (component) {
 
   function renderStacks() {
     for (const [opt, btn] of buttons) btn.classList.toggle("active", opt === groupBy);
+    for (const [opt, btn] of layerButtons) btn.classList.toggle("active", opt === layer);
     stacksEl.replaceChildren();
-    for (const group of buildStacks(cards, groupBy, typeOrder)) {
+    for (const group of buildStacks(cards, groupBy, typeOrder, tagsOf)) {
       const stack = el("section", "stack");
       const head = el("header", "stack-head");
       head.appendChild(el("span", "stack-title", group.label));
       const count = el("span", "stack-count", String(qtyOf(group.cards)));
+      const extra = group.secondary ? qtyOf(group.secondary) : 0;
+      if (extra) {
+        // Copies that carry this label as a secondary tag sit in their own
+        // primary's stack; they are counted here but not drawn.
+        count.textContent = qtyOf(group.cards) + " (+" + extra + ")";
+        count.title = qtyOf(group.cards) + " with " + group.label + " as the primary tag, "
+          + extra + " more with it as a secondary:\n"
+          + group.secondary.map(c => c.name + (c.qty > 1 ? " ×" + c.qty : "")).join("\n");
+      }
       if (groupBy === "Type" && group.label === "Land") {
         // Land-side MDFCs sit in their front-face stack (Instant, Creature...)
         // but still count toward the land total; the cards stay where they are.

@@ -128,8 +128,13 @@ def load_deck_reserved_list_cards(_conn, deck_id):
 
 
 @st.cache_data(show_spinner=False)
-def load_deck_strategy_tag_counts(_conn, deck_id):
-    return q.deck_strategy_tag_counts(_conn, deck_id)
+def load_deck_tag_counts(_conn, deck_id, tag_type="strategy"):
+    return q.deck_tag_counts(_conn, deck_id, tag_type)
+
+
+@st.cache_data(show_spinner=False)
+def load_deck_tag_layers(_conn, deck_id):
+    return q.deck_tag_layers(_conn, deck_id)
 
 
 @st.cache_data(show_spinner=False)
@@ -338,7 +343,8 @@ def invalidate_deck_caches(deck_id=None):
     load_open_changes_df.clear()
     load_deck_change_history.clear()
     load_deck_comparison.clear()
-    load_deck_strategy_tag_counts.clear()
+    load_deck_tag_counts.clear()
+    load_deck_tag_layers.clear()
     load_deck_mana_curve.clear()
     load_deck_game_changers.clear()
     load_deck_reserved_list_cards.clear()

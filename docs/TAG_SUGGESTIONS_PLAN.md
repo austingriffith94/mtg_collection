@@ -25,7 +25,8 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
   waits for Phase 6, when Nalia gets a vocabulary).
 - [x] **Phase 4** — Review panel in the Deck Editor, with Apply (done 2026-11-01;
   checked with a scripted model, not yet with a real Gemini call).
-- [ ] **Phase 5** — Show a chosen layer on the deck board and in counts.
+- [x] **Phase 5** — Show a chosen layer on the deck board and in counts (done
+  2026-11-03).
 - [ ] **Phase 6** — Two-pass mode: propose a vocabulary for an untagged deck.
 - [ ] **Phase 7** — Docs and wrap-up.
 
@@ -568,6 +569,22 @@ Layer selector for the board's grouping and for the tag counts, and the "(+X)"
 in the stack headers, with a hover listing those cards. Browser check against a
 database copy, as for the other board changes. This phase is what would let you
 decide later whether to remove the copied labels from `strategy`.
+
+**As built:** the toolbar gets a "Tags" picker (one button per layer the deck has,
+`strategy` first), shown only when there are two or more. It regroups, relabels the
+hover preview and the tag editor in the browser, and the choice is kept across
+reruns like group-by. The grouping option is now just "Tag" (was "Strategy tag"). A
+stack header shows `Card Adv 3 (+2)`, and its hover lists the secondary cards. A
+label that is only ever secondary has no stack, so its cards appear under their own
+primaries. The board's tag editor writes the layer on screen: `set_tags` takes an
+optional `tag_type` (default `strategy`), and its Undo carries it. The Decks
+page's tag breakdown has a layer picker too, via `queries.deck_tag_counts`;
+the counts overlap, and the page says so. New: `queries.deck_tag_layers`,
+`tests/test_board_layers.py` (902 tests pass). Headless Edge check: switching
+layers regrouped the board and the header showed `(+2)` with its hover list.
+The check began on a copy of the database, but the override didn't take and the run
+used the live one. It wrote two test tags, which were reverted straight after
+(deck 2's `function` counts match what they were).
 
 ### Phase 6 — Two-pass mode for an untagged deck
 

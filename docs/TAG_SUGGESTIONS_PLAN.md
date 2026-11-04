@@ -27,7 +27,8 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
   checked with a scripted model, not yet with a real Gemini call).
 - [x] **Phase 5** — Show a chosen layer on the deck board and in counts (done
   2026-11-03).
-- [ ] **Phase 6** — Two-pass mode: propose a vocabulary for an untagged deck.
+- [x] **Phase 6** — Two-pass mode: propose a vocabulary for an untagged deck (done
+  2026-11-03; checked with a scripted model, not yet with a real Gemini call or on Ayara).
 - [ ] **Phase 7** — Docs and wrap-up.
 
 ## Decisions
@@ -592,6 +593,19 @@ Pass one: the model proposes up to 10 labels with definitions from the
 commander, plan and cards. You edit the list in the vocabulary editor. Pass
 two is the normal Phase 2 request using that vocabulary. Ayara is the test
 case.
+
+**As built:** `tagging.propose_vocabulary(provider, ctx, menu)` is pass one: one
+request, no retry, no writes. It sends the deck, its plan, the `function` menu
+(none for other layers) and every mainboard card without tags, under
+`skills/tag_vocabulary.md`. `schemas.vocabulary_schema` caps the list at
+`MAX_PROPOSED_LABELS` (10), and `guard.check_vocabulary` keeps a menu label's
+spelling and definition, and drops blank, repeated and surplus labels. In the
+Card Tags tab, **Labels and definitions** shows a "Propose a vocabulary" button
+while the layer has no defined labels. The result is an editable table (Keep,
+Label, Definition) held in session state, and **Save labels** stores the kept
+rows through `writes.set_tag_vocab_label` (a definition equal to the menu default
+is stored blank, as in the definitions editor). Pass two is the normal Suggest
+tags, whose empty-layer message now points to the button. Tests: 907 pass.
 
 ### Phase 7 — Docs
 

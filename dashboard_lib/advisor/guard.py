@@ -334,6 +334,30 @@ def check_definitions(parsed, labels):
     return drafts, [label for label in labels if label not in drafts]
 
 
+def check_vocabulary(parsed, menu, limit):
+    """({label: definition}, dropped) from a proposed-vocabulary answer. A label
+    matching a `menu` entry (any case) takes the menu's spelling, and its
+    definition when the model gave none. Blank and repeated labels are dropped,
+    and so is anything past `limit`; `dropped` counts them. Never raises."""
+    parsed = parsed if isinstance(parsed, dict) else {}
+    known = {label.casefold(): label for label in menu}
+    labels, dropped = {}, 0
+    for row in parsed.get("labels") or []:
+        if not isinstance(row, dict):
+            continue
+        raw = re.sub(r"\s+", " ", str(row.get("label") or "")).strip()
+        text = re.sub(r"\s+", " ", str(row.get("definition") or "")).strip()
+        label = known.get(raw.casefold(), raw)
+        text = text or menu.get(label, "")
+        if not label or not text:
+            continue
+        if label.casefold() in {x.casefold() for x in labels} or len(labels) >= limit:
+            dropped += 1
+            continue
+        labels[label] = text
+    return labels, dropped
+
+
 def tag_retry_prompt(checked):
     """The one corrective follow-up. It asks only for the cards with a
     problem: a deck's whole answer is long and each retry is paid for."""

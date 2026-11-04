@@ -399,3 +399,45 @@ def test_a_failed_batch_keeps_the_finished_ones_and_says_what_failed(ctx, monkey
 def test_a_first_batch_failure_returns_the_error_alone(ctx):
     res = tagging.run_tag_proposals(FakeProvider([]), ctx)
     assert res.checked is None and "the request" in res.error and "no more scripted" in res.error
+
+
+# ---- pass one of the two-pass mode: propose a vocabulary ---------------------
+
+def test_a_proposed_vocabulary_keeps_menu_spelling_and_drops_repeats_and_surplus():
+    parsed = {"labels": [
+        {"label": " ramp ", "definition": ""},                   # menu label, blank: menu definition
+        {"label": "Removal", "definition": "Sharper\n for this deck."},
+        {"label": "REMOVAL", "definition": "again"},             # repeat
+        {"label": "Ghost Plan", "definition": "Own label."},
+        {"label": "", "definition": "no label"},
+        {"label": "Unreadable", "definition": " "},               # no definition, not on the menu
+        "junk",
+    ]}
+    menu = {"Ramp": "Menu ramp.", "Removal": "Menu removal."}
+    labels, dropped = guard.check_vocabulary(parsed, menu, limit=3)
+    assert labels == {"Ramp": "Menu ramp.", "Removal": "Sharper for this deck.", "Ghost Plan": "Own label."}
+    assert dropped == 1
+    labels, dropped = guard.check_vocabulary(parsed, menu, limit=2)
+    assert list(labels) == ["Ramp", "Removal"] and dropped == 2
+    assert guard.check_vocabulary("nope", menu, 3) == ({}, 0)
+
+
+def test_propose_vocabulary_sends_menu_and_every_card_and_writes_nothing(conn, ctx):
+    p = FakeProvider([{"labels": [{"label": "Ramp", "definition": "Mana."}]}])
+    draft = tagging.propose_vocabulary(p, ctx, {"Ramp": "Menu ramp."})
+    assert draft.labels == {"Ramp": "Mana."} and not draft.error
+    call = p.calls[0]
+    prompt = call["messages"][0]["content"]
+    assert "MENU:\n- Ramp: Menu ramp." in prompt and "Stated plan: Aggro" in prompt
+    assert "Changeling Bear" in prompt and "Swamp" not in prompt        # basics are skipped
+    assert "current tags" not in prompt                                   # an untagged deck's pass
+    assert call["schema"]["properties"]["labels"]["maxItems"] == tagging.MAX_PROPOSED_LABELS
+    assert conn.execute("SELECT COUNT(*) FROM deck_tag_vocab").fetchone()[0] == 0
+
+
+def test_propose_vocabulary_without_a_menu_and_on_failure(ctx):
+    p = FakeProvider([{"labels": [{"label": "Demons", "definition": "Demon creatures."}]}])
+    assert tagging.propose_vocabulary(p, ctx).labels == {"Demons": "Demon creatures."}
+    assert "choose your own labels" in p.calls[0]["messages"][0]["content"]
+    assert "no more scripted" in tagging.propose_vocabulary(FakeProvider([]), ctx).error
+    assert tagging.propose_vocabulary(FakeProvider([{"labels": []}]), ctx).error == "The model returned no usable labels."

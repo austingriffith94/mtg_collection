@@ -12,7 +12,7 @@ import pytest
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
-from dashboard_lib import queries as q, tag_panel, writes
+from dashboard_lib import queries as q, tag_panel, tag_vocab, writes
 from dashboard_lib.advisor import guard, providers, tagging
 from dashboard_lib.advisor.context import build_tag_context
 from dashboard_lib.advisor.providers import FakeProvider, ProviderError
@@ -487,3 +487,52 @@ def test_a_layer_with_no_defined_labels_cannot_be_suggested(page_db, monkeypatch
     _run(at)
     assert not any(b.key == "tag_panel_1_strategy_suggest" for b in at.button)
     assert any("no defined labels" in i.value for i in at.info)
+
+
+# ---- two-pass mode: propose a vocabulary ------------------------------------
+
+def test_save_proposed_vocabulary_saves_only_kept_rows(conn, ids):
+    edited = pd.DataFrame([
+        {"Keep": True, "Label": "Ramp", "Definition": tag_vocab.FUNCTION_MENU["Ramp"]},   # the default: stored blank
+        {"Keep": True, "Label": " Rocks ", "Definition": " Mana artifacts. "},
+        {"Keep": False, "Label": "Skipped", "Definition": "No."},
+        {"Keep": True, "Label": "", "Definition": "No label."},
+    ])
+    assert tag_panel.save_proposed_vocabulary(conn, 1, "function", edited) == 2
+    assert q.active_tag_vocab(conn, 1, "function") == {"Ramp": "", "Rocks": "Mana artifacts."} or \
+        q.active_tag_vocab(conn, 1, "function") == {"Ramp": None, "Rocks": "Mana artifacts."}
+
+
+def tag_vocab_default(label):
+    from dashboard_lib import tag_vocab
+    return tag_vocab.FUNCTION_MENU[label]
+
+
+def test_propose_then_edit_then_save_through_the_page(page_db, monkeypatch):
+    conn = sqlite3.connect(page_db)
+    conn.execute("DELETE FROM card_tags")
+    conn.execute("DELETE FROM deck_tag_vocab")
+    conn.commit()
+    conn.close()
+    fake = FakeProvider([{"labels": [
+        {"label": "Ramp", "definition": "Mana."}, {"label": "Rocks", "definition": "Mana artifacts."}]}])
+    monkeypatch.setattr(providers, "make_provider", lambda choice: fake)
+    at = AppTest.from_file(EDITOR, default_timeout=20)
+    at.session_state["current_deck_id"] = 1
+    _run(at)
+    at.selectbox(key="editor_1_cardtag_type_choice").set_value("function")
+    _run(at)
+    _forget_board()
+    at.button(key="tag_vocab_1_function_propose").click()
+    _run(at)
+    stored = lambda: sqlite3.connect(page_db).execute(  # noqa: E731
+        "SELECT label, definition FROM deck_tag_vocab ORDER BY label").fetchall()
+    assert stored() == []      # shown, not stored
+    assert "Ramp" in fake.calls[0]["messages"][0]["content"]
+    _forget_board()
+    at.button(key="tag_vocab_1_function_proposed_save").click()
+    _run(at)
+    assert stored() == [("Ramp", "Mana."), ("Rocks", "Mana artifacts.")]
+    # pass two can now run: the layer has defined labels
+    labels = {v["label"] for v in q.deck_tag_vocabulary(sqlite3.connect(page_db), 1, "function", defined_only=True)}
+    assert labels == {"Ramp", "Rocks"}

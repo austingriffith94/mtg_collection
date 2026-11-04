@@ -98,6 +98,25 @@ def definition_schema(labels):
     }
 
 
+def vocabulary_schema(limit):
+    """JSON schema for a proposed vocabulary: at most `limit` labels, each with
+    a definition. The label is free text, since a deck's own labels (a creature
+    type, a character) can't be listed ahead of time."""
+    row = {
+        "type": "OBJECT",
+        "properties": {
+            "label": _s(description="Short, 1-3 words."),
+            "definition": _s(description="One line saying what a card must do to carry this label."),
+        },
+        "required": ["label", "definition"],
+    }
+    return {
+        "type": "OBJECT",
+        "properties": {"labels": {"type": "ARRAY", "items": row, "maxItems": limit}},
+        "required": ["labels"],
+    }
+
+
 def chat_answer_schema():
     """JSON schema for restating a finished chat turn (chat.RESTATE_PROMPT)
     so its card mentions can be checked. No enum on `card`: chat is

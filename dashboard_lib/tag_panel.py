@@ -228,7 +228,8 @@ def _render_controls(conn, deck_id, tag_type, p):
             st.caption(f"{undefined} label(s) have no definition, so the model won't be offered them. "
                        "Add definitions under **Labels and definitions**.")
         if not ctx.vocabulary:
-            st.info(f"The {tag_type} layer has no defined labels on this deck yet.")
+            st.info(f"The {tag_type} layer has no defined labels on this deck yet. "
+                    "Propose a vocabulary under Labels and definitions.")
             return
         tokens_in, tokens_out = tagging.estimate_tokens(ctx)
         st.caption(f"{len(ctx.cards)} cards, {len(ctx.vocabulary)} labels. "
@@ -420,6 +421,84 @@ def save_vocabulary(conn, deck_id, tag_type, edited):
     return changed
 
 
+def _propose_keys(deck_id, tag_type):
+    base = f"tag_vocab_{deck_id}_{tag_type}"
+    return f"{base}_proposed", f"{base}_proposed_ver"
+
+
+def _propose(conn, deck_id, tag_type, choice):
+    """Pass one of the two-pass mode: ask for a vocabulary and hold it in
+    session state. Nothing is stored until Save labels."""
+    key, ver_key = _propose_keys(deck_id, tag_type)
+    try:
+        provider = providers.make_provider(choice)
+    except ProviderError as e:
+        st.session_state[key] = tagging.VocabularyDraft({}, error=str(e))
+        return
+    menu = tag_vocab.FUNCTION_MENU if tag_type == tag_vocab.FUNCTION_LAYER else {}
+    with st.spinner(f"Asking {choice} for a {tag_type} vocabulary…"):
+        st.session_state[key] = tagging.propose_vocabulary(
+            provider, build_tag_context(conn, deck_id, tag_type), menu)
+    st.session_state[ver_key] = st.session_state.get(ver_key, 0) + 1
+
+
+def save_proposed_vocabulary(conn, deck_id, tag_type, edited):
+    """Save the kept rows of the proposed-vocabulary table (Keep, Label,
+    Definition). As in save_vocabulary, a definition matching the built-in
+    default is stored blank. Returns how many labels were saved."""
+    defaults = tag_vocab.default_definitions(tag_type)
+    saved = 0
+    for _, row in edited.iterrows():
+        label = "" if pd.isna(row["Label"]) else str(row["Label"]).strip()
+        text = "" if pd.isna(row["Definition"]) else str(row["Definition"]).strip()
+        if row["Keep"] and label and text:
+            writes.set_tag_vocab_label(conn, deck_id, tag_type, label,
+                                       None if text == defaults.get(label.casefold()) else text)
+            saved += 1
+    return saved
+
+
+def _render_propose(conn, deck_id, tag_type):
+    """The two-pass mode's first pass, offered while the layer has no defined
+    labels: propose a vocabulary, edit it here, save the rows you keep. Pass
+    two is then the normal Suggest tags."""
+    key, ver_key = _propose_keys(deck_id, tag_type)
+    draft = st.session_state.get(key)
+    st.caption(f"No {tag_type} labels are defined yet. Have the model propose a starting list from the "
+               "commander, plan and cards, edit it, then run Suggest tags with it.")
+    model_col, btn_col = st.columns([1, 2], vertical_alignment="bottom")
+    choice = model_col.selectbox("Model", providers.PROVIDER_CHOICES, key=f"tag_vocab_{deck_id}_{tag_type}_pmodel")
+    if btn_col.button("🧭 Propose a vocabulary", key=f"tag_vocab_{deck_id}_{tag_type}_propose"):
+        _propose(conn, deck_id, tag_type, choice)
+        st.rerun()
+    if not draft:
+        return
+    if draft.error:
+        st.error(draft.error)
+    if not draft.labels:
+        return
+    table = pd.DataFrame([{"Keep": True, "Label": label, "Definition": text}
+                          for label, text in draft.labels.items()])
+    edited = st.data_editor(
+        table,
+        column_config={"Keep": st.column_config.CheckboxColumn("Keep"),
+                       "Definition": st.column_config.TextColumn("Definition", width="large")},
+        hide_index=True, width="stretch",
+        key=f"tag_vocab_{deck_id}_{tag_type}_proposed_editor_{st.session_state.get(ver_key, 0)}",
+    )
+    st.caption(f"Proposed with {draft.input_tokens:,} tokens in and {draft.output_tokens:,} out"
+               + (f"; {draft.dropped} repeat or surplus label(s) dropped" if draft.dropped else "")
+               + ". Nothing is saved until you press Save labels.")
+    save_col, discard_col = st.columns(2)
+    if save_col.button("💾 Save labels", key=f"tag_vocab_{deck_id}_{tag_type}_proposed_save"):
+        count = save_proposed_vocabulary(conn, deck_id, tag_type, edited)
+        st.session_state.pop(key, None)
+        cv.finish_edit({"message": f"Saved {count} {tag_type} label(s). Suggest tags can use them now."})
+    if discard_col.button("Discard", key=f"tag_vocab_{deck_id}_{tag_type}_proposed_discard"):
+        st.session_state.pop(key, None)
+        st.rerun()
+
+
 def _render_add_label(conn, deck_id, tag_type, labels):
     have = {label.casefold() for label in labels}
     menu = [label for label in tag_vocab.FUNCTION_MENU if label.casefold() not in have] \
@@ -447,6 +526,8 @@ def _render_vocabulary(conn, deck_id, tag_type):
     undefined = [v["label"] for v in vocabulary if not v["definition"]]
 
     st.caption("The model may only use labels with a definition, and it follows the wording closely.")
+    if not any(v["definition"] for v in vocabulary):
+        _render_propose(conn, deck_id, tag_type)
     if len(vocabulary) > tag_vocab.MAX_ACTIVE_LABELS:
         st.warning(f"This deck has {len(vocabulary)} {tag_type} labels. "
                    f"Past {tag_vocab.MAX_ACTIVE_LABELS}, tags get too thin to sort a deck by.")

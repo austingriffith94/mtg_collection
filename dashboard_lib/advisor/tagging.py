@@ -25,12 +25,13 @@ from . import guard
 from .analysis import SKILLS_DIR
 from .context import TagContext, front_face
 from .providers import ProviderError
-from .schemas import definition_schema, tag_schema
+from .schemas import definition_schema, tag_schema, vocabulary_schema
 
 logger = logging.getLogger(__name__)
 
 SKILL_FILE = "tag_suggester.md"
 DEFINITION_SKILL_FILE = "tag_definitions.md"
+VOCABULARY_SKILL_FILE = "tag_vocabulary.md"
 # Cards per request. A whole deck's answer came to 10,000-13,000 tokens against a
 # 16,000 limit in the backtest, and a cut-off answer fails to parse.
 BATCH_SIZE = 50
@@ -42,6 +43,8 @@ TIMEOUT_SECONDS = 300
 EXAMPLES_PER_LABEL = 2
 # Cards sent per label when drafting a definition.
 DEFINITION_SAMPLE_CARDS = 6
+# Labels pass one may propose (the same cap the vocabulary editor warns at).
+MAX_PROPOSED_LABELS = 10
 # For the note before a Suggest. The backtest's decks came to about 130 tokens
 # out per card, and the schema adds about 700 tokens in.
 OUTPUT_TOKENS_PER_CARD = 140
@@ -76,6 +79,15 @@ class DefinitionDrafts:
     one_card: list            # drafted labels that rest on a single card
     no_cards: list            # labels with no card to draft from
     missing: list             # labels the model gave no usable line for
+    input_tokens: int = 0
+    output_tokens: int = 0
+    error: str = ""
+
+
+@dataclass
+class VocabularyDraft:
+    labels: dict              # {label: definition}, menu spellings kept
+    dropped: int = 0          # repeats and labels past the cap
     input_tokens: int = 0
     output_tokens: int = 0
     error: str = ""
@@ -325,3 +337,38 @@ def draft_definitions(provider, ctx: TagContext, labels):
     drafts, missing = guard.check_definitions(resp.parsed, list(samples))
     return DefinitionDrafts(drafts, [label for label in one_card if label in drafts], no_cards, missing,
                             resp.input_tokens, resp.output_tokens)
+
+
+def _vocabulary_prompt(ctx: TagContext, menu):
+    """User message for propose_vocabulary: deck, menu, then every card."""
+    m = ctx.meta
+    menu_text = "\n".join(f"- {label}: {text}" for label, text in menu.items())
+    cards = "\n".join(_card_line(c, None) for c in ctx.cards)
+    return (f"DECK: {m.get('name')} (commander: {m.get('commander') or 'unknown'}"
+            f"{', partner: ' + m['partner'] if m.get('partner') else ''})\n"
+            f"Stated plan: {m.get('description') or 'not recorded'}\n"
+            f"Tag layer: {ctx.tag_type}\n\n"
+            + (f"MENU:\n{menu_text}\n\n" if menu_text else "MENU: none for this layer; choose your own labels.\n\n")
+            + f"CARDS ({len(ctx.cards)}):\n{cards}")
+
+
+def propose_vocabulary(provider, ctx: TagContext, menu=None):
+    """Pass one of the two-pass mode: propose up to MAX_PROPOSED_LABELS labels
+    with definitions for a deck's layer, from its commander, plan and cards.
+    `menu` is {label: definition} to draw from first (the `function` menu).
+    One request, no retry; the user edits the list and saves it, and pass two
+    is the normal run_tag_proposals using it. Never writes."""
+    if not ctx.cards:
+        return VocabularyDraft({}, error="This deck has no cards to read.")
+    menu = menu or {}
+    with open(os.path.join(SKILLS_DIR, VOCABULARY_SKILL_FILE), encoding="utf-8") as f:
+        system = f.read()
+    try:
+        resp = provider.chat([{"role": "user", "content": _vocabulary_prompt(ctx, menu)}], system=system,
+                             schema=vocabulary_schema(MAX_PROPOSED_LABELS), timeout=TIMEOUT_SECONDS)
+    except ProviderError as e:
+        logger.warning("Vocabulary proposal for deck %s (%s) failed: %s", ctx.deck_id, ctx.tag_type, e)
+        return VocabularyDraft({}, error=f"The model call failed: {e}")
+    labels, dropped = guard.check_vocabulary(resp.parsed, menu, MAX_PROPOSED_LABELS)
+    return VocabularyDraft(labels, dropped, resp.input_tokens, resp.output_tokens,
+                           "" if labels else "The model returned no usable labels.")

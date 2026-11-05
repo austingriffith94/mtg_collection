@@ -13,6 +13,7 @@ active work.
 | [EDIT_FLOW_PLAN.md](EDIT_FLOW_PLAN.md) | Edit flow: one write path for every deck/collection edit, copy sources and destinations, takes, buys, build, move log (Phases 0-7) | 2026-10-14 |
 | [UNOWNED_LOTS_PLAN.md](UNOWNED_LOTS_PLAN.md) | Unowned cards: no collection row for a card you don't own, buy list split into decks and ideas, Bought with a printing picker, blank-lot removal (Phases 0-5) | 2026-11-01 |
 | [TAG_SUGGESTIONS_PLAN.md](TAG_SUGGESTIONS_PLAN.md) | AI-proposed tags applied only by you: primary/secondary order, layer vocabularies, proposal engine and guard, review panel, board layers, two-pass vocabulary (Phases 0-7) | 2026-11-03 |
+| [GOLDFISH_PLAN.md](GOLDFISH_PLAN.md) | Goldfish page: play a deck's first turns alone by clicking, in a browser-only component; payload and mana parsing, zones/turns/mulligan/tap/undo, castable marks, search and scry, turn summary (Phases 0-4) | 2026-11-04 |
 
 Open items from the first two were moved to the backlog in
 `UI_ACTION_PLAN.md` rather than left here.

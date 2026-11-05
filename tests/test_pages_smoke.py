@@ -119,6 +119,7 @@ DECK_PICKERS = {
     "pages/2_Decks.py": "deckpage_deck_select",
     "pages/3_Land_Probability.py": "landprob_deck_select",
     "pages/4_Deck_Editor.py": "editor_deck_select",
+    "pages/11_Goldfish.py": "goldfish_deck_select",
 }
 
 
@@ -302,9 +303,11 @@ def _forget_deck_board():
     attribute before sys.modules, so both have to go."""
     import dashboard_lib
 
-    sys.modules.pop("dashboard_lib.deck_board", None)
-    if hasattr(dashboard_lib, "deck_board"):
-        del dashboard_lib.deck_board
+    # goldfish declares its own component at import, and imports deck_board.
+    for name in ("deck_board", "goldfish"):
+        sys.modules.pop(f"dashboard_lib.{name}", None)
+        if hasattr(dashboard_lib, name):
+            delattr(dashboard_lib, name)
 
 
 def test_decks_page_stacks_view(smoke_db_path, tmp_path, monkeypatch):

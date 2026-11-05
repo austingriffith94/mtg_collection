@@ -8,8 +8,21 @@ as inline strings.
 | Component | Files | Python side |
 |---|---|---|
 | Stacks deck board + Shortlist rail (read-only on the Decks page, editable on the Deck Editor's Board tab) | `deck_board.js`, `deck_board.css` | [../deck_board.py](../deck_board.py) |
+| Goldfish: play a deck's first turns alone by clicking (Goldfish page) | `goldfish.js`, `goldfish.css` | [../goldfish.py](../goldfish.py) |
 
 Rules for editing these:
+
+- **Goldfish is the exception to the callback rule below.** It has no
+  callbacks: Python sends the deck once and never hears back, so the game
+  (shuffle, draw, tap, undo, the turn summary) is JS-only state. It lives in
+  a store on `parentElement.__goldfish`, not in the function's closure,
+  because the function runs again on every data update and tears down its
+  DOM each time. The file is split into a RULES part with no DOM code
+  (state, shuffle, draw, mulligan, play, tap, castable check, search,
+  look-at-top, `recordTurn`) and a DRAWING part; every click goes through
+  `store.act(name, ...args)`, which snapshots for undo, runs the rule,
+  records the turn summary and redraws. A headless check can call the rules
+  directly (the page is keyed per deck, so a new deck is a new game).
 
 - The JS is a CCv2 module: `export default function(component)`, drawing
   under `component.parentElement` (a shadow root, never `document`) and

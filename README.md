@@ -31,7 +31,8 @@ mtg_dashboard/
 │   ├── 7_Commander_Game_Tracking.py
 │   ├── 8_Workbench.py
 │   ├── 9_Card_Lookup.py
-│   └── 10_Advisor.py
+│   ├── 10_Advisor.py
+│   └── 11_Goldfish.py
 ├── dashboard_lib/                     # shared library code behind the pages
 │   ├── formatting.py                 # card-type/color/URL/filename helpers (no Streamlit dep)
 │   ├── queries.py                    # read-only sqlite3+pandas queries (no Streamlit dep)
@@ -45,6 +46,7 @@ mtg_dashboard/
 │   ├── db.py                         # cached connection + "no DB yet" guard
 │   ├── loaders.py                    # st.cache_data-wrapped versions of queries.py
 │   ├── card_view.py                  # shared table/grid browser + filter UI
+│   ├── goldfish.py                   # Goldfish deck payload, cost/mana parsing and page wrapper (custom component; JS/CSS in components/)
 │   ├── deck_board.py                 # Moxfield-style Stacks view of a deck + its Shortlist (custom component; JS/CSS in components/)
 │   └── nav.py                        # page registry: sidebar sections, titles, URLs, Home link cards
 ├── tests/                             # pytest suite on an in-memory DB (python -m pytest tests) — see tests/README.md
@@ -196,7 +198,7 @@ The sidebar groups the pages into four sections (the list lives in
 | Browse | Home, Collection, Decks, Card Lookup |
 | Plan | Workbench, Advisor, Land & Color Probability |
 | Edit | Deck Editor, Collection Editor, Card Database |
-| Play | Commander Game Tracking |
+| Play | Commander Game Tracking, Goldfish |
 
 The dashboard currently covers:
 - **Home** — headline counts, a link card for every page (grouped like the
@@ -368,6 +370,16 @@ jump to the same deck's other views.
     lists the card (see *Cards you don't own* below). Same underlying logic (and same
     CLI-vs-dashboard sharing pattern) as Moxfield export — see
     `scripts/refresh_card_data.py` / `dashboard_lib/refresh.py`.
+- **Goldfish** — pick a deck and play out its first turns alone, entirely in
+  the browser: on the play or draw, London mulligan, click a hand card to
+  play it and a battlefield card to tap it (a two-face card asks which face),
+  next turn, commander tax, graveyard and exile, undo. **Mana available**
+  shows what your untapped sources could make (`?` for a source whose output
+  can't be read), a **✦** marks cards you could cast with it, and Search,
+  Look at top and Draw cover tutors, scry/surveil and extra draws. A turn
+  summary table under the log shows lands, mana available, mana value spent
+  and what was cast each turn, plus the turn your commander came down. Nothing
+  is saved and the page never writes to the database.
 - **Commander Game Tracking** — log a game with up to 4 seats, each either
   a tracked deck (dropdown), a known opponent deck, or free text for a new
   one — Player works the same dropdown-or-free-text way — plus a win flag

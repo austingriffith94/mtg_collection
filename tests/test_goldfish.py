@@ -1,5 +1,5 @@
 """dashboard_lib.goldfish — the pure payload and mana parsing behind the
-Goldfish page (docs/GOLDFISH_PLAN.md Phase 1). The component can't run here,
+Goldfish page (docs/archive/GOLDFISH_PLAN.md Phase 1). The component can't run here,
 so everything it relies on (costs, mana abilities, enters-tapped, per-face
 reading) is pinned down on the Python side."""
 import os

@@ -193,3 +193,11 @@
   .rail { position: static; width: 100%; }
   .board-top { flex-direction: column; }
 }
+
+/* ---- turn summary ---- */
+.summary { margin-top: 8px; padding: 6px 8px; border: 1px solid var(--st-border-color, #444); border-radius: var(--st-base-radius, 8px); }
+.summary-table { border-collapse: collapse; font-size: 13px; width: 100%; }
+.summary-table th, .summary-table td { text-align: left; padding: 2px 10px 2px 0; }
+.summary-table th { opacity: 0.7; font-weight: 600; }
+.summary-cast { width: 100%; }
+.summary-line { font-size: 13px; padding-top: 4px; }

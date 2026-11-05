@@ -1,6 +1,6 @@
 """
 Goldfish page — play out a deck's first turns alone, by clicking
-(docs/GOLDFISH_PLAN.md).
+(docs/archive/GOLDFISH_PLAN.md).
 
 Pick a deck, choose play or draw, mulligan or keep, then click hand cards
 to play them and battlefield cards to tap them. The whole game runs in the
@@ -65,6 +65,9 @@ cv.how_it_works(
     "onto the battlefield, then shuffles, and **Look at top** shows the top cards to keep on top "
     "(in the order you click), put on the bottom, mill or take into your hand: a scry, surveil "
     "or impulse.",
+    "Under the log, the **turn summary** gives each turn's lands, mana available (the most your "
+    "sources could make that turn; `5+` when a `?` source is in play), mana value spent and what was cast, "
+    "plus the turn your commander came down.",
     "The game lives in your browser and is never saved. Changing deck or leaving the page ends it.",
 )
 

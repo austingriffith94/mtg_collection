@@ -1,7 +1,7 @@
 # Goldfish Plan — play out a deck's first turns by clicking
 
-Working plan from the discussion of 2026-11-03, revised the same day after
-checking it against the code and the live card data. Goal: pick a deck, draw
+Finished 2026-11-04. Working plan from the discussion of 2026-11-03, revised
+the same day after checking it against the code and the live card data. Goal: pick a deck, draw
 an opening hand, and play out the first few turns by clicking cards to play
 them and clicking permanents to tap them. Nothing is dragged. The page helps
 you judge a deck's early game (land count, ramp, curve, and the turn you cast
@@ -17,7 +17,7 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] **Phase 1** — Deck payload and mana parsing (pure Python, tested).
 - [x] **Phase 2** — The Goldfish page and component: zones, turns, mulligan, tap, log, undo.
 - [x] **Phase 3** — Hints and library actions: castable marks, search, scry, extra draw.
-- [ ] **Phase 4** — Turn summary, docs and wrap-up.
+- [x] **Phase 4** — Turn summary, docs and wrap-up.
 
 ## Decisions
 
@@ -85,9 +85,12 @@ Agreed 2026-11-03:
 Checked against `mtg_collection.db` (read-only) on 2026-11-03. These are why
 parts of the design are shaped the way they are:
 
-- **Multi-face cards store no mana cost.** Boggart Trawler // Boggart Bog,
+- **Many multi-face cards store no mana cost.** Boggart Trawler // Boggart Bog,
   Hagra Mauling // Hagra Broodpit and 10 non-land cards such as Shaile, Dean of
-  Radiance // Embrose have `mana_cost = NULL`. Their `type_line` and
+  Radiance // Embrose have `mana_cost = NULL`. (A recount on 2026-11-04 found
+  40 such cards, and 18 split and adventure cards that store both costs joined
+  by ` // `, such as `{1}{B}{B} // {1}{B}{B}`; `card_faces()` reads those per
+  face, so they do get ✦.) Their `type_line` and
   `oracle_text` are both faces joined by ` // `. So every text rule is applied
   **per face**, never to the joined text, or the back land's "Add {B}" would
   be read as the front spell's.
@@ -341,7 +344,7 @@ totals as a minimum.
     confirms the game is gone. It calls the rules part directly through CDP
     `evaluate` for the library edge cases above.
   - **Check the database override before anything runs.** `db.DB_PATH` is a
-    hardcoded constant ([db.py:12](../dashboard_lib/db.py#L12)), the repo keeps
+    hardcoded constant ([db.py:12](../../dashboard_lib/db.py#L12)), the repo keeps
     no browser-check harness, and a test write once reached the live database
     because of a bad `PYTHONPATH`. So the script lives in the session scratchpad
     (not the repo) with these rules, none of which are optional:
@@ -422,7 +425,7 @@ totals as a minimum.
     basics / pick / undo, look order / undo), on a copy with the server's DB
     path checked first and the live file's size and mtime unchanged after.
 
-### Phase 4 — Turn summary, docs
+### Phase 4 — Turn summary, docs (done 2026-11-04)
 
 - Turn summary table and line.
 - Docs: `dashboard_lib/components/README.md` (the goldfish component), the
@@ -430,6 +433,34 @@ totals as a minimum.
   entry. Move this plan to `docs/archive/` and add it to the archive index.
 - Checks: summary totals match a scripted game, including a turn with a `?`
   source.
+
+- **As built (2026-11-04):**
+  - The log is text only, so the summary has its own structured rows:
+    `state.summary`, one `{turn, lands, mana, unknown, spent, cast,
+    commander}` per turn, in the game state so Undo restores it. Rules added:
+    `turnRecord`, `noteCast` and `recordTurn`; `store.act` calls `recordTurn`
+    after every accepted action while playing.
+  - **Mana available for a turn** is the most its sources could make at any
+    point in it (`manaAvailable(..., includeTapped)`): tapped sources still
+    count, summoning-sick ones don't, and a rock cast mid-turn raises it. It
+    is taken after each action, so a turn's row exists from its first action
+    (the draw step counts as one). `unknown` is the most `?` sources at once;
+    the cell then reads `5+` and the use ratio is "at most".
+  - **Mana value spent** is the mana value of each non-land face played from
+    hand or cast from the command zone, plus the commander's tax. Search and
+    the ⋯ menu move cards without casting, so they never add to it. `lands` is
+    the battlefield count when the turn's last action ran, so searched lands
+    count.
+  - The table sits under the log; the line under it gives "Commander cast on
+    turn N" (or "not cast yet") and "Used X of Y available mana (Z%)" across
+    the turns played.
+  - Checks run: the full suite, esprima, and a headless Edge script on a toy
+    deck (Forest, Sol Ring, a `?` land, the commander cast twice): T1 1 land /
+    1 mana, T2 shows `1+` for the `?` land, T3 Sol Ring + commander spent 4 of
+    3+, and a second cast on T4 spent 5 (3 + tax 2). The same script rendered
+    the summary table through the component.
+  - The goldfish rules still have no repo tests (there is no node here); the
+    Edge scripts live outside the repo, as the plan required.
 
 ## Backlog (not planned)
 

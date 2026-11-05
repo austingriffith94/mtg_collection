@@ -1,5 +1,5 @@
-"""Goldfish payload, mana parsing and page wrapper (docs/GOLDFISH_PLAN.md,
-Phases 1-2).
+"""Goldfish payload, mana parsing and page wrapper (docs/archive/GOLDFISH_PLAN.md,
+Phases 1-4).
 
 The Goldfish page lets you play out a deck's first turns alone, entirely in
 the browser. This module is the Python half: it turns a deck into the plain

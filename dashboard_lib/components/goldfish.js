@@ -1,5 +1,5 @@
-// Goldfish: play a deck's first turns alone by clicking (docs/GOLDFISH_PLAN.md,
-// Phases 2-3).
+// Goldfish: play a deck's first turns alone by clicking (docs/archive/GOLDFISH_PLAN.md,
+// Phases 2-4).
 //
 // CCv2 module: `export default function(component)`. Everything is drawn
 // under `parentElement` (a shadow root, never `document`) and the function
@@ -15,8 +15,9 @@
 //                        "<id>#1" … "<id>#n", since each copy taps separately.
 //
 // The file has two parts. The RULES part (state, shuffle, draw, mulligan,
-// play, tap, move, next turn, mana count, the castable check, search and
-// look-at-top) has no DOM code, so a headless check can call it directly. The DRAWING part reads the state and renders
+// play, tap, move, next turn, mana count, the castable check, search,
+// look-at-top and the per-turn summary rows) has no DOM code, so a headless
+// check can call it directly. The DRAWING part reads the state and renders
 // it; every click goes through act(), which saves an undo snapshot first.
 //
 // The game survives reruns by living in a store on parentElement, not in
@@ -80,6 +81,7 @@ function newGame(deck, opts = {}) {
     marks: {},                 // copyId -> {tapped, sick, face}; battlefield only
     casts: {},                 // commander copyId -> times cast
     log: [],                   // [{turn, entries: [text]}]
+    summary: [],               // per turn, see turnRecord()
   };
 }
 
@@ -201,6 +203,7 @@ function playFromHand(state, deck, id, face = 0) {
   removeFromZone(state, id);
   const f = putOntoBattlefield(state, deck, id, face);
   logEntry(state, f.name);
+  if (f.kind !== "land") noteCast(state, f.name, deck.defs[id].cmc || 0);
   if (f.kind === "land") {
     state.landsPlayed++;
     if (state.landsPlayed > 1) {
@@ -208,6 +211,42 @@ function playFromHand(state, deck, id, face = 0) {
     }
   }
   return {};
+}
+
+function turnRecord(state) {
+  // This turn's row of the summary table, made on first use:
+  //   lands      lands on the battlefield when the turn's last action ran
+  //   mana       most mana the turn's sources could make (see recordTurn)
+  //   unknown    most "?" sources at once; `mana` is then a minimum
+  //   spent      mana value of what was cast, commander tax included
+  //   cast       names cast; commander is true if the commander was one
+  let row = state.summary.find(r => r.turn === state.turn);
+  if (!row) {
+    row = { turn: state.turn, lands: 0, mana: 0, unknown: 0, spent: 0, cast: [], commander: false };
+    state.summary.push(row);
+  }
+  return row;
+}
+
+function noteCast(state, name, manaValue, commander = false) {
+  const row = turnRecord(state);
+  row.cast.push(name);
+  row.spent += manaValue;
+  if (commander) row.commander = true;
+}
+
+function recordTurn(state, deck) {
+  // Called after every accepted action while playing. "Mana available" for a
+  // turn is the most its sources could make at any point in it: tapped
+  // sources still count (tapping them is how you spend it), summoning-sick
+  // ones don't, and a rock cast mid-turn raises it. Search and the ⋯ menu
+  // move cards without casting, so they change lands and mana but not spent.
+  if (state.phase !== "play") return;
+  const row = turnRecord(state);
+  const mana = manaAvailable(state, deck, true);
+  row.lands = state.lands.length;
+  row.mana = Math.max(row.mana, mana.amount);
+  row.unknown = Math.max(row.unknown, mana.unknown);
 }
 
 function commanderTax(state, id) {
@@ -221,6 +260,7 @@ function castCommander(state, deck, id, face = 0) {
   removeFromZone(state, id);
   const f = putOntoBattlefield(state, deck, id, face);
   state.casts[id] = (state.casts[id] || 0) + 1;
+  noteCast(state, f.name, (deck.defs[id].cmc || 0) + tax, true);
   logEntry(state, f.name + (tax ? " (tax " + tax + ")" : ""));
   return {};
 }
@@ -266,14 +306,14 @@ function nextTurn(state) {
   return drawCards(state, 1);
 }
 
-function manaSources(state, deck) {
-  // The untapped, non-sick battlefield cards with a mana ability, as
+function manaSources(state, deck, includeTapped = false) {
+  // The untapped (or all, with includeTapped), non-sick battlefield cards with a mana ability, as
   // [{id, options, unknown}]. `options` are the abilities whose amount can be
   // read; a source with none of those (Cabal Coffers) is `unknown`, the "?".
   const sources = [];
   for (const id of state.lands.concat(state.permanents)) {
     const mark = state.marks[id] || {};
-    if (mark.tapped || mark.sick) continue;
+    if ((mark.tapped && !includeTapped) || mark.sick) continue;
     const abilities = faceOf(state, deck, id).mana;
     if (!abilities || !abilities.length) continue;
     const options = abilities.filter(a => a.amount != null);
@@ -296,13 +336,13 @@ function sourceLabel(source) {
   return Array(best).fill(any ? "✱" : colors.join("/") || "?");
 }
 
-function manaAvailable(state, deck) {
+function manaAvailable(state, deck, includeTapped = false) {
   // {amount, unknown, colors}: what untapped, non-sick sources could make.
   // A source with several abilities (Talisman) counts its best readable one.
   let amount = 0;
   let unknown = 0;
   const colors = [];
-  for (const source of manaSources(state, deck)) {
+  for (const source of manaSources(state, deck, includeTapped)) {
     if (source.unknown) unknown++;
     else amount += Math.max(...source.options.map(o => o.amount));
     colors.push(...sourceLabel(source));
@@ -463,7 +503,7 @@ function counts(state) {
 const RULES = {
   shuffle, expandDeck, newGame, start, mulligan, mulliganBottomCount, keep, bottomCard,
   playFromHand, castCommander, commanderTax, toggleTap, moveCard, nextTurn, drawCards,
-  manaSources, manaAvailable, canPay, castable, drawExtra, shuffleLibrary, searchLibrary,
+  manaSources, manaAvailable, recordTurn, canPay, castable, drawExtra, shuffleLibrary, searchLibrary,
   arrangeTop, faceOf, zoneOf, counts,
 };
 
@@ -493,6 +533,7 @@ function makeStore(deck) {
       store.toast(result.error);
     } else {
       store.history.push(before);
+      recordTurn(store.state, deck);
       if (result.toast) store.toast(result.toast);
     }
     store.render();
@@ -997,6 +1038,38 @@ export default function (component) {
     return section;
   }
 
+  function summaryPanel() {
+    // Per-turn table and a closing line, from state.summary. A "?" source
+    // makes that turn's mana a minimum ("5+") and the use ratio "at most".
+    const rows = store.state.summary;
+    const section = el("section", "summary");
+    section.appendChild(el("header", "zone-head", "Turn summary"));
+    const grid = el("table", "summary-table");
+    const head = el("tr");
+    for (const h of ["Turn", "Lands", "Mana available", "Mana value spent", "Cast"]) head.appendChild(el("th", "", h));
+    grid.appendChild(head);
+    for (const r of rows) {
+      const tr = el("tr");
+      tr.dataset.turn = r.turn;
+      const cells = [r.turn, r.lands, r.mana + (r.unknown ? "+" : ""), r.spent, r.cast.join(", ") || "—"];
+      cells.forEach((c, i) => tr.appendChild(el("td", i === 4 ? "summary-cast" : "", String(c))));
+      grid.appendChild(tr);
+    }
+    section.appendChild(grid);
+
+    const first = rows.find(r => r.commander);
+    const spent = rows.reduce((n, r) => n + r.spent, 0);
+    const mana = rows.reduce((n, r) => n + r.mana, 0);
+    const minimum = rows.some(r => r.unknown);
+    const parts = [first ? "Commander cast on turn " + first.turn : "Commander not cast yet"];
+    if (mana) {
+      parts.push("Used " + spent + " of " + mana + (minimum ? "+" : "") + " available mana ("
+        + (minimum ? "at most " : "") + Math.round(100 * spent / mana) + "%)");
+    }
+    section.appendChild(el("div", "summary-line", parts.join(" · ")));
+    return section;
+  }
+
   function renderTable() {
     const state = store.state;
     table.replaceChildren();
@@ -1019,6 +1092,7 @@ export default function (component) {
     }
     if (!state.log.length) log.appendChild(el("div", "zone-empty", "Nothing yet."));
     table.appendChild(log);
+    if (state.summary.length) table.appendChild(summaryPanel());
   }
 
   store.render = () => {

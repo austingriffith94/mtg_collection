@@ -67,12 +67,12 @@ def _insert_card_row(conn, row):
             scryfall_id, oracle_id, name, set_code, collector_number, type_line,
             mana_cost, cmc, color_identity, oracle_text, rarity, image_uri,
             is_basic_land, is_game_changer, is_reserved, is_showcase, is_borderless,
-            commander_legal, current_price_usd,
+            commander_legal, current_price_usd, current_price_usd_foil,
             price_updated_at, last_fetched_at
         ) VALUES (:scryfall_id, :oracle_id, :name, :set_code, :collector_number, :type_line,
                   :mana_cost, :cmc, :color_identity, :oracle_text, :rarity, :image_uri,
                   :is_basic_land, :is_game_changer, :is_reserved, :is_showcase, :is_borderless,
-                  :commander_legal, :current_price_usd,
+                  :commander_legal, :current_price_usd, :current_price_usd_foil,
                   :price_updated_at, :last_fetched_at)""",
         row,
     )

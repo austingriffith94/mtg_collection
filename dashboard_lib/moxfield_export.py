@@ -75,9 +75,15 @@ def export_deck_text(conn, deck_id, include_maybeboard=False):
 # ------------------------------------------------------------------
 # Moxfield COLLECTION CSV import format (Prompt Pass 6). Header order and
 # every field's exact meaning/casing were taken directly from Moxfield's
-# own sample export (see moxfield_samples/moxfield_collection.csv) and
-# the prompt spec — verified byte-for-byte against that sample by
-# scripts/_test_prompt_pass6_offline.py.
+# own sample export (since deleted from the repo; its structure is
+# recorded here) and the prompt spec.
+#
+# Sample structure: every field is double-quoted, header row first, e.g.
+#   "1","1","Abzan Battle Priest","ktk","Near Mint","English","","",
+#   "2026-09-14 02:30:53.523000","1","False","False",""
+# i.e. Edition = lowercase set code, Foil = "" (non-foil) or "foil",
+# Last Modified = "YYYY-MM-DD HH:MM:SS.ffffff", Alter/Proxy = "False"/"True",
+# Tags and Purchase Price may be empty strings.
 # ------------------------------------------------------------------
 COLLECTION_CSV_HEADERS = [
     "Count", "Tradelist Count", "Name", "Edition", "Condition", "Language",

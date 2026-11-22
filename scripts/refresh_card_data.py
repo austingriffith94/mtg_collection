@@ -60,6 +60,10 @@ def main():
         print(f"\nNewly flagged Game Changer ({len(summary['newly_game_changer'])}):")
         for n in summary["newly_game_changer"]:
             print(f"  - {n}")
+    if summary.get("binder_new"):
+        print(f"\nNow qualify for the Binder ({len(summary['binder_new'])}):")
+        for n in summary["binder_new"]:
+            print(f"  - {n}")
     if summary["unresolved"]:
         print(f"\n⚠ {len(summary['unresolved'])} card(s) couldn't be refreshed:")
         for n in summary["unresolved"]:

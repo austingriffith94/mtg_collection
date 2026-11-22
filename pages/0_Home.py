@@ -8,6 +8,7 @@ Top to bottom:
   - page guide: one st.page_link card per page, grouped by sidebar section,
     built from dashboard_lib.nav.PAGES so it always matches the sidebar
   - Workbench summary line (pending work across every deck)
+  - Binder line (stored cards that pass a binder rule; hidden when none)
   - deck tiles: clicking one opens the Decks page at `Decks?deck_id=N`,
     which pre-selects that deck
 
@@ -24,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
 
-from dashboard_lib import db, loaders, nav
+from dashboard_lib import binder, db, loaders, nav
 from dashboard_lib import card_view as cv
 
 cv.setup_page("MTG Collection Dashboard", "🃏")
@@ -81,6 +82,12 @@ if unlocated["lots"]:
 if workbench_bits:
     st.markdown("🔧 " + " · ".join(workbench_bits))
     st.page_link("pages/8_Workbench.py", label="Open the Workbench", icon="🔧")
+
+# Binder nudge: stored cards that pass a binder rule (cheap count, no planned_for work).
+binder_count = binder.binder_candidate_count(conn)
+if binder_count:
+    st.markdown(f"📒 **{binder_count}** card(s) in storage could go in the Binder")
+    st.page_link("pages/12_Binder.py", label="Open the Binder", icon="📒")
 
 decks_with_covers = loaders.load_decks_with_covers(conn)
 cv.render_deck_landing_grid(decks_with_covers, status_df=comparison)

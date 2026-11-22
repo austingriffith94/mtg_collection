@@ -24,6 +24,7 @@ import logging
 import os
 import sys
 
+from . import binder
 from . import writes as w
 
 logger = logging.getLogger(__name__)
@@ -41,11 +42,13 @@ def _load_scryfall_module():
 
 def refresh_all_cards(conn, progress_callback=None):
     """Re-fetches every row in `cards` by scryfall_id and updates
-    is_reserved / is_game_changer / commander_legal / current_price_usd
-    in place. progress_callback(done, total, card_name), if given, is
+    is_reserved / is_game_changer / commander_legal / current_price_usd /
+    current_price_usd_foil in place. progress_callback(done, total, card_name), if given, is
     called after each card so callers can show progress. Returns a
     summary dict: checked, updated, newly_reserved, newly_game_changer,
-    unresolved, pruned_cards (all lists of card names), pruned_count."""
+    unresolved, pruned_cards, binder_new (stored cards that qualify for the
+    binder now but didn't before this run) (all lists of card names),
+    pruned_count."""
     scryfall_lookup = _load_scryfall_module()
     client = scryfall_lookup.ScryfallClient(verbose=False)
 
@@ -55,7 +58,13 @@ def refresh_all_cards(conn, progress_callback=None):
 
     logger.info("Starting card data refresh: %d cards to check", total)
 
+    # docs/archive/BINDER_PLAN.md Phase 2: which stored cards qualify for the binder
+    # before and after the new prices, so the summary can name the ones that
+    # now do. Both counts come from this run; nothing is stored.
+    binder_before = binder.binder_candidate_names(conn)
+
     summary = {
+        "binder_new": [],
         "checked": 0,
         "updated": 0,
         "newly_reserved": [],
@@ -76,11 +85,13 @@ def refresh_all_cards(conn, progress_callback=None):
             conn.execute(
                 """UPDATE cards SET is_reserved=?, is_game_changer=?, is_showcase=?,
                        is_borderless=?, commander_legal=?,
-                       current_price_usd=?, price_updated_at=?, last_fetched_at=?
+                       current_price_usd=?, current_price_usd_foil=?,
+                       price_updated_at=?, last_fetched_at=?
                    WHERE scryfall_id=?""",
                 (fresh["is_reserved"], fresh["is_game_changer"], fresh["is_showcase"],
                  fresh["is_borderless"], fresh["commander_legal"],
-                 fresh["current_price_usd"], today, today, scryfall_id),
+                 fresh["current_price_usd"], fresh["current_price_usd_foil"],
+                 today, today, scryfall_id),
             )
             summary["updated"] += 1
             if fresh["is_reserved"] and not was_reserved:
@@ -92,6 +103,7 @@ def refresh_all_cards(conn, progress_callback=None):
             progress_callback(i, total, name)
 
     conn.commit()
+    summary["binder_new"] = sorted(binder.binder_candidate_names(conn) - binder_before, key=str.casefold)
 
     pruned = w.prune_collection(conn)
     summary["pruned_count"] = len(pruned)

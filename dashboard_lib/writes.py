@@ -399,6 +399,34 @@ def remove_location_from_catalog(conn, location):
 
 
 # ------------------------------------------------------------------
+# app_settings and the binder's "Not for binder" list
+# (docs/archive/BINDER_PLAN.md Phase 2). Validation of the binder.* keys lives in
+# binder.save_settings(); these only store.
+# ------------------------------------------------------------------
+def set_setting(conn, key, value):
+    """Store one app_settings value as text (queries.get_setting reads it)."""
+    conn.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
+                 (key, None if value is None else str(value)))
+    conn.commit()
+
+
+def dismiss_binder_card(conn, card_key, name):
+    """Hide a card (every printing) from the binder candidates for good.
+    `card_key` is binder.card_key(): the oracle_id, or a name key for a
+    card row that has none."""
+    conn.execute(
+        "INSERT OR REPLACE INTO binder_dismissed (oracle_id, name, dismissed_at) VALUES (?, ?, ?)",
+        (card_key, name, datetime.date.today().isoformat()),
+    )
+    conn.commit()
+
+
+def undo_binder_dismissal(conn, card_key):
+    conn.execute("DELETE FROM binder_dismissed WHERE oracle_id = ?", (card_key,))
+    conn.commit()
+
+
+# ------------------------------------------------------------------
 # Card tags (deck-scoped: card_tags PK is deck_id+scryfall_id+tag_id)
 # ------------------------------------------------------------------
 # A read, kept in queries.py so the Advisor can use it without this module.
@@ -2632,7 +2660,7 @@ COLLECTION_FIELDS = ["quantity", "foil", "location", "date_acquired", "price_pai
 # rename_deck() logs nothing — a rename relabels, no copy moved.
 # ------------------------------------------------------------------
 MOVE_REASONS = ("deck_edit", "apply", "reconcile", "dismantle", "collection_edit",
-                "import", "deck_delete", "purchase", "build")
+                "import", "deck_delete", "purchase", "build", "binder")
 
 
 def _loc(value):

@@ -1739,3 +1739,152 @@ def test_add_form_refuses_a_lot_with_neither_field(smoke_db_path, tmp_path, monk
     at, path = _add_form(smoke_db_path, tmp_path, monkeypatch, 0)
     assert _lot_count(path) == before
     assert any("enter a quantity or a Location" in e.value for e in at.error)
+
+
+# ---------------------------------------------------------------- Binder page
+def _binder_db(smoke_db_path, tmp_path, monkeypatch):
+    """A copy of the smoke DB with one candidate: a 2-copy Reserved List
+    lot in Box worth $44.88. Rows start unticked; Select all ticks it."""
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO cards (scryfall_id, name, set_code, collector_number, oracle_id, type_line,"
+        " cmc, color_identity, current_price_usd, is_reserved, price_updated_at)"
+        " VALUES ('dystopia-all-1', 'Dystopia', 'all', '1', 'oracle-dystopia', 'Enchantment',"
+        " 3, 'B', 44.88, 1, '2026-11-01')")
+    lot_id = conn.execute(
+        "INSERT INTO collection (scryfall_id, quantity, location) VALUES ('dystopia-all-1', 2, 'Box')"
+    ).lastrowid
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    at = AppTest.from_file(os.path.join(PAGES_DIR, "12_Binder.py"), default_timeout=15)
+    at.run()
+    assert not at.exception
+    return at, path, lot_id
+
+
+def test_binder_page_moves_a_ticked_row(smoke_db_path, tmp_path, monkeypatch):
+    try:
+        at, path, lot_id = _binder_db(smoke_db_path, tmp_path, monkeypatch)
+        # Viewing the page writes nothing; the first move adds the Location.
+        catalog_sql = "SELECT 1 FROM location_catalog WHERE location='Binder'"
+        assert sqlite3.connect(path).execute(catalog_sql).fetchone() is None
+        # Nothing is ticked until you choose.
+        assert at.button(key="binder_move").disabled
+        assert at.button(key="binder_dismiss").disabled
+        at.button(key="binder_select_all").click().run()
+        assert at.button(key="binder_move").label.startswith("📒 Move 2 copies")
+        at.button(key="binder_select_none").click().run()
+        assert at.button(key="binder_move").disabled
+        at.button(key="binder_select_all").click().run()
+        at.button(key="binder_move").click().run()
+        assert not at.exception
+        check = sqlite3.connect(path)
+        assert check.execute(catalog_sql).fetchone()
+        assert check.execute("SELECT location FROM collection WHERE collection_id=?",
+                             (lot_id,)).fetchone() == ("Binder",)
+        assert check.execute(
+            "SELECT from_location, to_location, quantity, reason FROM collection_moves"
+            " WHERE card_name='Dystopia'").fetchall() == [("Box", "Binder", 2, "binder")]
+        assert any("Nothing in storage passes" in i.value for i in at.info)
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_binder_page_dismiss_and_undo(smoke_db_path, tmp_path, monkeypatch):
+    try:
+        at, path, _ = _binder_db(smoke_db_path, tmp_path, monkeypatch)
+        at.button(key="binder_select_all").click().run()
+        at.button(key="binder_dismiss").click().run()
+        assert not at.exception
+        assert sqlite3.connect(path).execute(
+            "SELECT oracle_id, name FROM binder_dismissed").fetchall() == [("oracle-dystopia", "Dystopia")]
+        assert any("Nothing in storage passes" in i.value for i in at.info)
+        at.toggle(key="binder_show_dismissed").set_value(True).run()
+        at.button(key="binder_undo_oracle-dystopia").click().run()
+        assert not at.exception
+        assert sqlite3.connect(path).execute("SELECT COUNT(*) FROM binder_dismissed").fetchone() == (0,)
+        # Back on the list, and unticked again after the dismiss.
+        assert at.button(key="binder_move").disabled
+        assert any(b.label == "☑️ Select all" for b in at.button)
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_binder_page_refuses_a_deck_as_the_binder(smoke_db_path, tmp_path, monkeypatch):
+    try:
+        at, path, _ = _binder_db(smoke_db_path, tmp_path, monkeypatch)
+        at.text_input(key="binder_set_location").set_value("smoke test deck")
+        next(b for b in at.button if b.label == "Save settings").click().run()
+        assert not at.exception
+        assert any("is a deck" in e.value for e in at.error)
+        assert sqlite3.connect(path).execute(
+            "SELECT value FROM app_settings WHERE key='binder.location'").fetchone() is None
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+# ---------------------------------------------------------------- Binder nudges (Phase 4)
+def test_home_counts_binder_candidates(smoke_db_path, tmp_path, monkeypatch):
+    try:
+        _binder_db(smoke_db_path, tmp_path, monkeypatch)       # points DB_PATH at the copy
+        at = AppTest.from_file(os.path.join(os.path.dirname(PAGES_DIR), "dashboard.py"), default_timeout=15)
+        at.run()
+        assert not at.exception
+        assert any("could go in the Binder" in m.value for m in at.markdown)
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_collection_editor_flags_a_qualifying_add(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = str(tmp_path / "add_notice.db")
+    shutil.copy(smoke_db_path, path)
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE cards SET is_reserved = 1 WHERE set_code='cmd' AND collector_number='1'")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "5_Collection_Editor.py"), default_timeout=15)
+        at.run()
+        at.text_input(key="editor_coll_add_set").set_value("cmd")
+        at.text_input(key="editor_coll_add_num").set_value("1")
+        at.number_input(key="editor_coll_add_qty").set_value(1)
+        at.button(key="editor_coll_add_btn").click().run()
+        assert not at.exception
+        assert any("qualifies for the Binder (Reserved List" in str(t.value) for t in at.toast)
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_binder_page_decks_box_lists_deck_copies_but_select_all_skips_them(smoke_db_path, tmp_path, monkeypatch):
+    try:
+        at, path, lot_id = _binder_db(smoke_db_path, tmp_path, monkeypatch)
+        conn = sqlite3.connect(path)
+        deck = conn.execute("SELECT name FROM decks LIMIT 1").fetchone()[0]
+        conn.execute("UPDATE collection SET location=? WHERE collection_id=?", (deck, lot_id))
+        conn.commit()
+        conn.close()
+        at.run()
+        assert at.checkbox(key="binder_include_decks").value is False
+        assert any("Nothing in storage passes" in i.value for i in at.info)    # a deck copy is hidden
+        at.checkbox(key="binder_include_decks").check().run()
+        assert not at.exception
+        at.button(key="binder_select_all").click().run()
+        assert at.button(key="binder_move").disabled                             # never auto-ticked
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()

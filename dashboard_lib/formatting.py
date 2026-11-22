@@ -473,7 +473,7 @@ MOVE_REASON_LABELS = {
     "deck_edit": "deck edit", "apply": "planned change applied", "reconcile": "reconcile",
     "dismantle": "dismantle", "collection_edit": "collection edit", "import": "order import",
     "prune": "pruned", "deck_delete": "deck deleted", "purchase": "purchase",
-    "build": "built the deck",
+    "build": "built the deck", "binder": "moved to the binder",
 }
 
 

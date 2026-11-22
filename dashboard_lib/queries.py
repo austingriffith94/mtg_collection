@@ -80,6 +80,9 @@ _SCHEMA_UPGRADES = [
     # type; the lowest position is its primary tag. Every earlier row was the
     # only tag of its type on that card, so the default 0 makes it the primary.
     ("card_tags", "position", "ALTER TABLE card_tags ADD COLUMN position INTEGER NOT NULL DEFAULT 0"),
+    # docs/archive/BINDER_PLAN.md Phase 1: the foil price (usd_foil, else usd_etched).
+    # NULL until the next Card Data refresh fills it in.
+    ("cards", "current_price_usd_foil", "ALTER TABLE cards ADD COLUMN current_price_usd_foil REAL"),
 ]
 
 # The values decks.build_state may hold. NULL (absent from this tuple) is
@@ -337,6 +340,18 @@ _SCHEMA_TABLE_UPGRADES = [
                label       TEXT NOT NULL,
                definition  TEXT,
                PRIMARY KEY (deck_id, tag_type, label)
+           )""",
+        None,
+    ),
+    # docs/archive/BINDER_PLAN.md Phase 2: a general settings store (the binder.* keys
+    # are its first users) and the "Not for binder" list. See schema.sql.
+    ("app_settings", "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT)", None),
+    (
+        "binder_dismissed",
+        """CREATE TABLE binder_dismissed (
+               oracle_id     TEXT PRIMARY KEY,
+               name          TEXT,
+               dismissed_at  DATE
            )""",
         None,
     ),
@@ -2673,6 +2688,13 @@ def same_location(a, b):
     case and surrounding spaces ("lands box" is "Lands Box"). Deck names
     are still matched exactly, as everywhere else."""
     return (a or "").strip().casefold() == (b or "").strip().casefold()
+
+
+def get_setting(conn, key, default=None):
+    """One app_settings value as stored (text), or `default` when the key
+    has never been saved. Parsing is the caller's job (binder.binder_settings)."""
+    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    return default if row is None or row[0] is None else row[0]
 
 
 def storage_locations(conn):

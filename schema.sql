@@ -30,6 +30,7 @@ CREATE TABLE cards (
     is_borderless     BOOLEAN DEFAULT 0,  -- Scryfall border_color == "borderless"
     commander_legal   BOOLEAN DEFAULT 1,
     current_price_usd REAL,
+    current_price_usd_foil REAL,          -- Scryfall usd_foil, else usd_etched; NULL until refreshed
     price_updated_at  DATE,
     last_fetched_at   DATE,
     edhrec_salt       REAL              -- EDHREC salt score. Feature retired in Prompt

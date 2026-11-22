@@ -17,7 +17,7 @@ half-converted at a phase boundary. Go in order. Work happens on the
 Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 
 - [x] **Phase 0** — Branch and plan.
-- [ ] **Phase 1** — Foil prices on `cards` (schema, Scryfall fetch, refresh).
+- [x] **Phase 1** — Foil prices on `cards` (schema, Scryfall fetch, refresh).
 - [ ] **Phase 2** — Settings table and the candidate rules (`dashboard_lib/binder.py`, tested).
 - [ ] **Phase 3** — The Binder page: settings, fill gauge, candidate list, move to Binder.
 - [ ] **Phase 4** — Nudges on Home and Collection Editor; docs and wrap-up.

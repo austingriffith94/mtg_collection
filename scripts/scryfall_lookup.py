@@ -198,6 +198,8 @@ def to_card_row(data):
     legalities = data.get("legalities", {})
     prices = data.get("prices", {}) or {}
     price = prices.get("usd") or prices.get("usd_foil") or prices.get("usd_etched")
+    # Foil price kept separately so a foil copy can be valued on its own finish.
+    price_foil = prices.get("usd_foil") or prices.get("usd_etched")
 
     type_line = data.get("type_line", "") or ""
 
@@ -237,6 +239,7 @@ def to_card_row(data):
         "is_borderless": 1 if is_borderless else 0,
         "commander_legal": 1 if legalities.get("commander") == "legal" else 0,
         "current_price_usd": float(price) if price else None,
+        "current_price_usd_foil": float(price_foil) if price_foil else None,
         "price_updated_at": None,  # set by caller to today's date
         "last_fetched_at": None,   # set by caller to today's date
     }

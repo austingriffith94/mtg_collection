@@ -80,6 +80,9 @@ _SCHEMA_UPGRADES = [
     # type; the lowest position is its primary tag. Every earlier row was the
     # only tag of its type on that card, so the default 0 makes it the primary.
     ("card_tags", "position", "ALTER TABLE card_tags ADD COLUMN position INTEGER NOT NULL DEFAULT 0"),
+    # docs/BINDER_PLAN.md Phase 1: the foil price (usd_foil, else usd_etched).
+    # NULL until the next Card Data refresh fills it in.
+    ("cards", "current_price_usd_foil", "ALTER TABLE cards ADD COLUMN current_price_usd_foil REAL"),
 ]
 
 # The values decks.build_state may hold. NULL (absent from this tuple) is

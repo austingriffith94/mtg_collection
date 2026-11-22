@@ -41,8 +41,8 @@ def _load_scryfall_module():
 
 def refresh_all_cards(conn, progress_callback=None):
     """Re-fetches every row in `cards` by scryfall_id and updates
-    is_reserved / is_game_changer / commander_legal / current_price_usd
-    in place. progress_callback(done, total, card_name), if given, is
+    is_reserved / is_game_changer / commander_legal / current_price_usd /
+    current_price_usd_foil in place. progress_callback(done, total, card_name), if given, is
     called after each card so callers can show progress. Returns a
     summary dict: checked, updated, newly_reserved, newly_game_changer,
     unresolved, pruned_cards (all lists of card names), pruned_count."""
@@ -76,11 +76,13 @@ def refresh_all_cards(conn, progress_callback=None):
             conn.execute(
                 """UPDATE cards SET is_reserved=?, is_game_changer=?, is_showcase=?,
                        is_borderless=?, commander_legal=?,
-                       current_price_usd=?, price_updated_at=?, last_fetched_at=?
+                       current_price_usd=?, current_price_usd_foil=?,
+                       price_updated_at=?, last_fetched_at=?
                    WHERE scryfall_id=?""",
                 (fresh["is_reserved"], fresh["is_game_changer"], fresh["is_showcase"],
                  fresh["is_borderless"], fresh["commander_legal"],
-                 fresh["current_price_usd"], today, today, scryfall_id),
+                 fresh["current_price_usd"], fresh["current_price_usd_foil"],
+                 today, today, scryfall_id),
             )
             summary["updated"] += 1
             if fresh["is_reserved"] and not was_reserved:

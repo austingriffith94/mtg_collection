@@ -337,18 +337,28 @@ hit a row that is gone. Each of these needs an explicit rule:
 - [ ] Remove the Consolidate button from the Collection page.
 - [ ] Migration test on a fixture DB with duplicate groups, plus a run on a
       **copy** of `mtg_collection.db`, checking the numbers in **Edge cases**.
-- [ ] Test-fixture `INSERT`s that create duplicates now fail. Fix those
-      fixtures: `tests/test_pages_smoke.py` (the blank-row cases around lines
-      1679-1704 insert several rows for one card with no Location),
+- [ ] Test-fixture `INSERT`s that create duplicates now fail. Checked in
+      Phase 1 by appending the index to `schema.sql` and running the whole
+      suite (a patched `ensure_schema` isn't enough: the smoke DB is built
+      from `schema.sql` alone). Exactly three tests fail, and these are the
+      fixtures to fix:
       `tests/test_contention.py` (`_lot` helper, used by
       `test_contention_no_shortfall_when_owned_covers_demand`),
       `tests/test_plan_availability.py` (`_lot` helper, used by
-      `test_unlocated_lot_summary_counts_only_lots_with_no_location`) and
-      `tests/test_collection_writes.py` (the consolidate test already skips
-      under the index; it needs its duplicates). The old
-      `scripts/_test_*_offline.py` scripts also insert duplicates
-      (`_test_prompt_pass6_offline.py` adds two unlocated rows of one
-      printing). Fix them or retire them, whichever is still in use.
+      `test_unlocated_lot_summary_counts_only_lots_with_no_location`), and
+      `tests/test_collection_writes.py`'s consolidate test, which needs real
+      duplicates (it already skips under the index, so once the index is in
+      `schema.sql` run it on a connection that drops the index first, or
+      move it to Phase 2's migration test).
+      Not a problem, despite an earlier note here: the blank-row cases in
+      `tests/test_pages_smoke.py` (~1679-1704). Their rows differ in Location
+      or sit beside a Smoke Test Deck row, so none shares a place. The
+      `place_index` fixtures' `no-index` variant in `test_collection_writes.py`
+      and `test_collection_moves.py` goes away once the index is always on.
+      Of the old `scripts/_test_*_offline.py` scripts, only
+      `_test_prompt_pass6_offline.py` collides (two unlocated rows of
+      `sr-c21`, non-foil, to test that the Moxfield export sums lots). Fix it
+      or retire it, whichever is still in use. The rest use distinct places.
 
 ### Phase 3: Docs and wrap-up
 

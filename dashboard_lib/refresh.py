@@ -24,6 +24,7 @@ import logging
 import os
 import sys
 
+from . import binder
 from . import writes as w
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,9 @@ def refresh_all_cards(conn, progress_callback=None):
     current_price_usd_foil in place. progress_callback(done, total, card_name), if given, is
     called after each card so callers can show progress. Returns a
     summary dict: checked, updated, newly_reserved, newly_game_changer,
-    unresolved, pruned_cards (all lists of card names), pruned_count."""
+    unresolved, pruned_cards, binder_new (stored cards that qualify for the
+    binder now but didn't before this run) (all lists of card names),
+    pruned_count."""
     scryfall_lookup = _load_scryfall_module()
     client = scryfall_lookup.ScryfallClient(verbose=False)
 
@@ -55,7 +58,13 @@ def refresh_all_cards(conn, progress_callback=None):
 
     logger.info("Starting card data refresh: %d cards to check", total)
 
+    # docs/BINDER_PLAN.md Phase 2: which stored cards qualify for the binder
+    # before and after the new prices, so the summary can name the ones that
+    # now do. Both counts come from this run; nothing is stored.
+    binder_before = binder.binder_candidate_names(conn)
+
     summary = {
+        "binder_new": [],
         "checked": 0,
         "updated": 0,
         "newly_reserved": [],
@@ -94,6 +103,7 @@ def refresh_all_cards(conn, progress_callback=None):
             progress_callback(i, total, name)
 
     conn.commit()
+    summary["binder_new"] = sorted(binder.binder_candidate_names(conn) - binder_before, key=str.casefold)
 
     pruned = w.prune_collection(conn)
     summary["pruned_count"] = len(pruned)

@@ -398,6 +398,10 @@ with tab_carddata:
             lines.append("Newly flagged Reserved List: " + ", ".join(summary["newly_reserved"]))
         if summary["newly_game_changer"]:
             lines.append("Newly flagged Game Changer: " + ", ".join(summary["newly_game_changer"]))
+        if summary.get("binder_new"):
+            _n = len(summary["binder_new"])
+            lines.append(f"{_n} stored card{'' if _n == 1 else 's'} now qualif{'ies' if _n == 1 else 'y'} "
+                         "for the Binder: " + ", ".join(summary["binder_new"]))
         if summary["pruned_count"]:
             lines.append(
                 f"Pruned {summary['pruned_count']} collection lot(s) with no location and no "

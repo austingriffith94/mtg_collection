@@ -42,6 +42,7 @@ mtg_dashboard/
 │   ├── moxfield_export.py            # Moxfield format — shared by the CLI script and the dashboard (no Streamlit dep)
 │   ├── deck_printout.py              # one-page Letter-size HTML deck sheet, incl. the Turn 0 combo panel (Decks page → "🖨️ Printable deck sheet"; no Streamlit dep)
 │   ├── refresh.py                    # refresh Reserved List/Game Changer/legality/price by ID, then prune the collection (no Streamlit dep)
+│   ├── binder.py                     # Binder candidates: stored cards passing the value / Reserved List / Game changer rules, binder.* settings (no Streamlit dep)
 │   ├── game_form.py                  # Commander Game Tracking form resolution/validation (no Streamlit dep, Prompt Pass 7)
 │   ├── db.py                         # cached connection + "no DB yet" guard
 │   ├── loaders.py                    # st.cache_data-wrapped versions of queries.py

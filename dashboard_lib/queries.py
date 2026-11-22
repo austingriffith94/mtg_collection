@@ -343,6 +343,18 @@ _SCHEMA_TABLE_UPGRADES = [
            )""",
         None,
     ),
+    # docs/BINDER_PLAN.md Phase 2: a general settings store (the binder.* keys
+    # are its first users) and the "Not for binder" list. See schema.sql.
+    ("app_settings", "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT)", None),
+    (
+        "binder_dismissed",
+        """CREATE TABLE binder_dismissed (
+               oracle_id     TEXT PRIMARY KEY,
+               name          TEXT,
+               dismissed_at  DATE
+           )""",
+        None,
+    ),
 ]
 
 # Same additive philosophy as _SCHEMA_TABLE_UPGRADES, but for VIEWS (kept
@@ -2676,6 +2688,13 @@ def same_location(a, b):
     case and surrounding spaces ("lands box" is "Lands Box"). Deck names
     are still matched exactly, as everywhere else."""
     return (a or "").strip().casefold() == (b or "").strip().casefold()
+
+
+def get_setting(conn, key, default=None):
+    """One app_settings value as stored (text), or `default` when the key
+    has never been saved. Parsing is the caller's job (binder.binder_settings)."""
+    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    return default if row is None or row[0] is None else row[0]
 
 
 def storage_locations(conn):

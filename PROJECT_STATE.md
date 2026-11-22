@@ -75,6 +75,7 @@ mtg_dashboard/
 │   ├── card_resolver.py    # find-or-fetch a card from Scryfall     (no Streamlit dep)
 │   ├── moxfield_export.py  # Moxfield DECK paste format + Moxfield COLLECTION CSV export (Prompt Pass 6), shared CLI+dashboard (no Streamlit dep, no pandas dep)
 │   ├── refresh.py          # re-fetch Reserved List/Game Changer/Showcase/Borderless/etc, then prune collection (no Streamlit dep)
+│   ├── binder.py           # Binder candidate rules, settings, fill and the refresh's binder_new (docs/BINDER_PLAN.md)
 │   ├── game_form.py        # Commander Game Tracking form seat resolution/validation (Prompt Pass 7) (no Streamlit dep)
 │   ├── db.py / loaders.py / card_view.py   # Streamlit-specific glue
 │   ├── nav.py              # page registry (sections/titles/url_paths) shared by the router and Home page

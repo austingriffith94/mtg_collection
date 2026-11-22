@@ -18,7 +18,7 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 
 - [x] **Phase 0** — Branch and plan.
 - [x] **Phase 1** — Foil prices on `cards` (schema, Scryfall fetch, refresh).
-- [ ] **Phase 2** — Settings table and the candidate rules (`dashboard_lib/binder.py`, tested).
+- [x] **Phase 2** — Settings table and the candidate rules (`dashboard_lib/binder.py`, tested).
 - [ ] **Phase 3** — The Binder page: settings, fill gauge, candidate list, move to Binder.
 - [ ] **Phase 4** — Nudges on Home and Collection Editor; docs and wrap-up.
 
@@ -317,6 +317,16 @@ Create the `binder` branch and commit this file.
 - Add `binder_new` to the refresh summary and show it in the Card Data tab.
 - Tests (`tests/test_binder.py`): every edge case above, on a small fixture
   database.
+
+As built (2026-11-21): settings are validated and saved by
+`binder.save_settings()` (raises `ValueError`, stores nothing on failure), so
+the page just calls it. Dismissals are keyed by `binder.card_key()`: the
+oracle_id, or `name:<name>` for a card row with none. `binder_candidate_count`
+counts distinct cards, not lots (Emergence Zone in two boxes is one). Against
+a copy of the live DB: 78 lots / 80 copies / 76 cards at $2, none planned for a
+deck. **For Phase 3:** `"binder"` is not in `writes.MOVE_REASONS`, so
+`move_lot(..., reason="binder")` raises today. Either add it there (and a
+label in `card_view.move_label`) or use `collection_edit`.
 
 ### Phase 3 — The Binder page
 

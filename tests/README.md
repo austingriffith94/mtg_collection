@@ -97,6 +97,7 @@ plus pytest (`pip install -r requirements-dev.txt`):
 - `test_nav.py` — the page registry in `dashboard_lib/nav.py` matches the
   files in `pages/`, and the Decks page keeps its `Decks` URL.
 - `test_goldfish.py` — docs/archive/GOLDFISH_PLAN.md Phase 1: `goldfish_payload()` (commander and partner out of the library, `qty` per card, no-commander and short-library warnings), `parse_cost()`, `mana_abilities()`, `enters_tapped()` and per-face `card_faces()` for MDFCs, split cards and costless faces. The game rules are JS (`components/goldfish.js`) and are not covered here: they were checked in headless Edge, and the Goldfish page's smoke test only loads it.
+- `test_binder.py` — docs/BINDER_PLAN.md Phase 2: `binder.binder_candidates()` and friends on a small fixture: deck, Binder, basic and blank lots never listed; skip_locations (case-blind) and unlocated lots; the value rule with the finish-aware copy value; Reserved List / Game changer switches; dismissals in every printing and Undo; `planned_for` from a brewing deck's saved choice or a pinned `source='storage'` row (not Auto); partial moves; settings validation and round trip; the refresh summary's `binder_new`; the additive table upgrade.
 - `test_deck_board.py` — docs/archive/VISUAL_DECK_PLAN.md Phase A: `board_payload()`
   (commander first, MDFC land flags, not-owned flags, URL-only images,
   payload size), plus Phase B's `apply_board_action()`: each op's effect on

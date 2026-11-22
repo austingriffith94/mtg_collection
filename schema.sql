@@ -111,6 +111,24 @@ CREATE TABLE location_catalog (
     location  TEXT PRIMARY KEY
 );
 
+-- General key/value settings store (docs/BINDER_PLAN.md Phase 2). Values are
+-- text; each reader parses its own keys and falls back to its default when a
+-- key is missing or unreadable (dashboard_lib/binder.py: the binder.* keys).
+CREATE TABLE app_settings (
+    key    TEXT PRIMARY KEY,
+    value  TEXT
+);
+
+-- Cards the user marked "Not for binder" (docs/BINDER_PLAN.md). Keyed by
+-- card, not printing: oracle_id, or "name:<casefolded name>" for a card row
+-- with no oracle_id (binder.card_key). Never expires. `name` is only there so
+-- the Show-dismissed list reads without a join.
+CREATE TABLE binder_dismissed (
+    oracle_id     TEXT PRIMARY KEY,
+    name          TEXT,
+    dismissed_at  DATE
+);
+
 -- ------------------------------------------------------------
 -- Decks
 -- ------------------------------------------------------------

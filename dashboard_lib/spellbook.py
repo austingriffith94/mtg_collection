@@ -356,7 +356,7 @@ def fetch_deck_combos(card_rows, commander=None, partner=None, client=None):
     is None, so callers can branch without inspecting the client.
 
     `client` is injectable so the offline test harness
-    (scripts/_test_spellbook_offline.py) can exercise this without network
+    (tests/test_spellbook.py) can exercise this without network
     access."""
     card_rows = list(card_rows)
     payload = build_deck_payload(card_rows, commander, partner)

@@ -120,6 +120,33 @@ name, so printings sharing a name group together the way real Scryfall data
 does. Pass `oracle_id=` explicitly where name and oracle identity need to
 come apart, or `oracle_id=False` for a card with none at all.
 
-The older `scripts/_test_*_offline.py` files are separate standalone
-scripts (run them directly, with `PYTHONIOENCODING=utf-8` on Windows); they
-are not collected by pytest.
+- `test_formatting.py` — pure `formatting.py` helpers: image-path / URL guards
+  against pandas NaN (the home-page crash), mana-curve buckets, mana-symbol URLs,
+  deck accent colors, and the win-rate color scale.
+- `test_card_view_render.py` — `card_view` rendering helpers with `st.markdown`
+  captured: the deck image fallback chain, the landing grid on all-NaN image
+  columns, the Decks page header and accent CSS, the win-rate Styler.
+- `test_probability.py` — color-source counting, per-card and commander cast
+  curves (including the one-land-drop-per-turn floor), expected-count helpers.
+- `test_deck_queries.py` — `list_decks_with_covers`, reserved-list and top-10
+  price tables, the Collection page's `in_deck` flag, `in_deck_sleeved_count`,
+  and the retired EDHREC salt column.
+- `test_card_lookup.py` — name search, printing lookup, `auto_add_to_collection`,
+  and `fetch_additional_printings` with the Scryfall client mocked.
+- `test_moxfield_collection_export.py` — the Moxfield collection CSV export
+  (the list-paste import is `test_moxfield_import.py`).
+- `test_game_tracking.py` — the Add Game form logic, `create_game` /
+  `update_game` rules, deleting a deck that has logged games, ELO and
+  head-to-head.
+- `test_locations.py` — `location_catalog` (fresh and upgrade), its writes,
+  `location_options()`, `card_inventory_status()`.
+- `test_deck_swap.py` — `delete_deck`'s Location handling and the basic
+  `execute_swap` cases (deeper coverage is in `test_deck_changes_writes.py`).
+- `test_spellbook.py` — the Commander Spellbook combo cache: payload building,
+  response normalizing, the combo text, save / clear / read, owned-card
+  quantities, and the bulk path off a DataFrame (the NaN regression). The
+  network client is faked.
+
+New tests go here as `test_*.py` with real asserts. There is no separate
+folder of standalone scripts: when a change retires something a test checks,
+update or delete that test in the same change.

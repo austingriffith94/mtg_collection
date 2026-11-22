@@ -273,8 +273,7 @@ def show_moves(moves):
             st.toast(move_label(move), icon="📦")
     else:
         # Decorated here rather than at import, the way pages declare their
-        # dialogs on every run: the scripts/_test_*_offline.py harnesses
-        # import this module under a Streamlit stub with no st.dialog.
+        # dialogs on every run, so importing this module never needs st.dialog.
         st.dialog("Copies moved", width="large")(_moves_dialog_body)(moves)
 
 

@@ -171,11 +171,12 @@ def main():
     conn.execute("INSERT INTO deck_cards (deck_id, scryfall_id, quantity) VALUES (1, 'sr-c21', 1)")
     # Two separate acquisition lots of the same non-foil printing (price
     # history kept apart) -> must be SUMMED into one CSV row.
+    # (Two Locations: one place holds one row, docs/LOT_CONSOLIDATION_PLAN.md.)
     conn.execute(
-        "INSERT INTO collection (scryfall_id, quantity, foil, price_paid) VALUES ('sr-c21', 2, 0, 5.00)"
+        "INSERT INTO collection (scryfall_id, quantity, foil, price_paid, location) VALUES ('sr-c21', 2, 0, 5.00, 'Box')"
     )
     conn.execute(
-        "INSERT INTO collection (scryfall_id, quantity, foil, price_paid) VALUES ('sr-c21', 1, 0, 4.50)"
+        "INSERT INTO collection (scryfall_id, quantity, foil, price_paid, location) VALUES ('sr-c21', 1, 0, 4.50, 'Binder')"
     )
     # A FOIL lot of the OTHER Sol Ring printing -> its own separate row.
     conn.execute(

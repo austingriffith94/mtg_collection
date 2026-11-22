@@ -14,7 +14,7 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 
 - [x] **Phase 0**: Branch and plan.
 - [x] **Phase 1**: The new merge rule, applied by every writer.
-- [ ] **Phase 2**: Clean up the existing rows and enforce the rule in the schema.
+- [x] **Phase 2**: Clean up the existing rows and enforce the rule in the schema.
 - [ ] **Phase 3**: Docs and wrap-up.
 
 ## Why
@@ -327,17 +327,31 @@ hit a row that is gone. Each of these needs an explicit rule:
 
 ### Phase 2: Clean up existing rows and enforce the rule
 
-- [ ] The one-time merge: required snapshot, `consolidate_lots()` (run on
+- [x] The one-time merge: required snapshot, `consolidate_lots()` (run on
       the real DB, and offered once on the Collection page). Then
       `ensure_schema()` creates `idx_collection_place` in a `try`, skipping it
       with a warning if duplicates remain.
-- [ ] `schema.sql`: the index, and a new comment on `collection` (one row per
+      *As built:* `queries.ensure_place_index()` does the guarded `CREATE`
+      and `queries.place_duplicate_count()` counts rows a merge would
+      remove. `consolidate_lots()` takes the backup only when there's
+      something to merge, and creates the index when it's done. Run on the
+      real DB on 2026-11-22: 1,331 → 1,322 rows, 1,359 copies and $2,328.14
+      paid both unchanged, index created, a second run removed nothing.
+      Backup: `backups/mtg_collection_manual_2026-11-22_093942.db`.
+- [x] `schema.sql`: the index, and a new comment on `collection` (one row per
       printing, finish and Location; source, date and paid are best-effort
       labels, kept from the oldest purchase on merge).
-- [ ] Remove the Consolidate button from the Collection page.
-- [ ] Migration test on a fixture DB with duplicate groups, plus a run on a
+- [x] Remove the Consolidate button from the Collection page. *As built:*
+      the Tidy lots panel now renders only while `place_duplicate_count()`
+      is above zero, so it was the one-shot offer and is now gone for good.
+- [x] Migration test on a fixture DB with duplicate groups, plus a run on a
       **copy** of `mtg_collection.db`, checking the numbers in **Edge cases**.
-- [ ] Test-fixture `INSERT`s that create duplicates now fail. Checked in
+      Tests in `tests/test_collection_writes.py` (the `legacy` fixture drops
+      the index): the live groups' shapes, `ensure_schema` skipping the
+      index with a warning, a failed backup merging nothing, and no backup
+      when there's nothing to merge. The Collection page was also driven
+      with AppTest against a pre-merge copy: panel shown, merge, panel gone.
+- [x] Test-fixture `INSERT`s that create duplicates now fail. Checked in
       Phase 1 by appending the index to `schema.sql` and running the whole
       suite (a patched `ensure_schema` isn't enough: the smoke DB is built
       from `schema.sql` alone). Exactly three tests fail, and these are the

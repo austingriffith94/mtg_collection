@@ -28,8 +28,9 @@ Collection page — browse the full physical collection.
   that Card Lookup shows.
 - "Duplicate names only" (name on more than one lot, judged across the whole
   collection) and "No location only" (blank Location) sidebar toggles.
-- "Tidy lots" expander: one-click consolidation of interchangeable lots
-  (writes.consolidate_lots). Moves also merge into an existing twin lot.
+- "Tidy lots" expander: shown only while rows from before the one-row-per-
+  place rule still share a printing, finish and Location; merges them once
+  (writes.consolidate_lots). Every save merges into the row at a place.
 - "Group / breakout by" lets you layer multiple groupings (e.g. Type, then
   Rarity within each type) — each top-level group is a collapsible
   section.
@@ -261,12 +262,22 @@ if export_box.open:
     with export_box:
         render_moxfield_export()
 
-with st.expander("🧹 Tidy lots"):
-    st.caption("Merge lots that share a printing, finish and Location into one lot with the "
-               "combined quantity and price, keeping the oldest purchase's date and source.")
-    if st.button("Consolidate duplicate lots", key="collection_consolidate"):
-        merged = writes.consolidate_lots(conn)
-        cv.finish_edit({"message": f"Merged away {merged} duplicate lot(s).", "collection": True})
+# One-time merge (docs/LOT_CONSOLIDATION_PLAN.md Phase 2). Every writer now
+# merges as it goes, so only a database from before that rule has rows
+# sharing a place; this panel shows until they're merged, then never again.
+_duplicate_rows = q.place_duplicate_count(conn)
+if _duplicate_rows:
+    with st.expander(f"🧹 Tidy lots ({_duplicate_rows} to merge)", expanded=True):
+        st.caption("Some lots share a printing, finish and Location. Merge each group into one "
+                   "lot with the combined quantity and price, keeping the oldest purchase's date "
+                   "and source. A backup is taken first. New copies merge on their own from now on.")
+        if st.button(f"Merge {_duplicate_rows} duplicate lot(s)", key="collection_consolidate"):
+            try:
+                merged = writes.consolidate_lots(conn)
+            except RuntimeError as exc:
+                st.error(str(exc))
+            else:
+                cv.finish_edit({"message": f"Merged away {merged} duplicate lot(s).", "collection": True})
 
 # Read from session_state, not the (not-yet-drawn) toggle below — the Edit
 # mode toggle is drawn after these filters in script order (Phase 5).

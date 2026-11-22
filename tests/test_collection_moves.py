@@ -18,16 +18,6 @@ import pytest
 from dashboard_lib import formatting as fmt, queries as q, writes
 
 
-@pytest.fixture(autouse=True, params=["no-index", "place-index"])
-def place_index(request, conn):
-    """docs/LOT_CONSOLIDATION_PLAN.md Phase 1: every test here runs twice,
-    once with the unique one-row-per-place index, so the writers' merge
-    before write is proven before Phase 2 makes the index real."""
-    if request.param == "place-index":
-        conn.execute(q.PLACE_INDEX_SQL)
-    return request.param == "place-index"
-
-
 def _log(conn):
     """The whole move log as plain tuples: (card, qty, from, to, reason)."""
     return [tuple(r) for r in conn.execute(

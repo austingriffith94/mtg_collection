@@ -10,16 +10,6 @@ from dashboard_lib import backup, queries, writes
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-@pytest.fixture(autouse=True, params=["no-index", "place-index"])
-def place_index(request, conn):
-    """docs/LOT_CONSOLIDATION_PLAN.md Phase 1: every test here runs twice,
-    once with the unique one-row-per-place index, so the writers' merge
-    before write is proven before Phase 2 makes the index real."""
-    if request.param == "place-index":
-        conn.execute(queries.PLACE_INDEX_SQL)
-    return request.param == "place-index"
-
-
 def _lot(conn, cid):
     return dict(conn.execute("SELECT * FROM collection WHERE collection_id=?", (cid,)).fetchone())
 
@@ -288,9 +278,23 @@ def _dup_lot(conn, sid, quantity, location, *, foil=0, date=None, source=None, p
     return cur.lastrowid
 
 
-def test_consolidate_merges_rows_sharing_a_place_whatever_their_source(conn, add_card, place_index):
-    if place_index:
-        pytest.skip("duplicates can't exist under the index")
+# ------------------------------------------------------------------
+# The one-time merge (docs/LOT_CONSOLIDATION_PLAN.md Phase 2). A database
+# from before the merge rule has no index and can hold rows sharing a
+# place; `legacy` drops the index to get one.
+# ------------------------------------------------------------------
+def _has_place_index(conn):
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE name='idx_collection_place'").fetchone() is not None
+
+
+@pytest.fixture
+def legacy(conn):
+    conn.execute("DROP INDEX idx_collection_place")
+    return conn
+
+
+def test_consolidate_merges_rows_sharing_a_place_whatever_their_source(legacy, add_card):
+    conn = legacy
     sid = add_card("Sol Ring")
     a = _dup_lot(conn, sid, 1, "Box", date="2022-02-27", source="CK", paid=1.0)
     _dup_lot(conn, sid, 2, "Box ", date="2021-12-03", source="CS", paid=0.5)
@@ -301,6 +305,81 @@ def test_consolidate_merges_rows_sharing_a_place_whatever_their_source(conn, add
     assert (lot["quantity"], lot["price_paid"]) == (3, 1.5)
     assert (lot["date_acquired"], lot["source"]) == ("2021-12-03", "CS")   # the older purchase
     assert {foil, other} <= {r[0] for r in conn.execute("SELECT collection_id FROM collection")}
+    assert _has_place_index(conn)
+    assert writes.consolidate_lots(conn) == 0
+
+
+def test_consolidate_keeps_every_copy_and_dollar_across_the_live_shapes(legacy, add_card):
+    """The shapes of the live database's 8 groups (plan, Data findings):
+    identical triples, differing prices, sources and dates, a counted row
+    beside a NULL price, a multi-copy row, plus uncounted basics."""
+    conn = legacy
+    stone, ring, orchard, seer = (add_card(n) for n in
+                                  ("Fellwar Stone", "Sol Ring", "Exotic Orchard", "Viscera Seer"))
+    conn.execute("UPDATE cards SET is_basic_land=1 WHERE scryfall_id=?", (forest := add_card("Forest"),))
+    for _ in range(3):
+        _dup_lot(conn, stone, 1, "Box", date="2022-05-18", source="TCG", paid=0.58)
+    _dup_lot(conn, ring, 1, "Box", date="2022-02-27", source="CK", paid=2.29)
+    _dup_lot(conn, ring, 1, "Box", date="2022-02-27", source="CK", paid=1.99)
+    _dup_lot(conn, orchard, 1, "Lands", date="2022-12-27", source="TCG", paid=0.24)
+    _dup_lot(conn, orchard, 1, "Lands", date="2021-12-14", source="CS", paid=0.49)
+    _dup_lot(conn, seer, 1, "Box", date="2021-12-31", source="CK", paid=0.39)
+    _dup_lot(conn, seer, 3, "Box", date="2022-03-26", source="CMR 1")
+    _dup_lot(conn, forest, None, "Lands")
+    _dup_lot(conn, forest, None, "Lands")
+    _dup_lot(conn, seer, 1, "Binder")                      # alone at its place: untouched
+
+    def totals():
+        return conn.execute("SELECT COUNT(*), SUM(COALESCE(NULLIF(quantity,0),0)),"
+                            " ROUND(SUM(COALESCE(price_paid,0)),2) FROM collection").fetchone()
+    rows, copies, paid = totals()
+    assert queries.place_duplicate_count(conn) == 6
+
+    assert writes.consolidate_lots(conn) == 6
+    assert tuple(totals()) == (rows - 6, copies, paid)
+    by_card = {(r["scryfall_id"], r["location"]): r for r in _rows_all(conn)}
+    assert by_card[(stone, "Box")]["quantity"] == 3
+    assert (by_card[(orchard, "Lands")]["source"], by_card[(orchard, "Lands")]["date_acquired"]) \
+        == ("CS", "2021-12-14")                            # the older purchase
+    assert (by_card[(seer, "Box")]["quantity"], by_card[(seer, "Box")]["source"]) == (4, "CK")
+    assert by_card[(forest, "Lands")]["quantity"] is None  # basics stay a pile
+    assert queries.place_duplicate_count(conn) == 0 and _has_place_index(conn)
+
+
+def _rows_all(conn):
+    return [dict(r) for r in conn.execute("SELECT * FROM collection ORDER BY collection_id")]
+
+
+def test_ensure_schema_skips_the_index_while_duplicates_remain(legacy, add_card, caplog):
+    conn = legacy
+    sid = add_card("Sol Ring")
+    _dup_lot(conn, sid, 1, "Box")
+    _dup_lot(conn, sid, 1, "Box")
+    queries.ensure_schema(conn)                            # no raise: every page still opens
+    assert not _has_place_index(conn)
+    assert "idx_collection_place not created" in caplog.text
+    writes.consolidate_lots(conn)
+    queries.ensure_schema(conn)
+    assert _has_place_index(conn)
+
+
+def test_consolidate_merges_nothing_when_the_backup_fails(legacy, add_card, monkeypatch):
+    conn = legacy
+    sid = add_card("Sol Ring")
+    _dup_lot(conn, sid, 1, "Box")
+    _dup_lot(conn, sid, 1, "Box")
+
+    def failed(_conn):
+        raise RuntimeError("The database backup failed, so nothing was changed. See the log.")
+    monkeypatch.setattr(backup, "required_snapshot", failed)
+    with pytest.raises(RuntimeError):
+        writes.consolidate_lots(conn)
+    assert len(_rows(conn, sid)) == 2 and not _has_place_index(conn)
+
+
+def test_consolidate_takes_no_backup_when_there_is_nothing_to_merge(conn, add_card, monkeypatch):
+    writes.add_collection_lot(conn, add_card("Sol Ring"), quantity=1, location="Box")
+    monkeypatch.setattr(backup, "required_snapshot", lambda _c: pytest.fail("backed up for nothing"))
     assert writes.consolidate_lots(conn) == 0
 
 
@@ -538,9 +617,7 @@ def test_a_binder_style_loop_of_moves_lands_in_one_row(conn, add_card):
     assert [(r["quantity"], r["location"]) for r in _rows(conn, sid)] == [(3, "Binder")]
 
 
-def test_two_sessions_placing_one_card_leave_one_row(conn, add_card, place_index, monkeypatch):
-    if not place_index:
-        pytest.skip("the race is only caught by the index")
+def test_two_sessions_placing_one_card_leave_one_row(conn, add_card, monkeypatch):
     sid = add_card("Sol Ring")
     theirs = writes.add_collection_lot(conn, sid, quantity=1, location="Box")
     real, calls = writes._occupant, []
@@ -553,9 +630,7 @@ def test_two_sessions_placing_one_card_leave_one_row(conn, add_card, place_index
     assert [r["quantity"] for r in _rows(conn, sid)] == [3]
 
 
-def test_a_raw_duplicate_insert_fails_under_the_index(conn, add_card, raw_lot, place_index):
-    if not place_index:
-        pytest.skip("needs the index")
+def test_a_raw_duplicate_insert_fails_under_the_index(conn, add_card, raw_lot):
     sid = add_card("Sol Ring")
     raw_lot(sid, 1, "Box")
     with pytest.raises(sqlite3.IntegrityError):

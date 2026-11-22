@@ -3008,8 +3008,19 @@ def _merge_lots(conn, keep_id, drop_id):
 
 def consolidate_lots(conn):
     """One-time (re-runnable) cleanup: merge every group of rows sharing a
-    place (see _find_twin) into the lowest-id row of the group. Returns the
-    number of rows removed. Touches no Location, so the move log is untouched."""
+    place (see _find_twin) into the lowest-id row of the group, then create
+    the one-row-per-place index (queries.ensure_place_index), which can't
+    exist while such groups do. Returns the number of rows removed. Touches
+    no Location, so the move log is untouched.
+
+    Only a database from before the merge rule has groups to merge
+    (docs/LOT_CONSOLIDATION_PLAN.md Phase 2); with none it does nothing. When
+    there are, a backup comes first and is required: RuntimeError, nothing
+    merged, if it fails."""
+    if q.place_duplicate_count(conn) == 0:
+        q.ensure_place_index(conn)
+        return 0
+    backup.required_snapshot(conn)
     removed = 0
     ids = [r[0] for r in conn.execute("SELECT collection_id FROM collection ORDER BY collection_id")]
     for cid in ids:
@@ -3022,6 +3033,8 @@ def consolidate_lots(conn):
             removed += 1
             cid = keep
     conn.commit()
+    q.ensure_place_index(conn)
+    logger.info("Consolidated %d duplicate collection row(s)", removed)
     return removed
 
 

@@ -466,10 +466,11 @@ def test_card_inventory_status_is_empty_for_no_reference_at_all(conn):
 # ------------------------------------------------------------------
 
 def test_unlocated_lot_summary_counts_only_lots_with_no_location(conn, add_card):
-    sid = add_card("Sol Ring")
-    conn.execute("UPDATE cards SET current_price_usd = 2.50 WHERE scryfall_id = ?", (sid,))
+    sid, other = add_card("Sol Ring"), add_card("Sol Ring", set_code="c21")
+    conn.execute("UPDATE cards SET current_price_usd = 2.50 WHERE scryfall_id IN (?,?)", (sid, other))
     _lot(conn, sid, location=None, quantity=2)
-    _lot(conn, sid, location="   ", quantity=1)   # blank counts as unlocated
+    # blank counts as unlocated (another printing: one place holds one row)
+    _lot(conn, other, location="   ", quantity=1)
     _lot(conn, sid, location="Box", quantity=5)
     conn.commit()
 

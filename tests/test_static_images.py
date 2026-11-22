@@ -185,11 +185,11 @@ def test_deck_export_is_lazy_and_sheet_still_embeds_art(image_db, monkeypatch):
     at.session_state["current_deck_id"] = 1
     at.run()
     assert not at.exception
-    assert "image_src" not in seen  # collapsed: nothing built
+    assert "image_src" not in seen  # not generated yet: nothing built
     # The on-screen header links the cover by URL.
     assert any("app/static/image_cache/deck_covers/1.png" in m.value for m in at.markdown)
 
-    at.session_state["deck_export_open"] = True
+    at.session_state["deck_1_sheet_ready"] = True  # what the Generate button sets
     at.run()
     assert not at.exception
     # The downloaded sheet must work outside the app, so its art is a data: URI.

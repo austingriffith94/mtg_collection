@@ -44,6 +44,46 @@ SORT_FIELDS = {
     "Set": "set_code",
 }
 
+def inject_clickable_css():
+    """Global clickable styling, called from setup_page() so every page gets it.
+    Two kinds, two colors so buttons read differently from plain data:
+    ACTIONS (do something: generate, save, download, submit) -> red border,
+    matching the theme's primaryColor. Filled primary buttons are left alone
+    and tertiary (icon-only) buttons stay borderless on purpose.
+    LINKS (go somewhere: st.page_link / st.link_button) -> blue border.
+    """
+    st.markdown(
+        """
+        <style>
+        :root { --act: 192, 57, 43; --nav: 74, 144, 226; }
+        [data-testid="stBaseButton-secondary"],
+        [data-testid="stBaseButton-secondaryFormSubmit"],
+        [data-testid="stDownloadButton"] button,
+        [data-testid="stLinkButton"] a,
+        [data-testid="stPageLink-NavLink"] {
+            --c: var(--act);
+            border-radius: 0.5rem;
+            justify-content: center;
+            border: 1.5px solid rgb(var(--c)) !important;
+            font-weight: 600;
+            transition: background-color .15s, box-shadow .15s;
+        }
+        [data-testid="stLinkButton"] a,
+        [data-testid="stPageLink-NavLink"] { --c: var(--nav); }
+        [data-testid="stBaseButton-secondary"]:hover,
+        [data-testid="stBaseButton-secondaryFormSubmit"]:hover,
+        [data-testid="stDownloadButton"] button:hover,
+        [data-testid="stLinkButton"] a:hover,
+        [data-testid="stPageLink-NavLink"]:hover {
+            background-color: rgba(var(--c), 0.18) !important;
+            box-shadow: 0 0 0 2px rgba(var(--c), 0.25);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def setup_page(page_title, page_icon, layout="wide"):
     """Logging + st.set_page_config() — every page calls this as its very
     first UI action. page_title sets the browser-tab title; the sidebar
@@ -56,6 +96,7 @@ def setup_page(page_title, page_icon, layout="wide"):
     docs/archive/EDIT_FLOW_PLAN.md) — see finish_edit()/show_pending_feedback() below."""
     setup_logging()
     st.set_page_config(page_title=page_title, page_icon=page_icon, layout=layout)
+    inject_clickable_css()
     show_pending_feedback()
 
 

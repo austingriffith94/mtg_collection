@@ -13,7 +13,7 @@ half-converted at a phase boundary. Go in order. Work happens on the
 Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 
 - [x] **Phase 0**: Branch and plan.
-- [ ] **Phase 1**: The new merge rule, applied by every writer.
+- [x] **Phase 1**: The new merge rule, applied by every writer.
 - [ ] **Phase 2**: Clean up the existing rows and enforce the rule in the schema.
 - [ ] **Phase 3**: Docs and wrap-up.
 
@@ -125,10 +125,14 @@ From `mtg_collection.db` on 2026-11-22:
   merge moves into it. Phase 1's tests also run with the index created, so
   this is proven before Phase 2 relies on it.
 - **Swaps.** Two rows exchanging places in one save (Box<->Gisa for the same
-  card and finish) pass through a collision. Apply a batch's key-changing
-  edits through `_place`, and for a swap fold through a temporary move, or
-  just refuse it with a clear message (it's a no-op physically). Decide in
-  Phase 1; rare either way.
+  card and finish) pass through a collision. **Decided in Phase 1: refused**
+  with a clear `ValueError` before anything is written ("these lots trade
+  places … change their quantities instead"). A chain that only *looks*
+  like a collision (A leaves Box for Binder, B moves into Box) is ordered
+  so A goes first, and merges nothing.
+- New-copy writes (`add_collection_lot`, `move_lot`'s split) go through a
+  sibling helper, `_deposit(conn, scryfall_id, foil, location, fields)`,
+  which folds into the occupant or inserts.
 - **Races.** Two sessions can both see an empty destination. The index turns
   that into `IntegrityError`; the writers catch it once, re-read the
   occupant and retry, instead of letting a page crash.
@@ -166,10 +170,20 @@ hit a row that is gone. Each of these needs an explicit rule:
   price, date, source, delete) **first**, then the key-changing edits
   (Location, foil) last through `_place`, and keep a `{dropped_id: kept_id}`
   map so any later edit for a dropped id is redirected to the survivor.
+  *As built:* deletes and rows keeping their place go first; each
+  place-changing row then goes as one `update_collection_lot` call (its
+  field edits and its new place together), ordered so it waits for any
+  other moving row still at its destination (`_settle_order`). With that
+  order a merge only ever removes a row that is already done, so the
+  dropped-id map turned out unnecessary.
 - **Collection page printing edits.** The save loop calls `set_lot_printing`
   *then* `bulk_update_collection`. A row whose Set/# and quantity both
   changed would have its printing merged away and the quantity edit lost.
   Rule: field edits first, printing change last, same as above.
+  *As built:* the page passes printing changes into the same save,
+  `bulk_update_collection(conn, updates, printings={id: scryfall_id})`,
+  so they're ordered with the Location and foil changes, and a refused
+  save now leaves printings unchanged too.
 - **Edits to two rows that merge with each other.** Moving A onto B's place
   while also typing a new quantity for B: the quantity edit applies to B
   first, then A's copies are added on top. Say so in the Collection page's
@@ -285,25 +299,30 @@ hit a row that is gone. Each of these needs an explicit rule:
 
 ### Phase 1: The new merge rule, applied by every writer
 
-- [ ] `_find_twin` on the new key; `_merge_lots` with the older-row and
+- [x] `_find_twin` on the new key; `_merge_lots` with the older-row and
       uncounted rules (basics vs non-basics, 0 == NULL); the `_place` helper
       (merge before write, retry once on `IntegrityError`).
-- [ ] `_place` in `add_collection_lot`, `update_collection_lot`
+- [x] `_place` in `add_collection_lot`, `update_collection_lot`
       (Location/foil), `set_lot_printing`, `_cascade_deck_name` and
       `delete_deck` (per-row, no bulk UPDATE); `move_lot` uses it for both
       the whole-row move and the split.
-- [ ] `bulk_update_collection` and the Collection page save loop: field edits
-      first, key changes last, with the dropped-id map.
-- [ ] `revert_moves`: subtract (copies and proportional price) for a merged
+- [x] `bulk_update_collection` and the Collection page save loop: field edits
+      first, key changes last (ordered; see **Batches** for why no
+      dropped-id map was needed).
+- [x] `revert_moves`: subtract (copies and proportional price) for a merged
       `"new"`; update the docstring.
-- [ ] Tests in `tests/test_collection_writes.py` and
+- [x] Tests in `tests/test_collection_writes.py` and
       `tests/test_collection_moves.py` for the edge cases above. Update tests
       that expect two rows where there is now one (e.g. the
       `consolidate_lots` test with differing prices, and tests adding the same
       card twice to one place).
-- [ ] Run the writer tests against a schema that already has the unique
-      index, so merge-before-write is proven before Phase 2 ships it.
-- [ ] Full test suite passes. The app runs, and nothing on the existing DB
+- [x] Run the writer tests against a schema that already has the unique
+      index, so merge-before-write is proven before Phase 2 ships it. Both
+      test modules run every test twice (`place_index` fixture), and the
+      index SQL lives in `queries.PLACE_INDEX_SQL` for Phase 2. A one-off run
+      of the whole suite with the index forced on found no missed writer;
+      the only failures were raw test-fixture `INSERT`s (listed in Phase 2).
+- [x] Full test suite passes. The app runs, and nothing on the existing DB
       changes yet, because existing duplicates are only merged when touched.
 
 ### Phase 2: Clean up existing rows and enforce the rule
@@ -321,8 +340,12 @@ hit a row that is gone. Each of these needs an explicit rule:
 - [ ] Test-fixture `INSERT`s that create duplicates now fail. Fix those
       fixtures: `tests/test_pages_smoke.py` (the blank-row cases around lines
       1679-1704 insert several rows for one card with no Location),
-      `tests/test_collection_moves.py` (adds the same card twice to Box) and
-      `tests/test_collection_writes.py` (the consolidate test). The old
+      `tests/test_contention.py` (`_lot` helper, used by
+      `test_contention_no_shortfall_when_owned_covers_demand`),
+      `tests/test_plan_availability.py` (`_lot` helper, used by
+      `test_unlocated_lot_summary_counts_only_lots_with_no_location`) and
+      `tests/test_collection_writes.py` (the consolidate test already skips
+      under the index; it needs its duplicates). The old
       `scripts/_test_*_offline.py` scripts also insert duplicates
       (`_test_prompt_pass6_offline.py` adds two unlocated rows of one
       printing). Fix them or retire them, whichever is still in use.

@@ -111,7 +111,12 @@ def render_edit_table(df):
             "#": st.column_config.TextColumn("#", help="Collector number."),
             "Qty": st.column_config.NumberColumn("Qty", min_value=0, step=1),
             "Foil": st.column_config.CheckboxColumn("Foil"),
-            "Location": st.column_config.SelectboxColumn("Location", options=loc_options),
+            "Location": st.column_config.SelectboxColumn(
+                "Location", options=loc_options,
+                help="Moving a lot (or changing its Foil or Set / #) to a place that already "
+                     "holds that printing in that finish merges the two into one lot. When one "
+                     "save also edits the lot already there, that edit goes in first and the "
+                     "moved copies are added on top."),
             "Date": st.column_config.DateColumn("Acquired", format="YYYY-MM-DD"),
             "Price Paid": st.column_config.NumberColumn("Price Paid", format="$%.2f"),
             "Source": st.column_config.TextColumn("Source"),
@@ -146,7 +151,10 @@ def render_edit_table(df):
         # from one) has already happened and is in the move log; ask whether
         # that deck's list should follow rather than leaving it for Reconcile.
         mark = q.last_move_id(conn)
-        printing_changes, problems = 0, []
+        # Printing changes go into the same bulk save as the other edits, so
+        # it can order them (docs/LOT_CONSOLIDATION_PLAN.md): a re-pointed lot
+        # may merge into another, and that has to come after every field edit.
+        printings, problems = {}, []
         original = {r["collection_id"]: r for r in rows}
         for _, row in edited.iterrows():
             was = original[row["collection_id"]]
@@ -162,16 +170,16 @@ def render_edit_table(df):
             elif new_name[0] != was["Card"]:
                 problems.append(f"{was['Card']}: {set_code.upper()} {number} is {new_name[0]}, "
                                 f"not the same card — left unchanged.")
-            elif writes.set_lot_printing(conn, int(row["collection_id"]), sid):
-                printing_changes += 1
+            else:
+                printings[row["collection_id"]] = sid
         try:
-            changed = writes.bulk_update_collection(conn, updates)
+            changed = writes.bulk_update_collection(conn, updates, printings=printings)
         except ValueError as exc:
-            changed = 0
+            changed, printings = 0, {}
             problems.append(str(exc))
         message = f"Updated {changed} lot(s)."
-        if printing_changes:
-            message += f" Changed the printing on {printing_changes}."
+        if printings:
+            message += f" Changed the printing on {len(printings)}."
         if problems:
             message += " Not saved — " + "; ".join(problems)
         cv.finish_edit({
@@ -254,8 +262,8 @@ if export_box.open:
         render_moxfield_export()
 
 with st.expander("🧹 Tidy lots"):
-    st.caption("Merge lots that are interchangeable (same printing, finish, Location, "
-               "source and date) into one lot with the combined quantity and price.")
+    st.caption("Merge lots that share a printing, finish and Location into one lot with the "
+               "combined quantity and price, keeping the oldest purchase's date and source.")
     if st.button("Consolidate duplicate lots", key="collection_consolidate"):
         merged = writes.consolidate_lots(conn)
         cv.finish_edit({"message": f"Merged away {merged} duplicate lot(s).", "collection": True})

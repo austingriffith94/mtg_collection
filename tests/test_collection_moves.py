@@ -18,6 +18,16 @@ import pytest
 from dashboard_lib import formatting as fmt, queries as q, writes
 
 
+@pytest.fixture(autouse=True, params=["no-index", "place-index"])
+def place_index(request, conn):
+    """docs/LOT_CONSOLIDATION_PLAN.md Phase 1: every test here runs twice,
+    once with the unique one-row-per-place index, so the writers' merge
+    before write is proven before Phase 2 makes the index real."""
+    if request.param == "place-index":
+        conn.execute(q.PLACE_INDEX_SQL)
+    return request.param == "place-index"
+
+
 def _log(conn):
     """The whole move log as plain tuples: (card, qty, from, to, reason)."""
     return [tuple(r) for r in conn.execute(
@@ -129,15 +139,16 @@ def test_removing_a_lot_that_isnt_there_logs_nothing(conn, world):
 def test_bulk_update_logs_each_change_and_passes_the_reason(conn, world):
     a = writes.add_collection_lot(conn, world["ring"], quantity=1, location="Box")
     b = writes.add_collection_lot(conn, world["signet"], quantity=1, location="Box")
-    c = writes.add_collection_lot(conn, world["signet"], quantity=1, location="Box")
+    c = writes.add_collection_lot(conn, world["signet"], quantity=1, foil=True, location="Box")
     del_before = len(_log(conn))
     writes.bulk_update_collection(
         conn, {a: {"location": "Gisa"}, b: {"_delete": True}, c: {"location": "Box"}},
         reason="reconcile",
     )
+    # Deletes go first, place changes last (docs/LOT_CONSOLIDATION_PLAN.md).
     assert _log(conn)[del_before:] == [
-        ("Sol Ring", 1, "Box", "Gisa", "reconcile"),
         ("Arcane Signet", 1, "Box", None, "reconcile"),
+        ("Sol Ring", 1, "Box", "Gisa", "reconcile"),
     ]
 
 

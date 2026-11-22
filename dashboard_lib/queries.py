@@ -410,6 +410,16 @@ def _existing_objects(conn, kind):
     }
 
 
+# One collection row per printing, finish and Location
+# (docs/LOT_CONSOLIDATION_PLAN.md). An expression index, so a blank and a
+# NULL Location count as the same place (plain NULLs are distinct in a
+# unique index). The writers in writes.py merge before they write, so this
+# only ever fires on a write path that skipped them. Phase 1 creates it in
+# tests only; Phase 2 adds it to schema.sql and ensure_schema().
+PLACE_INDEX_SQL = """CREATE UNIQUE INDEX IF NOT EXISTS idx_collection_place
+    ON collection(scryfall_id, foil, TRIM(COALESCE(location, '')))"""
+
+
 def ensure_schema(conn):
     # New TABLES before new COLUMNS, because a column upgrade may target a
     # table that is itself an upgrade: deck_changes.dest_location (Phase 6)

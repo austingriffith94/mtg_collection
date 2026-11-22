@@ -713,7 +713,9 @@ def _cascade_deck_name(conn, old_name, new_name, update_collection_locations=Tru
     (Phase 3's take-from-another-deck); for source='storage' it is a storage
     Location, which a deck rename doesn't touch — hence the source guard."""
     if update_collection_locations:
-        conn.execute("UPDATE collection SET location=? WHERE location=?", (new_name, old_name))
+        # Row by row through _place(), not one bulk UPDATE: a storage
+        # Location that already used the new name may hold the same card.
+        _relocate_all(conn, old_name, new_name)
     conn.execute(
         """UPDATE deck_changes SET dest_location=?
            WHERE dest_location=? AND status IN ('idea','planned')""",
@@ -724,6 +726,22 @@ def _cascade_deck_name(conn, old_name, new_name, update_collection_locations=Tru
            WHERE source_location=? AND source='deck' AND status IN ('idea','planned')""",
         (new_name, old_name),
     )
+
+
+def _relocate_all(conn, old_location, new_location, log_reason=None):
+    """Move every row whose Location is exactly `old_location` to
+    `new_location`, each through _place() so a card already there merges
+    (docs/LOT_CONSOLIDATION_PLAN.md). With `log_reason`, each move is logged
+    against the row that holds the copies afterwards. No commit."""
+    for collection_id, sid, qty in conn.execute(
+        "SELECT collection_id, scryfall_id, quantity FROM collection WHERE location=? "
+        "ORDER BY collection_id", (old_location,),
+    ).fetchall():
+        if _lot_fields(conn, collection_id) is None:   # merged into an earlier row of this loop
+            continue
+        kept = _place(conn, collection_id, location=new_location)
+        if log_reason:
+            _log_collection_move(conn, kept, sid, qty, old_location, new_location, log_reason)
 
 
 def rename_deck(conn, deck_id, new_name, update_collection_locations=True):
@@ -875,16 +893,9 @@ def delete_deck(conn, deck_id, clear_collection_locations=True):
 
     if clear_collection_locations:
         # Phase 6: each sleeved lot's trip to storage goes in the move log
-        # (rename_deck() logs nothing — a relabel moves no copy).
-        for collection_id, sid, qty in conn.execute(
-            "SELECT collection_id, scryfall_id, quantity FROM collection WHERE location=?",
-            (deck_name,),
-        ).fetchall():
-            _log_collection_move(conn, collection_id, sid, qty, deck_name, DEFAULT_LOCATION,
-                                 "deck_delete")
-        conn.execute(
-            "UPDATE collection SET location=? WHERE location=?", (DEFAULT_LOCATION, deck_name)
-        )
+        # (rename_deck() logs nothing — a relabel moves no copy). Row by row:
+        # a deck's Sol Ring going back to Box usually finds one already there.
+        _relocate_all(conn, deck_name, DEFAULT_LOCATION, log_reason="deck_delete")
 
     conn.execute("DELETE FROM decks WHERE deck_id=?", (deck_id,))
     conn.commit()
@@ -1511,12 +1522,13 @@ def fix_location_mismatch(conn, mismatch, dest=None):
 
 def revert_moves(conn, moves):
     """Undo a list of moves, newest first: each moved lot goes back to its
-    `from`, and a purchase's lot is deleted again — only if it is untouched
-    since (still at `to`, same quantity). Placeholder moves are skipped;
+    `from` (where it merges with whatever holds that card, as any move
+    does), and a purchase's copies come off again — only if the row is
+    still at `to` and holds at least that many. A row holding exactly that
+    many is deleted; one holding more (the copies merged into a row already
+    there) loses them, with the same share of its price_paid. An uncounted
+    row can't lose a count and is kept. Placeholder moves are skipped;
     there's no lot to put back.
-
-    A lot that move_lot() split stays as two lots after the undo — same
-    printing, same location, harmless, so no merge logic.
 
     A basic land's `bulk` move (Phase 7) has no lot to put back: the caller
     already reversed the list, so this logs the opposite bulk step.
@@ -1535,17 +1547,29 @@ def revert_moves(conn, moves):
         if kind not in ("move", "new"):
             continue
         row = conn.execute(
-            "SELECT location, quantity FROM collection WHERE collection_id=?", (m["collection_id"],)
+            "SELECT location, quantity, price_paid FROM collection WHERE collection_id=?",
+            (m["collection_id"],),
         ).fetchone()
         if row is None or (row[0] or "") != (m["to"] or ""):
             skipped.append(f"{m['card']}: not in {m['to'] or 'its old place'} any more — left where it is.")
             continue
         if kind == "new":
-            if row[1] != m["quantity"]:
+            have, added, paid = row[1], m["quantity"], row[2]
+            if not have:
+                skipped.append(f"{m['card']}: merged into an uncounted pile, so it was kept.")
+                continue
+            if have < added:
                 skipped.append(f"{m['card']}: its new copy record was edited since — kept.")
                 continue
-            remove_collection_lot(conn, m["collection_id"], reason="deck_edit")
-            done.append(_move(m["card"], m["quantity"], "delete", m["collection_id"], m["to"], None))
+            if have == added:
+                remove_collection_lot(conn, m["collection_id"], reason="deck_edit")
+            else:
+                # Merged into a row already there: take the copies back off,
+                # with their share of the price (move_lot()'s split rule).
+                update_collection_lot(
+                    conn, m["collection_id"], quantity=have - added, reason="deck_edit",
+                    price_paid=None if paid is None else round(paid - paid * added / have, 2))
+            done.append(_move(m["card"], added, "delete", m["collection_id"], m["to"], None))
             continue
         moved_id = move_lot(conn, m["collection_id"], m["from"], quantity=m["quantity"],
                             reason="deck_edit")
@@ -2727,29 +2751,34 @@ def _refuse_blanking(conn, scryfall_id, old_quantity, old_location, new_quantity
 
 
 def add_collection_lot(conn, scryfall_id, *, reason="collection_edit", change_id=None, **fields):
-    """Add a lot, through fill_lot_fields() so it can't be blank. An order
-    import is left as it is (docs/archive/UNOWNED_LOTS_PLAN.md): its lots always have
-    a quantity, and with no Location chosen they stay unlocated, for the
-    Workbench's panel."""
+    """Add copies, through fill_lot_fields() so a lot can't be blank. An
+    order import is left as it is (docs/archive/UNOWNED_LOTS_PLAN.md): its lots always
+    have a quantity, and with no Location chosen they stay unlocated, for the
+    Workbench's panel.
+
+    A place that already holds this printing and finish takes the copies
+    (docs/LOT_CONSOLIDATION_PLAN.md): they fold into the row there, by the
+    _merged_fields() rules, instead of starting a second row. The arrival is
+    logged against that row, and its id is what comes back."""
     fields = {k: fields.get(k) for k in COLLECTION_FIELDS}
     fields["foil"] = 1 if fields.get("foil") else 0
     if reason != "import":
         fields["quantity"], fields["location"], _notes = fill_lot_fields(
             conn, scryfall_id, fields["quantity"], fields["location"])
-    cur = conn.execute(
-        """INSERT INTO collection (scryfall_id, quantity, foil, location, date_acquired, price_paid, source)
-           VALUES (?,?,?,?,?,?,?)""",
-        (scryfall_id, fields["quantity"], fields["foil"], fields["location"],
-         fields["date_acquired"], fields["price_paid"], fields["source"]),
-    )
-    _log_collection_move(conn, cur.lastrowid, scryfall_id, fields["quantity"],
+    collection_id = _deposit(conn, scryfall_id, fields["foil"], fields["location"], fields)
+    _log_collection_move(conn, collection_id, scryfall_id, fields["quantity"],
                          None, _loc(fields["location"]), reason, change_id)
     conn.commit()
-    return cur.lastrowid
+    return collection_id
+
+
+# The parts of a row that say where its copies are: printing, finish and
+# Location. Two rows never share all three (docs/LOT_CONSOLIDATION_PLAN.md).
+_PLACE_KEYS = ("scryfall_id", "foil", "location")
 
 
 def update_collection_lot(conn, collection_id, *, reason="collection_edit", change_id=None,
-                          allow_blank=False, **fields):
+                          allow_blank=False, printing=None, **fields):
     """Edit a lot's fields. Logs what a change to `location` or `quantity`
     means for the copies: a new Location moves the copies the lot held
     (the smaller of old and new quantity, when both change); more copies
@@ -2757,103 +2786,230 @@ def update_collection_lot(conn, collection_id, *, reason="collection_edit", chan
     "deleted" from where the lot was. A lot with no tracked quantity (NULL)
     logs only its Location move.
 
+    A new `location`, `foil` or `printing` (a scryfall_id) goes through
+    _place(), after the other fields are written: when that place already
+    holds the card, the two rows merge. The move is logged against the row
+    that survives, and its id is returned (None for a lot that isn't there).
+
     An edit that would leave a non-basic lot with no quantity and no Location
     is refused with ValueError, unless `allow_blank` (move_lot() only)."""
     fields = {k: v for k, v in fields.items() if k in COLLECTION_FIELDS}
-    if not fields:
-        return
+    if not fields and printing is None:
+        return collection_id
     old = conn.execute(
         "SELECT scryfall_id, quantity, location FROM collection WHERE collection_id=?",
         (collection_id,),
     ).fetchone()
-    if old is not None and not allow_blank:
+    if old is None:
+        return None
+    if not allow_blank:
         _refuse_blanking(conn, old[0], old[1], old[2], fields.get("quantity", old[1]),
                          fields.get("location", old[2]))
     if "foil" in fields:
         fields["foil"] = 1 if fields["foil"] else 0
-    set_clause = ", ".join(f"{k}=?" for k in fields)
-    conn.execute(
-        f"UPDATE collection SET {set_clause} WHERE collection_id=?",
-        (*fields.values(), collection_id),
-    )
-    if old is not None:
-        sid, old_qty, old_loc = old
-        old_loc = _loc(old_loc)
-        new_loc = _loc(fields["location"]) if "location" in fields else old_loc
-        new_qty = fields["quantity"] if "quantity" in fields else old_qty
-        tracked = old_qty is not None and new_qty is not None
-        moved = min(old_qty, new_qty) if tracked else old_qty
-        if not tracked or moved > 0:
-            _log_collection_move(conn, collection_id, sid, moved, old_loc, new_loc, reason, change_id)
-        if tracked and new_qty > old_qty:
-            _log_collection_move(conn, collection_id, sid, new_qty - old_qty, None, new_loc,
-                                 reason, change_id)
-        elif tracked and new_qty < old_qty:
-            _log_collection_move(conn, collection_id, sid, old_qty - new_qty, old_loc, None,
-                                 reason, change_id)
+    plain = {k: v for k, v in fields.items() if k not in _PLACE_KEYS}
+    if plain:
+        conn.execute(
+            f"UPDATE collection SET {', '.join(f'{k}=?' for k in plain)} WHERE collection_id=?",
+            (*plain.values(), collection_id),
+        )
+    place = {k: v for k, v in fields.items() if k in _PLACE_KEYS}
+    if printing is not None:
+        place["scryfall_id"] = printing
+    kept = _place(conn, collection_id, **place) if place else collection_id
+
+    sid, old_qty, old_loc = old
+    old_loc = _loc(old_loc)
+    new_loc = _loc(fields["location"]) if "location" in fields else old_loc
+    new_qty = fields["quantity"] if "quantity" in fields else old_qty
+    tracked = old_qty is not None and new_qty is not None
+    moved = min(old_qty, new_qty) if tracked else old_qty
+    if not tracked or moved > 0:
+        _log_collection_move(conn, kept, sid, moved, old_loc, new_loc, reason, change_id)
+    if tracked and new_qty > old_qty:
+        _log_collection_move(conn, kept, sid, new_qty - old_qty, None, new_loc, reason, change_id)
+    elif tracked and new_qty < old_qty:
+        _log_collection_move(conn, kept, sid, old_qty - new_qty, old_loc, None, reason, change_id)
     conn.commit()
+    return kept
 
 
 def set_lot_printing(conn, collection_id, scryfall_id):
     """Point a lot at a different printing (the Collection editor's Set / #
     cells — fixing a lot that was recorded as the wrong printing). The copy
-    itself didn't go anywhere, so nothing is move-logged. Deck lists are
-    left alone; a lot now differing from its deck's list shows up in
-    Reconcile. Returns True when the lot changed."""
+    itself didn't go anywhere, so nothing is move-logged. If the same place
+    already holds that printing in that finish, the two rows merge
+    (_place()). Deck lists are left alone; a lot now differing from its
+    deck's list shows up in Reconcile. Returns True when the lot changed."""
     old = conn.execute("SELECT scryfall_id FROM collection WHERE collection_id=?",
                        (collection_id,)).fetchone()
     if old is None or old[0] == scryfall_id:
         return False
-    conn.execute("UPDATE collection SET scryfall_id=? WHERE collection_id=?",
-                 (scryfall_id, collection_id))
+    _place(conn, collection_id, scryfall_id=scryfall_id)
     conn.commit()
     return True
 
 
-def _find_twin(conn, collection_id):
-    """The OTHER lot that is interchangeable with this one — same printing,
-    finish, Location (blank == NULL), source and acquired date — or None.
-    Lots with no tracked quantity (NULL) never merge: there's nothing to add."""
-    row = conn.execute(
-        "SELECT scryfall_id, foil, location, date_acquired, source, quantity "
-        "FROM collection WHERE collection_id=?", (collection_id,)
-    ).fetchone()
-    if row is None or row[5] is None:
-        return None
-    sid, foil, loc, acquired, source, _ = row
-    twin = conn.execute(
+# ------------------------------------------------------------------
+# One row per place (docs/LOT_CONSOLIDATION_PLAN.md). A collection row is
+# "my copies of this printing, in this finish, at this Location". Every
+# writer that can land copies on a place looks up who is already there
+# FIRST and folds into it, so two rows never share a place, not even for a
+# moment (queries.PLACE_INDEX_SQL would reject that). Source, date and price
+# paid are best-effort labels on the row and no longer keep rows apart.
+# ------------------------------------------------------------------
+_LOT_COLUMNS = ("scryfall_id", "quantity", "foil", "location", "date_acquired", "price_paid", "source")
+
+
+def _lot_fields(conn, collection_id):
+    """A row's columns as a dict, or None when it's gone."""
+    row = conn.execute(f"SELECT {', '.join(_LOT_COLUMNS)} FROM collection WHERE collection_id=?",
+                       (collection_id,)).fetchone()
+    return dict(zip(_LOT_COLUMNS, row)) if row else None
+
+
+def _occupants(conn, scryfall_id, foil, location, exclude=None):
+    """Ids of the rows at a place (printing, finish, Location trimmed with
+    blank == NULL), lowest first, leaving out `exclude`. At most one once
+    every duplicate is merged; more only on a database from before that."""
+    return [r[0] for r in conn.execute(
         """SELECT collection_id FROM collection
-           WHERE collection_id != ? AND scryfall_id=? AND foil=?
-             AND TRIM(COALESCE(location,'')) = ? AND date_acquired IS ? AND source IS ?
-             AND quantity IS NOT NULL
-           ORDER BY collection_id LIMIT 1""",
-        (collection_id, sid, foil, _loc(loc), acquired, source),
-    ).fetchone()
-    return twin[0] if twin else None
+           WHERE scryfall_id=? AND foil=? AND TRIM(COALESCE(location, '')) = ?
+             AND collection_id IS NOT ?
+           ORDER BY collection_id""",
+        (scryfall_id, 1 if foil else 0, _loc(location), exclude),
+    )]
+
+
+def _occupant(conn, scryfall_id, foil, location, exclude=None):
+    """The row already at a place (see _occupants()), or None."""
+    found = _occupants(conn, scryfall_id, foil, location, exclude)
+    return found[0] if found else None
+
+
+def _merged_fields(conn, scryfall_id, first, second):
+    """quantity / price_paid / date_acquired / source for two rows' copies
+    folded into one. `first` is the row with the lower id (or the one
+    already there, against a new arrival): it wins a tie.
+
+    - quantity adds. A NULL or 0 count is "uncounted": a basic land's
+      uncounted pile absorbs counted copies and stays uncounted, while any
+      other card's uncounted row is one copy, as everywhere else in the code
+      (COALESCE(NULLIF(quantity, 0), 1)), so nothing it held is lost.
+    - price_paid adds, and a NULL side counts as nothing.
+    - date_acquired and source both come from the older purchase: the row
+      with the earlier date, a NULL date counting as later than any."""
+    q1, q2 = first.get("quantity"), second.get("quantity")
+    if q1 and q2:
+        quantity = q1 + q2
+    elif q.is_basic_land(conn, scryfall_id=scryfall_id):
+        quantity = None
+    else:
+        quantity = (q1 or 1) + (q2 or 1)
+    prices = [p for p in (first.get("price_paid"), second.get("price_paid")) if p is not None]
+    d1, d2 = first.get("date_acquired"), second.get("date_acquired")
+    older = second if d2 and (not d1 or str(d2) < str(d1)) else first
+    return {"quantity": quantity, "price_paid": round(sum(prices), 2) if prices else None,
+            "date_acquired": older.get("date_acquired"), "source": older.get("source")}
+
+
+def _write_merged(conn, collection_id, merged, **place):
+    sets = {**merged, **place}
+    conn.execute(f"UPDATE collection SET {', '.join(f'{k}=?' for k in sets)} WHERE collection_id=?",
+                 (*sets.values(), collection_id))
+
+
+def _deposit(conn, scryfall_id, foil, location, fields):
+    """Put new copies (`fields`: quantity, price_paid, date_acquired, source)
+    at a place: folded into the row already there, or a new row. Returns the
+    row's id. No move log and no commit, the caller does both.
+
+    Two sessions can both find the place empty; once the unique index exists
+    the second INSERT raises IntegrityError, so it looks again, once, and
+    folds into the row the other session made."""
+    foil = 1 if foil else 0
+    for attempt in (0, 1):
+        occupant = _occupant(conn, scryfall_id, foil, location)
+        if occupant is not None:
+            _write_merged(conn, occupant, _merged_fields(conn, scryfall_id,
+                                                         _lot_fields(conn, occupant), fields))
+            return occupant
+        try:
+            return conn.execute(
+                """INSERT INTO collection (scryfall_id, quantity, foil, location, date_acquired,
+                                           price_paid, source) VALUES (?,?,?,?,?,?,?)""",
+                (scryfall_id, fields.get("quantity"), foil, location, fields.get("date_acquired"),
+                 fields.get("price_paid"), fields.get("source")),
+            ).lastrowid
+        except sqlite3.IntegrityError:
+            if attempt:
+                raise
+
+
+def _place(conn, collection_id, **place):
+    """Give a row a new printing, finish and/or Location (`place`: any of
+    scryfall_id / foil / location) and return the id of the row that holds
+    its copies afterwards. When the destination is empty that's the row
+    itself; when another row is already there, the two merge (the lower id
+    survives) instead of writing a duplicate. No move log and no commit.
+
+    The occupant is looked up before anything is written, so no moment has
+    two rows at one place. A race with another session is retried once, as
+    in _deposit()."""
+    for attempt in (0, 1):
+        row = _lot_fields(conn, collection_id)
+        if row is None:
+            raise ValueError(f"No collection lot #{collection_id}.")
+        target = {k: place.get(k, row[k]) for k in _PLACE_KEYS}
+        target["foil"] = 1 if target["foil"] else 0
+        occupant = _occupant(conn, target["scryfall_id"], target["foil"], target["location"],
+                             exclude=collection_id)
+        try:
+            if occupant is None:
+                conn.execute("UPDATE collection SET scryfall_id=?, foil=?, location=? WHERE collection_id=?",
+                             (target["scryfall_id"], target["foil"], target["location"], collection_id))
+                return collection_id
+            keep, drop = sorted((collection_id, occupant))
+            merged = _merged_fields(conn, target["scryfall_id"], _lot_fields(conn, keep), _lot_fields(conn, drop))
+            conn.execute("DELETE FROM collection WHERE collection_id=?", (drop,))
+            # The occupant keeps its own Location text if it survives; the
+            # moved row, if it survives, takes the one it was given.
+            if keep == collection_id:
+                _write_merged(conn, keep, merged, **target)
+            else:
+                _write_merged(conn, keep, merged)
+            return keep
+        except sqlite3.IntegrityError:
+            if attempt:
+                raise
+
+
+def _find_twin(conn, collection_id):
+    """The OTHER row at this row's place: same printing, finish and Location
+    (trimmed, blank == NULL). Source, date and price paid don't matter, and
+    uncounted rows merge too. None when it's alone."""
+    row = _lot_fields(conn, collection_id)
+    if row is None:
+        return None
+    return _occupant(conn, row["scryfall_id"], row["foil"], row["location"], exclude=collection_id)
 
 
 def _merge_lots(conn, keep_id, drop_id):
-    """Fold lot `drop_id` into `keep_id`: quantities add, price_paid adds
-    (a NULL side counts as nothing), then `drop_id` is deleted. No move-log
-    row and no commit — the copies didn't go anywhere, the caller commits.
-    Returns keep_id."""
-    keep_q, keep_p = conn.execute(
-        "SELECT quantity, price_paid FROM collection WHERE collection_id=?", (keep_id,)).fetchone()
-    drop_q, drop_p = conn.execute(
-        "SELECT quantity, price_paid FROM collection WHERE collection_id=?", (drop_id,)).fetchone()
-    prices = [p for p in (keep_p, drop_p) if p is not None]
-    conn.execute(
-        "UPDATE collection SET quantity=?, price_paid=? WHERE collection_id=?",
-        (keep_q + drop_q, round(sum(prices), 2) if prices else None, keep_id),
-    )
+    """Fold lot `drop_id` into `keep_id` by the _merged_fields() rules, then
+    delete `drop_id`. No move-log row and no commit — the copies didn't go
+    anywhere, the caller commits. Returns keep_id."""
+    keep, drop = _lot_fields(conn, keep_id), _lot_fields(conn, drop_id)
+    first, second = (keep, drop) if keep_id < drop_id else (drop, keep)
+    merged = _merged_fields(conn, keep["scryfall_id"], first, second)
     conn.execute("DELETE FROM collection WHERE collection_id=?", (drop_id,))
+    _write_merged(conn, keep_id, merged)
     return keep_id
 
 
 def consolidate_lots(conn):
-    """One-time (re-runnable) cleanup: merge every group of interchangeable
-    lots (see _find_twin) into the lowest-id lot of the group. Returns the
-    number of lots removed. Touches no Location, so the move log is untouched."""
+    """One-time (re-runnable) cleanup: merge every group of rows sharing a
+    place (see _find_twin) into the lowest-id row of the group. Returns the
+    number of rows removed. Touches no Location, so the move log is untouched."""
     removed = 0
     ids = [r[0] for r in conn.execute("SELECT collection_id FROM collection ORDER BY collection_id")]
     for cid in ids:
@@ -2876,28 +3032,19 @@ def move_lot(conn, collection_id, location, quantity=None, *, reason="collection
     location, with the same printing/finish/source/date; `price_paid` is
     split in proportion, on the evidence that it's a lot total (a 2-copy lot
     paid $0.69 for a $0.53 card). A NULL-quantity (untracked) lot can't be
-    split and always moves whole. If `location` already holds an
-    interchangeable lot (_find_twin), the moved copies are merged into it
-    rather than left as a second row. Returns the collection_id of the lot
-    now at `location`."""
-    row = conn.execute(
-        "SELECT scryfall_id, quantity, foil, location, date_acquired, price_paid, source "
-        "FROM collection WHERE collection_id=?", (collection_id,)
-    ).fetchone()
+    split and always moves whole. If `location` already holds this printing
+    in this finish, the moved copies merge into that row (_place() for a
+    whole lot, _deposit() for a split) rather than starting a second one.
+    Returns the collection_id of the lot now holding them at `location`."""
+    row = _lot_fields(conn, collection_id)
     if row is None:
         raise ValueError(f"No collection lot #{collection_id}.")
-    sid, have, foil, old_loc, acquired, paid, source = row
+    have, paid = row["quantity"], row["price_paid"]
     if quantity is None or have is None or quantity >= have:
         # allow_blank: Undo can put an untracked lot back to no Location. A
         # move relabels a lot that already exists; it is not an edit to it.
-        update_collection_lot(conn, collection_id, location=location,
-                              reason=reason, change_id=change_id, allow_blank=True)
-        twin = _find_twin(conn, collection_id)
-        if twin is not None:
-            _merge_lots(conn, twin, collection_id)
-            conn.commit()
-            return twin
-        return collection_id
+        return update_collection_lot(conn, collection_id, location=location,
+                                     reason=reason, change_id=change_id, allow_blank=True)
     if quantity < 1:
         raise ValueError("Move at least one copy.")
     moved_paid = None if paid is None else round(paid * quantity / have, 2)
@@ -2906,21 +3053,14 @@ def move_lot(conn, collection_id, location, quantity=None, *, reason="collection
         "UPDATE collection SET quantity=?, price_paid=? WHERE collection_id=?",
         (have - quantity, left_paid, collection_id),
     )
-    cur = conn.execute(
-        """INSERT INTO collection (scryfall_id, quantity, foil, location, date_acquired,
-                                   price_paid, source) VALUES (?,?,?,?,?,?,?)""",
-        (sid, quantity, foil, location, acquired, moved_paid, source),
-    )
+    moved_id = _deposit(conn, row["scryfall_id"], row["foil"], location, {
+        "quantity": quantity, "price_paid": moved_paid,
+        "date_acquired": row["date_acquired"], "source": row["source"]})
     # A split is logged against the lot the moved copies now sit in.
-    _log_collection_move(conn, cur.lastrowid, sid, quantity, _loc(old_loc), _loc(location),
-                         reason, change_id)
-    twin = _find_twin(conn, cur.lastrowid)
-    if twin is not None:
-        _merge_lots(conn, twin, cur.lastrowid)
-        conn.commit()
-        return twin
+    _log_collection_move(conn, moved_id, row["scryfall_id"], quantity, _loc(row["location"]),
+                         _loc(location), reason, change_id)
     conn.commit()
-    return cur.lastrowid
+    return moved_id
 
 
 def remove_collection_lot(conn, collection_id, *, reason="collection_edit", change_id=None):
@@ -3143,16 +3283,29 @@ def auto_add_to_collection(conn, scryfall_id, quantity=1, location=None):
     )
 
 
-def bulk_update_collection(conn, updates, *, reason="collection_edit"):
-    """updates: {collection_id: {field: value, ..., "_delete": bool}}.
-    Returns count changed. Deletes are diffed as unconditional (a row
-    flagged _delete is always removed); field updates are diffed against
-    current DB state so untouched rows aren't rewritten needlessly. Every
-    change reaches the move log through the single-lot writers, as `reason`.
+def bulk_update_collection(conn, updates, *, reason="collection_edit", printings=None):
+    """updates: {collection_id: {field: value, ..., "_delete": bool}};
+    printings: {collection_id: scryfall_id} for rows re-pointed at another
+    printing (the Collection editor's Set / # cells). Returns count changed.
+    Deletes are diffed as unconditional (a row flagged _delete is always
+    removed); field updates are diffed against current DB state so
+    untouched rows aren't rewritten needlessly. Every change reaches the
+    move log through the single-lot writers, as `reason`.
 
-    An edit that would blank a lot (see update_collection_lot()) raises
-    ValueError before anything is written, so a refused save changes nothing."""
-    ids = list(updates.keys())
+    A row whose printing, finish or Location changes can merge into the row
+    already at its new place (docs/LOT_CONSOLIDATION_PLAN.md), so the order
+    matters. Deletes and rows keeping their place go first: an edit to the
+    row a moved one lands on is in before the moved copies are added. Rows
+    changing place go last, each only after any row in this save still
+    sitting where it's headed has moved off (A to Gisa, then B into A's old
+    spot). A merge only ever removes a row that's already done, so no later
+    edit in the save is lost.
+
+    Raises ValueError before anything is written, so a refused save changes
+    nothing, for an edit that would blank a lot (see update_collection_lot())
+    and for rows that trade places with each other in one save."""
+    printings = dict(printings or {})
+    ids = list(dict.fromkeys([*updates, *printings]))
     if not ids:
         return 0
     placeholders = ",".join("?" for _ in ids)
@@ -3171,21 +3324,73 @@ def bulk_update_collection(conn, updates, *, reason="collection_edit"):
         if old is not None and not edit.get("_delete"):
             _refuse_blanking(conn, old["scryfall_id"], old["quantity"], old["location"],
                              edit.get("quantity", old["quantity"]), edit.get("location", old["location"]))
-    changed = 0
-    for collection_id, edit in updates.items():
-        if edit.get("_delete"):
-            if collection_id in current:
-                remove_collection_lot(conn, collection_id, reason=reason)
-                changed += 1
+    deletes, stays, moves = [], {}, {}
+    for collection_id in ids:
+        old = current.get(collection_id)
+        if old is None:
             continue
-        old = current.get(collection_id, {})
+        edit = updates.get(collection_id, {})
+        if edit.get("_delete"):
+            deletes.append(collection_id)
+            continue
         new_vals = {k: edit.get(k) for k in COLLECTION_FIELDS if k in edit}
         if "foil" in new_vals:
             new_vals["foil"] = 1 if new_vals["foil"] else 0
-        if any(old.get(k) != v for k, v in new_vals.items()):
-            update_collection_lot(conn, collection_id, reason=reason, **new_vals)
-            changed += 1
-    return changed
+        vals = {k: v for k, v in new_vals.items() if old.get(k) != v}
+        printing = printings.get(collection_id)
+        if printing == old["scryfall_id"]:
+            printing = None
+        if not vals and printing is None:
+            continue
+        if printing is not None or {"location", "foil"} & vals.keys():
+            moves[collection_id] = (vals, printing)
+        else:
+            stays[collection_id] = vals
+    order = _settle_order(conn, current, moves)
+    for collection_id in deletes:
+        remove_collection_lot(conn, collection_id, reason=reason)
+    for collection_id, vals in stays.items():
+        update_collection_lot(conn, collection_id, reason=reason, **vals)
+    for collection_id in order:
+        vals, printing = moves[collection_id]
+        update_collection_lot(conn, collection_id, reason=reason, printing=printing, **vals)
+    return len(deletes) + len(stays) + len(moves)
+
+
+def _place_of(key):
+    """(scryfall_id, foil, location) compared the way the index compares it."""
+    sid, foil, location = key
+    return sid, 1 if foil else 0, _loc(location)
+
+
+def _settle_order(conn, current, moves):
+    """The order bulk_update_collection() applies its place-changing rows
+    in: a row goes only once every other moving row still sitting at its
+    destination has gone, so a row is never merged into one that is about
+    to leave. Rows that wait on each other in a ring (two rows swapping
+    places) can't be ordered: ValueError, naming the cards."""
+    target = {}
+    for collection_id, (vals, printing) in moves.items():
+        old = current[collection_id]
+        target[collection_id] = (printing or old["scryfall_id"],
+                                 1 if vals.get("foil", old["foil"]) else 0,
+                                 vals.get("location", old["location"]))
+    # Waiting only on a row headed somewhere else: two rows bound for the
+    # same place just merge, in either order.
+    waits_on = {cid: {o for o in _occupants(conn, *target[cid], exclude=cid)
+                      if o in moves and _place_of(target[o]) != _place_of(target[cid])}
+                for cid in moves}
+    order, pending = [], list(moves)
+    while pending:
+        ready = [cid for cid in pending if not waits_on[cid] & set(pending)]
+        if not ready:
+            cards = sorted({_card_name(conn, current[cid]["scryfall_id"]) or "?" for cid in pending})
+            raise ValueError(
+                f"{', '.join(cards)}: these lots trade places with each other, which moves no "
+                "copy — nothing was saved. Change their quantities instead.")
+        order += ready
+        pending = [cid for cid in pending if cid not in ready]
+    return order
 
 
 SYNC_NOTE = "following a collection edit"

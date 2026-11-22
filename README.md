@@ -1,5 +1,7 @@
 # MTG Collection & Deck Dashboard
 
+> **Note:** `docs/archive/` (finished plans referenced throughout) is gitignored and local-only. On a fresh clone those links won't resolve; earlier copies are in git history, e.g. `git show d1be275:docs/archive/EDIT_FLOW_PLAN.md`.
+
 The foundation layer (the SQLite schema and the card/deck/collection data in it)
 is complete and validated. The
 Streamlit dashboard is built out across seven pages — Collection, Decks &

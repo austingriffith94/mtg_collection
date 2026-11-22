@@ -1,5 +1,7 @@
 # MTG Dashboard — State of the Project Review
 
+> **Note:** `docs/archive/` (finished plans referenced throughout) is gitignored and local-only. On a fresh clone those links won't resolve; earlier copies are in git history, e.g. `git show d1be275:docs/archive/EDIT_FLOW_PLAN.md`.
+
 ## What this is
 Personal SQLite + Streamlit dashboard replacing an Excel/Office 365-based MTG collection and deck tracker. Tracks a personal card collection, 20+ Commander decks, maybeboards, game history, and analytical views. Playgroup includes Joe G, Anthony, and Joe M, whose decks appear in game logs but aren't fully tracked in the system.
 

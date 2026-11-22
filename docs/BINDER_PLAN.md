@@ -19,7 +19,7 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] **Phase 0** — Branch and plan.
 - [x] **Phase 1** — Foil prices on `cards` (schema, Scryfall fetch, refresh).
 - [x] **Phase 2** — Settings table and the candidate rules (`dashboard_lib/binder.py`, tested).
-- [ ] **Phase 3** — The Binder page: settings, fill gauge, candidate list, move to Binder.
+- [x] **Phase 3** — The Binder page: settings, fill gauge, candidate list, move to Binder.
 - [ ] **Phase 4** — Nudges on Home and Collection Editor; docs and wrap-up.
 
 ## Decisions
@@ -336,6 +336,18 @@ label in `card_view.move_label`) or use `collection_edit`.
   ticks a row, moves it, and checks that the lot's Location became `Binder`
   and a `collection_moves` row was written. Also a browser check against a
   DB copy (see the project's browser-check memory).
+
+As built (2026-11-21): `"binder"` was added to `writes.MOVE_REASONS`, and
+History reads it as "moved to the binder". The binder Location is added to
+`location_catalog` on the first **move**, not on page load, so viewing the
+page writes nothing. Two read helpers were added to `binder.py`:
+`prices_as_of()` and `scan_location_options()`, which is the scan checklist
+(the catalog plus any non-deck Location a lot sits at, minus the binder).
+Saving the settings keeps unticked Locations that aren't offered right now.
+Rows start ticked unless a deck has planned them, so "Not for binder" acts on
+every ticked row. Its label gives the card count. Browser check on a copy of
+the live DB: 78 lots / 80 copies / 76 cards listed. Move all gave 80 copies
+in 77 Binder lots (the split cards merged) and 78 `binder` move rows.
 
 ### Phase 4 — Nudges, docs, wrap-up
 

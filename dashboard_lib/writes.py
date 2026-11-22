@@ -2660,7 +2660,7 @@ COLLECTION_FIELDS = ["quantity", "foil", "location", "date_acquired", "price_pai
 # rename_deck() logs nothing — a rename relabels, no copy moved.
 # ------------------------------------------------------------------
 MOVE_REASONS = ("deck_edit", "apply", "reconcile", "dismantle", "collection_edit",
-                "import", "deck_delete", "purchase", "build")
+                "import", "deck_delete", "purchase", "build", "binder")
 
 
 def _loc(value):

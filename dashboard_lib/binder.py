@@ -302,6 +302,35 @@ def binder_fill(conn, settings=None):
     return copies, settings.capacity
 
 
+def prices_as_of(conn, settings=None):
+    """The oldest price_updated_at (as stored, a date string) among the
+    lots the rules scan (the candidates' scope, skip list included) — how
+    stale the list could be — or None when no scanned lot has a price
+    date."""
+    settings = settings or binder_settings(conn)
+    deck_names = q.deck_name_set(conn)
+    dates = [lot["price_updated_at"] for lot in _all_lots(conn)
+             if lot["price_updated_at"] and _in_scope(lot, settings, deck_names)]
+    return min(dates) if dates else None
+
+
+def scan_location_options(conn, settings=None):
+    """The storage Locations the page's "Locations to scan" checklist
+    offers: the storage catalog plus any non-deck Location a lot sits at
+    today, minus the binder itself. Case-insensitive duplicates collapse
+    to the first spelling seen. Box first, then A-Z (queries.storage_locations' order)."""
+    settings = settings or binder_settings(conn)
+    deck_names = q.deck_name_set(conn)
+    found = list(q.storage_locations(conn))
+    held = sorted({(r[0] or "").strip() for r in conn.execute(
+        "SELECT DISTINCT location FROM collection").fetchall()} - {""}, key=str.casefold)
+    for place in held:
+        if place not in deck_names and not any(q.same_location(place, f) for f in found):
+            found.append(place)
+    found.sort(key=lambda loc: (not q.same_location(loc, q.DEFAULT_STORAGE), loc.casefold()))
+    return [place for place in found if not q.same_location(place, settings.location)]
+
+
 def dismissed_cards(conn):
     """The "Not for binder" list, newest first: [{card_key, name, dismissed_at}]."""
     return [{"card_key": r[0], "name": r[1], "dismissed_at": r[2]} for r in conn.execute(

@@ -78,7 +78,7 @@ CREATE INDEX idx_collection_location ON collection(location);
 --           pruned, or shrunk)
 --   ''    = the copy exists but had no Location recorded
 -- reason: deck_edit, apply, reconcile, dismantle, collection_edit,
---         import, prune, deck_delete, purchase, build.
+--         import, prune, deck_delete, purchase, build, binder.
 -- ------------------------------------------------------------
 CREATE TABLE collection_moves (
     move_id         INTEGER PRIMARY KEY AUTOINCREMENT,

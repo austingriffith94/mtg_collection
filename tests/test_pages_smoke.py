@@ -1739,3 +1739,85 @@ def test_add_form_refuses_a_lot_with_neither_field(smoke_db_path, tmp_path, monk
     at, path = _add_form(smoke_db_path, tmp_path, monkeypatch, 0)
     assert _lot_count(path) == before
     assert any("enter a quantity or a Location" in e.value for e in at.error)
+
+
+# ---------------------------------------------------------------- Binder page
+def _binder_db(smoke_db_path, tmp_path, monkeypatch):
+    """A copy of the smoke DB with one candidate: a 2-copy Reserved List
+    lot in Box worth $44.88. Rows start ticked (no deck has planned it)."""
+    from dashboard_lib import db
+
+    path = str(tmp_path / "mtg_collection.db")
+    shutil.copy(smoke_db_path, path)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO cards (scryfall_id, name, set_code, collector_number, oracle_id, type_line,"
+        " cmc, color_identity, current_price_usd, is_reserved, price_updated_at)"
+        " VALUES ('dystopia-all-1', 'Dystopia', 'all', '1', 'oracle-dystopia', 'Enchantment',"
+        " 3, 'B', 44.88, 1, '2026-11-01')")
+    lot_id = conn.execute(
+        "INSERT INTO collection (scryfall_id, quantity, location) VALUES ('dystopia-all-1', 2, 'Box')"
+    ).lastrowid
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    at = AppTest.from_file(os.path.join(PAGES_DIR, "12_Binder.py"), default_timeout=15)
+    at.run()
+    assert not at.exception
+    return at, path, lot_id
+
+
+def test_binder_page_moves_a_ticked_row(smoke_db_path, tmp_path, monkeypatch):
+    try:
+        at, path, lot_id = _binder_db(smoke_db_path, tmp_path, monkeypatch)
+        # Viewing the page writes nothing; the first move adds the Location.
+        catalog_sql = "SELECT 1 FROM location_catalog WHERE location='Binder'"
+        assert sqlite3.connect(path).execute(catalog_sql).fetchone() is None
+        assert at.button(key="binder_move").label.startswith("📒 Move 2 copies")
+        at.button(key="binder_move").click().run()
+        assert not at.exception
+        check = sqlite3.connect(path)
+        assert check.execute(catalog_sql).fetchone()
+        assert check.execute("SELECT location FROM collection WHERE collection_id=?",
+                             (lot_id,)).fetchone() == ("Binder",)
+        assert check.execute(
+            "SELECT from_location, to_location, quantity, reason FROM collection_moves"
+            " WHERE card_name='Dystopia'").fetchall() == [("Box", "Binder", 2, "binder")]
+        assert any("Nothing in storage passes" in i.value for i in at.info)
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_binder_page_dismiss_and_undo(smoke_db_path, tmp_path, monkeypatch):
+    try:
+        at, path, _ = _binder_db(smoke_db_path, tmp_path, monkeypatch)
+        at.button(key="binder_dismiss").click().run()
+        assert not at.exception
+        assert sqlite3.connect(path).execute(
+            "SELECT oracle_id, name FROM binder_dismissed").fetchall() == [("oracle-dystopia", "Dystopia")]
+        assert any("Nothing in storage passes" in i.value for i in at.info)
+        at.toggle(key="binder_show_dismissed").set_value(True).run()
+        at.button(key="binder_undo_oracle-dystopia").click().run()
+        assert not at.exception
+        assert sqlite3.connect(path).execute("SELECT COUNT(*) FROM binder_dismissed").fetchone() == (0,)
+        assert at.button(key="binder_move").label.startswith("📒 Move 2 copies")
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_binder_page_refuses_a_deck_as_the_binder(smoke_db_path, tmp_path, monkeypatch):
+    try:
+        at, path, _ = _binder_db(smoke_db_path, tmp_path, monkeypatch)
+        at.text_input(key="binder_set_location").set_value("smoke test deck")
+        next(b for b in at.button if b.label == "Save settings").click().run()
+        assert not at.exception
+        assert any("is a deck" in e.value for e in at.error)
+        assert sqlite3.connect(path).execute(
+            "SELECT value FROM app_settings WHERE key='binder.location'").fetchone() is None
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()

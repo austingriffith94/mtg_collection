@@ -60,6 +60,8 @@ PAGES = [
              "Deck metadata, themes, tags, mainboard and shortlist."),
     PageSpec("pages/5_Collection_Editor.py", "COLLECTION EDITOR", "📥", "Collection_Editor", "Edit",
              "Import purchase orders and add card lots by hand."),
+    PageSpec("pages/12_Binder.py", "BINDER", "📒", "Binder", "Edit",
+             "Stored cards worth putting in the binder; move them there."),
     PageSpec("pages/6_Card_Database.py", "CARD DATABASE", "🗄️", "Card_Database", "Edit",
              "Game Changers, mana tags, and Scryfall/Spellbook refreshes."),
     PageSpec("pages/7_Commander_Game_Tracking.py", "COMMANDER GAME TRACKING", "🏆", "Commander_Game_Tracking", "Play",

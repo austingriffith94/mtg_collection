@@ -1,5 +1,5 @@
 """
-Binder page — stored cards that belong in the binder (docs/BINDER_PLAN.md
+Binder page — stored cards that belong in the binder (docs/archive/BINDER_PLAN.md
 Phase 3).
 
 Lists the lots in storage (Box, Lands, no Location, any other non-deck

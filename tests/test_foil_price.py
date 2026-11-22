@@ -1,4 +1,4 @@
-"""docs/BINDER_PLAN.md Phase 1: cards.current_price_usd_foil.
+"""docs/archive/BINDER_PLAN.md Phase 1: cards.current_price_usd_foil.
 
 Covers the Scryfall parser (usd_foil, then usd_etched, then NULL), the Card Data
 refresh UPDATE, the new-card INSERT, and the additive upgrade of an older

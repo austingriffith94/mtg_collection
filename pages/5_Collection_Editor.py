@@ -34,7 +34,7 @@ import pandas as pd
 import streamlit as st
 
 from dashboard_lib import db, loaders, writes, card_resolver, formatting as fmt, queries as q
-from dashboard_lib import card_view as cv, order_import, nav
+from dashboard_lib import card_view as cv, order_import, nav, binder
 
 
 # Where the order import's buy-list matches wait for an answer (session state).
@@ -442,11 +442,17 @@ if st.button("➕ Add to collection", key="editor_coll_add_btn"):
         loc_txt = f" → {add_loc}" if add_loc else ""
         fetched_txt = " (fetched fresh from Scryfall)" if was_new else ""
         filled_txt = f" ({', '.join(filled)})" if filled else ""
+        # Notice only (the lot is saved where you chose): say if the card
+        # passes a binder rule, so a pulled pack or purchase isn't missed.
+        binder_why = binder.reasons_for_new_lot(conn, sid, coll_add_foil, add_loc)
+        binder_note = ([f"{selected_card_name or what} qualifies for the Binder ({', '.join(binder_why)})."]
+                       if binder_why else [])
         # Flag the per-card fields to be cleared on the next run (widget keys
         # can only be reset before their widgets are instantiated).
         st.session_state["editor_coll_add_reset"] = True
         cv.finish_edit({
             "message": f"Added {qty_txt}{what}{foil_txt}{loc_txt}{fetched_txt}{filled_txt}.",
+            "warnings": binder_note,
             "collection": True, "reference": True,
             "deck_sync": q.deck_sync_offers(conn, move_mark),
         })

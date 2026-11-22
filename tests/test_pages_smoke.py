@@ -1831,3 +1831,40 @@ def test_binder_page_refuses_a_deck_as_the_binder(smoke_db_path, tmp_path, monke
     finally:
         st.cache_resource.clear()
         st.cache_data.clear()
+
+
+# ---------------------------------------------------------------- Binder nudges (Phase 4)
+def test_home_counts_binder_candidates(smoke_db_path, tmp_path, monkeypatch):
+    try:
+        _binder_db(smoke_db_path, tmp_path, monkeypatch)       # points DB_PATH at the copy
+        at = AppTest.from_file(os.path.join(os.path.dirname(PAGES_DIR), "dashboard.py"), default_timeout=15)
+        at.run()
+        assert not at.exception
+        assert any("could go in the Binder" in m.value for m in at.markdown)
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
+def test_collection_editor_flags_a_qualifying_add(smoke_db_path, tmp_path, monkeypatch):
+    from dashboard_lib import db
+
+    path = str(tmp_path / "add_notice.db")
+    shutil.copy(smoke_db_path, path)
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE cards SET is_reserved = 1 WHERE set_code='cmd' AND collector_number='1'")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    try:
+        at = AppTest.from_file(os.path.join(PAGES_DIR, "5_Collection_Editor.py"), default_timeout=15)
+        at.run()
+        at.text_input(key="editor_coll_add_set").set_value("cmd")
+        at.text_input(key="editor_coll_add_num").set_value("1")
+        at.number_input(key="editor_coll_add_qty").set_value(1)
+        at.button(key="editor_coll_add_btn").click().run()
+        assert not at.exception
+        assert any("qualifies for the Binder (Reserved List" in str(t.value) for t in at.toast)
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()

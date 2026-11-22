@@ -1,6 +1,6 @@
 """
 Binder candidates: stored cards that belong in the binder
-(docs/BINDER_PLAN.md Phase 2). Reads only; the moves and dismissals go
+(docs/archive/BINDER_PLAN.md Phase 2). Reads only; the moves and dismissals go
 through writes.py (move_lot, dismiss_binder_card, set_setting).
 
 Which lots are looked at ("storage"):
@@ -276,6 +276,32 @@ def binder_candidates(conn, settings=None):
     # pandas turns a None among strings into NaN; keep "no plan" as None.
     df["planned_for"] = df["planned_for"].astype(object).where(df["planned_for"].notna(), None)
     return df
+
+
+def reasons_for_new_lot(conn, scryfall_id, foil, location, settings=None):
+    """The rule labels a just-added copy passes (e.g. ["Reserved List"]), or
+    [] when it wouldn't be a candidate: Collection Editor's notice. Same
+    scope and rules as the list (deck, Binder, unticked Location, basic
+    land, dismissed card), applied to one printing at one Location."""
+    settings = settings or binder_settings(conn)
+    cur = conn.execute(
+        f"""SELECT c.name, c.oracle_id, COALESCE(c.is_basic_land, 0), COALESCE(c.is_reserved, 0) AS is_reserved,
+                   COALESCE(c.is_game_changer, 0) AS is_game_changer,
+                   c.current_price_usd, c.current_price_usd_foil
+            FROM cards c WHERE c.scryfall_id = ?""",
+        (scryfall_id,))
+    row = cur.fetchone()
+    if not row or row[2]:
+        return []
+    # Same finish-aware rule as copy_value_sql(), for one copy.
+    value = (row[6] if row[6] is not None else row[5]) if foil else row[5]
+    lot = {"location": location, "name": row[0], "oracle_id": row[1],
+           "is_reserved": row[3], "is_game_changer": row[4], "copy_value": value}
+    if not _in_scope(lot, settings, q.deck_name_set(conn)):
+        return []
+    if card_key(row[1], row[0]) in _dismissed_keys(conn):
+        return []
+    return [label for label in (rule(lot, settings) for rule in RULES) if label]
 
 
 def binder_candidate_names(conn, settings=None):

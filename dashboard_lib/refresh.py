@@ -58,7 +58,7 @@ def refresh_all_cards(conn, progress_callback=None):
 
     logger.info("Starting card data refresh: %d cards to check", total)
 
-    # docs/BINDER_PLAN.md Phase 2: which stored cards qualify for the binder
+    # docs/archive/BINDER_PLAN.md Phase 2: which stored cards qualify for the binder
     # before and after the new prices, so the summary can name the ones that
     # now do. Both counts come from this run; nothing is stored.
     binder_before = binder.binder_candidate_names(conn)

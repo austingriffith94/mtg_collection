@@ -400,7 +400,7 @@ def remove_location_from_catalog(conn, location):
 
 # ------------------------------------------------------------------
 # app_settings and the binder's "Not for binder" list
-# (docs/BINDER_PLAN.md Phase 2). Validation of the binder.* keys lives in
+# (docs/archive/BINDER_PLAN.md Phase 2). Validation of the binder.* keys lives in
 # binder.save_settings(); these only store.
 # ------------------------------------------------------------------
 def set_setting(conn, key, value):

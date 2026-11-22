@@ -32,7 +32,8 @@ mtg_dashboard/
 │   ├── 8_Workbench.py
 │   ├── 9_Card_Lookup.py
 │   ├── 10_Advisor.py
-│   └── 11_Goldfish.py
+│   ├── 11_Goldfish.py
+│   └── 12_Binder.py
 ├── dashboard_lib/                     # shared library code behind the pages
 │   ├── formatting.py                 # card-type/color/URL/filename helpers (no Streamlit dep)
 │   ├── queries.py                    # read-only sqlite3+pandas queries (no Streamlit dep)
@@ -198,13 +199,13 @@ The sidebar groups the pages into four sections (the list lives in
 |---|---|
 | Browse | Home, Collection, Decks, Card Lookup |
 | Plan | Workbench, Advisor, Land & Color Probability |
-| Edit | Deck Editor, Collection Editor, Card Database |
+| Edit | Deck Editor, Collection Editor, Card Database, Binder |
 | Play | Commander Game Tracking, Goldfish |
 
 The dashboard currently covers:
 - **Home** — headline counts, a link card for every page (grouped like the
   sidebar, with a one-line purpose each), a summary of pending Workbench
-  work, and image-backed deck tiles (cover image if you've set one, else
+  work, a Binder line when stored cards qualify, and image-backed deck tiles (cover image if you've set one, else
   the commander's own card art); clicking a tile jumps straight to that
   deck on the Decks page below.
 
@@ -1145,6 +1146,34 @@ mock database (including deliberately orphaning 5 cached images and
 confirming both the files and their DB paths were cleaned up correctly)
 — the one thing I couldn't test here is a real Scryfall image download,
 since this sandbox has no network access.
+
+## The Binder — flagging stored cards that belong in it
+
+The **Binder** (Edit → Binder, `pages/12_Binder.py`) is a storage Location,
+720 slots by default, and this page lists the cards sitting in other storage
+(`Box`, `Lands`, no Location) that should go in it. Rules, in
+`dashboard_lib/binder.py`; a card is listed if it passes **any** one:
+
+- **Value** — the copy is worth at least the minimum (default $2). A foil copy
+  is judged on its foil price, a non-foil on the non-foil price.
+- **Reserved List** and **Game changer** — whatever the price; each can be
+  switched off.
+
+Never listed: cards in a deck, cards already in the Binder, basic lands, and
+cards you dismissed with **Not for binder** (by card, every printing; Show
+dismissed has an Undo). Locations you untick in the settings aren't scanned.
+There's no scoring and no price history: a card that "went up" simply meets
+the minimum at the last Card Data refresh, so the page shows the price date
+and warns when it's over two weeks old.
+
+Rows start unticked; tick what you want (**Select all** skips lots a deck has
+planned) and **Move selected to Binder**. Moves go through `writes.move_lot`,
+so they show in Card Lookup's History ("moved to the binder"). The Binder is
+ordinary storage to deck building. Nudges: Home counts qualifying cards, the
+Collection Editor's Add form says when the card you just added qualifies (it
+is still saved where you chose), and the Card Data refresh reports how many
+cards newly qualify. Settings live in the `app_settings` table; dismissals in
+`binder_dismissed`. Plan and as-built notes: `docs/archive/BINDER_PLAN.md`.
 
 ## Editable data
 

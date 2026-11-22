@@ -1,6 +1,6 @@
 # Binder Plan — flag stored cards that belong in the binder
 
-Working plan from the discussion of 2026-11-21. Goal: a new storage location,
+Finished 2026-11-21 (all phases done; moved to docs/archive/). Working plan from the discussion of 2026-11-21. Goal: a new storage location,
 **Binder** (720 slots), and a tool that lists the cards sitting in storage that
 should go into it. It does two jobs:
 
@@ -20,7 +20,7 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] **Phase 1** — Foil prices on `cards` (schema, Scryfall fetch, refresh).
 - [x] **Phase 2** — Settings table and the candidate rules (`dashboard_lib/binder.py`, tested).
 - [x] **Phase 3** — The Binder page: settings, fill gauge, candidate list, move to Binder.
-- [ ] **Phase 4** — Nudges on Home and Collection Editor; docs and wrap-up.
+- [x] **Phase 4** — Nudges on Home and Collection Editor; docs and wrap-up.
 
 ## Decisions
 
@@ -359,6 +359,16 @@ in 77 Binder lots (the split cards merged) and 78 `binder` move rows.
   both.
 - Update `README.md` (a Binder section) and `PROJECT_STATE.md`. Mark this plan
   finished and move it to `docs/archive/`.
+
+As built (2026-11-21): Home shows `📒 N card(s) in storage could go in the
+Binder` with a link, from `binder_candidate_count` (distinct cards), hidden at
+0. The Collection Editor's hand add calls the new
+`binder.reasons_for_new_lot(conn, scryfall_id, foil, location)`, which applies
+the same scope and rules to the one new copy (so a copy added straight into a
+deck or the Binder, a basic, or a dismissed card gets no notice), and passes
+the result to `finish_edit` as a warning toast: "Dystopia qualifies for the
+Binder (Reserved List)". The lot is still saved where you chose. Order-CSV
+imports get no per-row notice; their cards show up on Home's count.
 
 ## Backlog (not planned)
 

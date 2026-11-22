@@ -1,4 +1,4 @@
-"""docs/BINDER_PLAN.md Phase 2: app_settings, binder_dismissed and the
+"""docs/archive/BINDER_PLAN.md Phase 2: app_settings, binder_dismissed and the
 candidate rules in dashboard_lib/binder.py. One test per edge case listed in
 the plan, on a small in-memory fixture (conftest's `conn`)."""
 import os
@@ -294,3 +294,24 @@ def test_older_database_gains_the_tables(conn):
     q.ensure_schema(conn)
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"app_settings", "binder_dismissed"} <= tables
+
+
+# ---------------------------------------------------------------- Phase 4: new-lot notice
+def test_new_lot_notice_names_the_rules_passed(conn, card):
+    sid = card("Dystopia", price=44.88, reserved=1)
+    assert binder.reasons_for_new_lot(conn, sid, False, "Box") == ["$44.88", "Reserved List"]
+
+
+def test_new_lot_notice_is_empty_when_out_of_scope(conn, card):
+    sid = card("Dystopia", price=44.88, reserved=1)
+    _deck(conn, "Doom Deck")
+    assert binder.reasons_for_new_lot(conn, sid, False, "Doom Deck") == []      # in a deck
+    assert binder.reasons_for_new_lot(conn, sid, False, "binder") == []         # already the Binder
+    assert binder.reasons_for_new_lot(conn, card("Forest", price=5, basic=1, number="2"), False, "Box") == []
+    assert binder.reasons_for_new_lot(conn, card("Cheap", price=0.2, number="3"), False, "Box") == []
+
+
+def test_new_lot_notice_uses_the_foil_price_for_foils(conn, card):
+    sid = card("Shiny", price=0.5, foil_price=9.0)
+    assert binder.reasons_for_new_lot(conn, sid, True, "Box") == ["$9.00"]
+    assert binder.reasons_for_new_lot(conn, sid, False, "Box") == []

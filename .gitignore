@@ -44,3 +44,7 @@ Thumbs.db
 
 # Local image assets (backgrounds, proxies, etc.)
 pictures/
+
+# Finished plan archive — kept locally as reference notes, not versioned
+# (git history still has the earlier copies).
+/docs/archive/

@@ -167,6 +167,10 @@ cv.inject_deck_accent_css(
 cv.render_deck_header(deck_name, meta.get("description"), header_img_src, color_identity_raw)
 nav.render_deck_links("Decks")
 
+# Slot for the printable-sheet button: reserved here so it sits right under the
+# header, but filled further down, after _render_sheet() is defined.
+sheet_slot = st.container()
+
 # ------------------------------------------------------------------
 # Turn 0 stat grid
 # ------------------------------------------------------------------
@@ -233,17 +237,23 @@ def _render_export(conn, deck_id, meta, stats, value, deck_name, color_identity_
                 f.write(moxfield_text + "\n")
             st.success(f"Saved to `{os.path.relpath(out_path, db.BASE_DIR)}`")
 
-    st.divider()
-    st.markdown(
-        "**🖨️ Printable deck sheet**",
-        help=(
-            "A one-page, Letter-size sheet with stats, charts, art and the full decklist. "
-            "Open the downloaded file in a browser and print (or save as PDF)."
-        ),
-    )
+
+def _render_sheet(conn, deck_id, meta, stats, value, deck_name, color_identity_raw, cover_row):
+    """Printable deck sheet: a big primary button builds it on click (building
+    loads every panel's data and base64-encodes its art, so it isn't done on
+    every rerun), then swaps to a matching download button."""
+    _flag = f"deck_{deck_id}_sheet_ready"
     _sheet_df = loaders.load_deck_cards_df(conn, deck_id)
     if _sheet_df.empty:
         st.caption("No mainboard cards to print yet.")
+    elif not st.session_state.get(_flag):
+        if st.button(
+            "🖨️ Generate printable deck sheet", key=f"deck_{deck_id}_sheet_generate",
+            help="A one-page, Letter-size sheet with stats, charts, art and the full decklist. "
+                 "Open the downloaded file in a browser and print (or save as PDF).",
+        ):
+            st.session_state[_flag] = True
+            st.rerun()
     else:
         _commander_names = {n for n in (meta.get("commander"), meta.get("partner")) if n}
         _priciest = (
@@ -309,6 +319,13 @@ def _render_export(conn, deck_id, meta, stats, value, deck_name, color_identity_
             mime="text/html",
             key=f"deck_{deck_id}_sheet_download",
         )
+
+
+with sheet_slot:
+    _render_sheet(
+        conn, deck_id, meta, stats, value, deck_name, color_identity_raw,
+        cover_rows.iloc[0] if not cover_rows.empty else None,
+    )
 
 
 # Built lazily (UI plan Phase 4): a collapsed st.expander still runs its

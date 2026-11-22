@@ -81,13 +81,11 @@ if unlocated["lots"]:
     workbench_bits.append(f"**{unlocated['lots']}** lot(s) with no location")
 if workbench_bits:
     st.markdown("🔧 " + " · ".join(workbench_bits))
-    st.page_link("pages/8_Workbench.py", label="Open the Workbench", icon="🔧")
 
 # Binder nudge: stored cards that pass a binder rule (cheap count, no planned_for work).
 binder_count = binder.binder_candidate_count(conn)
 if binder_count:
     st.markdown(f"📒 **{binder_count}** card(s) in storage could go in the Binder")
-    st.page_link("pages/12_Binder.py", label="Open the Binder", icon="📒")
 
 decks_with_covers = loaders.load_decks_with_covers(conn)
 cv.render_deck_landing_grid(decks_with_covers, status_df=comparison)

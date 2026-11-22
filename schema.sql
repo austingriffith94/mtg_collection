@@ -45,7 +45,7 @@ CREATE INDEX idx_cards_oracle ON cards(oracle_id);
 
 -- ------------------------------------------------------------
 -- Physical collection. One row per printing, finish and Location
--- (docs/LOT_CONSOLIDATION_PLAN.md): "my copies of this printing, in this
+-- (docs/archive/LOT_CONSOLIDATION_PLAN.md): "my copies of this printing, in this
 -- finish, at this place", not one purchase. The writers in
 -- dashboard_lib/writes.py fold copies arriving at an occupied place into
 -- the row already there, and idx_collection_place below enforces it.

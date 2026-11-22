@@ -15,7 +15,7 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] **Phase 0**: Branch and plan.
 - [x] **Phase 1**: The new merge rule, applied by every writer.
 - [x] **Phase 2**: Clean up the existing rows and enforce the rule in the schema.
-- [ ] **Phase 3**: Docs and wrap-up.
+- [x] **Phase 3**: Docs and wrap-up.
 
 ## Why
 
@@ -376,11 +376,11 @@ hit a row that is gone. Each of these needs an explicit rule:
 
 ### Phase 3: Docs and wrap-up
 
-- [ ] Update the docstrings that describe the old rule: `move_lot`,
+- [x] Update the docstrings that describe the old rule: `move_lot`,
       `_find_twin`, `consolidate_lots`, `revert_moves`, the
       `pages/1_Collection.py` header.
-- [ ] `PROJECT_STATE.md`: the collection model line.
-- [ ] Mark the plan finished, move it to `docs/archive/`, and add its row to
+- [x] `PROJECT_STATE.md`: the collection model line.
+- [x] Mark the plan finished, move it to `docs/archive/`, and add its row to
       `docs/archive/README.md`.
 
 ## Backlog (not planned)

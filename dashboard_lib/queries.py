@@ -414,7 +414,7 @@ def _existing_objects(conn, kind):
 
 
 # One collection row per printing, finish and Location
-# (docs/LOT_CONSOLIDATION_PLAN.md). An expression index, so a blank and a
+# (docs/archive/LOT_CONSOLIDATION_PLAN.md). An expression index, so a blank and a
 # NULL Location count as the same place (plain NULLs are distinct in a
 # unique index). The writers in writes.py merge before they write, so this
 # only ever fires on a write path that skipped them. schema.sql creates it

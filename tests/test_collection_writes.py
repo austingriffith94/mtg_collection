@@ -279,7 +279,7 @@ def _dup_lot(conn, sid, quantity, location, *, foil=0, date=None, source=None, p
 
 
 # ------------------------------------------------------------------
-# The one-time merge (docs/LOT_CONSOLIDATION_PLAN.md Phase 2). A database
+# The one-time merge (docs/archive/LOT_CONSOLIDATION_PLAN.md Phase 2). A database
 # from before the merge rule has no index and can hold rows sharing a
 # place; `legacy` drops the index to get one.
 # ------------------------------------------------------------------
@@ -392,7 +392,7 @@ def test_move_lot_merges_into_existing_lot_at_destination(conn, add_card):
 
 
 # ------------------------------------------------------------------
-# One row per printing, finish and Location (docs/LOT_CONSOLIDATION_PLAN.md)
+# One row per printing, finish and Location (docs/archive/LOT_CONSOLIDATION_PLAN.md)
 # ------------------------------------------------------------------
 def _rows(conn, sid):
     return [dict(r) for r in conn.execute(

@@ -135,7 +135,7 @@ def test_bulk_update_logs_each_change_and_passes_the_reason(conn, world):
         conn, {a: {"location": "Gisa"}, b: {"_delete": True}, c: {"location": "Box"}},
         reason="reconcile",
     )
-    # Deletes go first, place changes last (docs/LOT_CONSOLIDATION_PLAN.md).
+    # Deletes go first, place changes last (docs/archive/LOT_CONSOLIDATION_PLAN.md).
     assert _log(conn)[del_before:] == [
         ("Arcane Signet", 1, "Box", None, "reconcile"),
         ("Sol Ring", 1, "Box", "Gisa", "reconcile"),

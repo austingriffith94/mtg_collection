@@ -731,7 +731,7 @@ def _cascade_deck_name(conn, old_name, new_name, update_collection_locations=Tru
 def _relocate_all(conn, old_location, new_location, log_reason=None):
     """Move every row whose Location is exactly `old_location` to
     `new_location`, each through _place() so a card already there merges
-    (docs/LOT_CONSOLIDATION_PLAN.md). With `log_reason`, each move is logged
+    (docs/archive/LOT_CONSOLIDATION_PLAN.md). With `log_reason`, each move is logged
     against the row that holds the copies afterwards. No commit."""
     for collection_id, sid, qty in conn.execute(
         "SELECT collection_id, scryfall_id, quantity FROM collection WHERE location=? "
@@ -2757,7 +2757,7 @@ def add_collection_lot(conn, scryfall_id, *, reason="collection_edit", change_id
     Workbench's panel.
 
     A place that already holds this printing and finish takes the copies
-    (docs/LOT_CONSOLIDATION_PLAN.md): they fold into the row there, by the
+    (docs/archive/LOT_CONSOLIDATION_PLAN.md): they fold into the row there, by the
     _merged_fields() rules, instead of starting a second row. The arrival is
     logged against that row, and its id is what comes back."""
     fields = {k: fields.get(k) for k in COLLECTION_FIELDS}
@@ -2773,7 +2773,7 @@ def add_collection_lot(conn, scryfall_id, *, reason="collection_edit", change_id
 
 
 # The parts of a row that say where its copies are: printing, finish and
-# Location. Two rows never share all three (docs/LOT_CONSOLIDATION_PLAN.md).
+# Location. Two rows never share all three (docs/archive/LOT_CONSOLIDATION_PLAN.md).
 _PLACE_KEYS = ("scryfall_id", "foil", "location")
 
 
@@ -2851,7 +2851,7 @@ def set_lot_printing(conn, collection_id, scryfall_id):
 
 
 # ------------------------------------------------------------------
-# One row per place (docs/LOT_CONSOLIDATION_PLAN.md). A collection row is
+# One row per place (docs/archive/LOT_CONSOLIDATION_PLAN.md). A collection row is
 # "my copies of this printing, in this finish, at this Location". Every
 # writer that can land copies on a place looks up who is already there
 # FIRST and folds into it, so two rows never share a place, not even for a
@@ -3014,7 +3014,7 @@ def consolidate_lots(conn):
     no Location, so the move log is untouched.
 
     Only a database from before the merge rule has groups to merge
-    (docs/LOT_CONSOLIDATION_PLAN.md Phase 2); with none it does nothing. When
+    (docs/archive/LOT_CONSOLIDATION_PLAN.md Phase 2); with none it does nothing. When
     there are, a backup comes first and is required: RuntimeError, nothing
     merged, if it fails."""
     if q.place_duplicate_count(conn) == 0:
@@ -3306,7 +3306,7 @@ def bulk_update_collection(conn, updates, *, reason="collection_edit", printings
     move log through the single-lot writers, as `reason`.
 
     A row whose printing, finish or Location changes can merge into the row
-    already at its new place (docs/LOT_CONSOLIDATION_PLAN.md), so the order
+    already at its new place (docs/archive/LOT_CONSOLIDATION_PLAN.md), so the order
     matters. Deletes and rows keeping their place go first: an edit to the
     row a moved one lands on is in before the moved copies are added. Rows
     changing place go last, each only after any row in this save still

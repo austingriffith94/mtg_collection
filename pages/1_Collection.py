@@ -153,7 +153,7 @@ def render_edit_table(df):
         # that deck's list should follow rather than leaving it for Reconcile.
         mark = q.last_move_id(conn)
         # Printing changes go into the same bulk save as the other edits, so
-        # it can order them (docs/LOT_CONSOLIDATION_PLAN.md): a re-pointed lot
+        # it can order them (docs/archive/LOT_CONSOLIDATION_PLAN.md): a re-pointed lot
         # may merge into another, and that has to come after every field edit.
         printings, problems = {}, []
         original = {r["collection_id"]: r for r in rows}
@@ -262,7 +262,7 @@ if export_box.open:
     with export_box:
         render_moxfield_export()
 
-# One-time merge (docs/LOT_CONSOLIDATION_PLAN.md Phase 2). Every writer now
+# One-time merge (docs/archive/LOT_CONSOLIDATION_PLAN.md Phase 2). Every writer now
 # merges as it goes, so only a database from before that rule has rows
 # sharing a place; this panel shows until they're merged, then never again.
 _duplicate_rows = q.place_duplicate_count(conn)

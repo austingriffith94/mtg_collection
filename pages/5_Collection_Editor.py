@@ -226,10 +226,6 @@ if order_file is not None:
         order_source = oc3.text_input(
             "Source label", value="Mana Pool", key="editor_order_import_source"
         )
-        append_seller = st.checkbox(
-            "Append each line's seller name to Source (e.g. 'Mana Pool (Tobemi Games)')",
-            value=True, key="editor_order_import_append_seller",
-        )
 
         if st.button(
             f"📥 Import {len(singles)} card(s) into collection", key="editor_order_import_btn",
@@ -244,7 +240,6 @@ if order_file is not None:
                 location=order_location.strip() or None,
                 date_acquired=order_date.isoformat() if order_date else None,
                 source_prefix=order_source.strip() or "Mana Pool",
-                append_seller=append_seller,
             )
             if order_loc_pick == LOC_OTHER_IMPORT and order_location.strip():
                 writes.add_location_to_catalog(conn, order_location.strip())

@@ -425,30 +425,11 @@ def _render_supply():
     )
     if not contention:
         st.caption("✅ No card is shorter than its total demand across mainboards and shortlists.")
-    for row in contention:
-        with st.container(border=True):
-            mb = ", ".join(row["mainboard_decks"]) or "—"
-            sl = ", ".join(row["shortlist_decks"]) or "—"
-            st.markdown(
-                f"**{row['card']}** — {row['owned_qty']} owned, {row['demand']} wanted "
-                f"(short {row['shortfall']})"
-            )
-            st.caption(f"Mainboard: {mb}  ·  Shortlist: {sl}")
-            if row["mainboard_deck_ids"]:
-                dc1, dc2 = st.columns([3, 1])
-                drop_choice = dc1.selectbox(
-                    "Drop from deck", list(row["mainboard_deck_ids"].values()),
-                    key=f"workbench_contention_drop_pick_{row['oracle_id']}_{ver}",
-                    label_visibility="collapsed",
-                )
-                if dc2.button("Drop", key=f"workbench_contention_drop_btn_{row['oracle_id']}_{ver}"):
-                    deck_id = next(
-                        d for d, n in row["mainboard_deck_ids"].items() if n == drop_choice
-                    )
-                    sid = q.deck_card_scryfall_id_for_oracle(conn, deck_id, row["oracle_id"])
-                    if sid:
-                        moves = writes.remove_deck_card(conn, deck_id, sid)
-                        _refresh([f"✅ Dropped {row['card']} from {drop_choice}."], moves=moves)
+    for label, group_rows, expanded in _group_by_deck(
+            contention, lambda r: set(r["mainboard_decks"]) | set(r["shortlist_decks"])):
+        with st.expander(f"{label} ({len(group_rows)})", expanded=expanded):
+            for row in group_rows:
+                _render_contention_row(row)
 
     # Buy list (Phase 3, Phase 4) — one row per card, grouped across decks
     # and priced once: cards on a deck's list with no copy (awaiting), open
@@ -467,13 +448,13 @@ def _render_supply():
         ),
     )
     if needed["rows"]:
-        _buy_table(needed["rows"])
+        _buy_groups(needed["rows"], "needed")
     else:
         st.caption("Nothing needed — every card on a deck's list has a copy, and nothing is marked Buy or short.")
     with st.expander(f"💡 Ideas ({len(ideas['rows'])}) — ${ideas['total']:,.2f}"):
         if ideas["rows"]:
             st.caption("Open ideas with zero owned copies. Maybes, so not counted above.")
-            _buy_table(ideas["rows"])
+            _buy_groups(ideas["rows"], "ideas")
         else:
             st.caption("Every open idea is already owned.")
     if buy["rows"]:
@@ -483,6 +464,58 @@ def _render_supply():
             key=f"workbench_buy_list_export_{ver}",
         )
         _render_bought()
+
+
+SHARED_GROUP = "🔀 Shared across decks"
+
+
+def _group_by_deck(rows, decks_of):
+    """[(label, rows, expanded)] — each row filed under the ONE deck it
+    involves, or under "Shared across decks" when it spans several (so a
+    card never appears twice). Shared comes first and opens by default:
+    those are the genuine cross-deck conflicts. Single-deck groups collapse,
+    biggest first, so a long incomplete deck folds out of the way."""
+    buckets = {}
+    for r in rows:
+        decks = sorted(decks_of(r), key=str.casefold)
+        key = decks[0] if len(decks) == 1 else (SHARED_GROUP if decks else "No deck")
+        buckets.setdefault(key, []).append(r)
+    ordered = sorted(buckets, key=lambda k: (k != SHARED_GROUP, -len(buckets[k]), k.casefold()))
+    return [(k, buckets[k], k == SHARED_GROUP) for k in ordered]
+
+
+def _buy_groups(rows, which):
+    """The buy table split by deck, each group an expander with its subtotal."""
+    for label, group_rows, expanded in _group_by_deck(rows, lambda r: r["decks"]):
+        subtotal = sum(r["subtotal"] or 0 for r in group_rows)
+        with st.expander(f"{label} ({len(group_rows)}) — ${subtotal:,.2f}", expanded=expanded):
+            _buy_table(group_rows)
+
+
+def _render_contention_row(row):
+    with st.container(border=True):
+        mb = ", ".join(row["mainboard_decks"]) or "—"
+        sl = ", ".join(row["shortlist_decks"]) or "—"
+        st.markdown(
+            f"**{row['card']}** — {row['owned_qty']} owned, {row['demand']} wanted "
+            f"(short {row['shortfall']})"
+        )
+        st.caption(f"Mainboard: {mb}  ·  Shortlist: {sl}")
+        if row["mainboard_deck_ids"]:
+            dc1, dc2 = st.columns([3, 1])
+            drop_choice = dc1.selectbox(
+                "Drop from deck", list(row["mainboard_deck_ids"].values()),
+                key=f"workbench_contention_drop_pick_{row['oracle_id']}_{ver}",
+                label_visibility="collapsed",
+            )
+            if dc2.button("Drop", key=f"workbench_contention_drop_btn_{row['oracle_id']}_{ver}"):
+                deck_id = next(
+                    d for d, n in row["mainboard_deck_ids"].items() if n == drop_choice
+                )
+                sid = q.deck_card_scryfall_id_for_oracle(conn, deck_id, row["oracle_id"])
+                if sid:
+                    moves = writes.remove_deck_card(conn, deck_id, sid)
+                    _refresh([f"✅ Dropped {row['card']} from {drop_choice}."], moves=moves)
 
 
 def _buy_table(rows):

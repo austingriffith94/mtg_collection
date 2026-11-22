@@ -177,8 +177,7 @@ def mark_existing_lots(conn, rows):
     return rows
 
 
-def import_rows(conn, rows, *, location=None, date_acquired=None, source_prefix="Mana Pool",
-                 append_seller=True):
+def import_rows(conn, rows, *, location=None, date_acquired=None, source_prefix="Mana Pool"):
     """Adds a collection lot for each already-resolved Single row (see
     resolve_rows() — call it first; a row with no "scryfall_id" key yet is
     treated as an error here rather than resolved on the fly, so preview
@@ -202,9 +201,8 @@ def import_rows(conn, rows, *, location=None, date_acquired=None, source_prefix=
             })
             continue
 
+        # Source is just the marketplace label; the seller's store name is not appended.
         source = source_prefix or None
-        if append_seller and row["seller"]:
-            source = f"{source_prefix} ({row['seller']})" if source_prefix else row["seller"]
 
         lot_id = writes.add_collection_lot(
             conn, sid,

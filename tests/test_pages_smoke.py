@@ -1868,3 +1868,23 @@ def test_collection_editor_flags_a_qualifying_add(smoke_db_path, tmp_path, monke
     finally:
         st.cache_resource.clear()
         st.cache_data.clear()
+
+
+def test_binder_page_decks_box_lists_deck_copies_but_select_all_skips_them(smoke_db_path, tmp_path, monkeypatch):
+    try:
+        at, path, lot_id = _binder_db(smoke_db_path, tmp_path, monkeypatch)
+        conn = sqlite3.connect(path)
+        deck = conn.execute("SELECT name FROM decks LIMIT 1").fetchone()[0]
+        conn.execute("UPDATE collection SET location=? WHERE collection_id=?", (deck, lot_id))
+        conn.commit()
+        conn.close()
+        at.run()
+        assert at.checkbox(key="binder_include_decks").value is False
+        assert any("Nothing in storage passes" in i.value for i in at.info)    # a deck copy is hidden
+        at.checkbox(key="binder_include_decks").check().run()
+        assert not at.exception
+        at.button(key="binder_select_all").click().run()
+        assert at.button(key="binder_move").disabled                             # never auto-ticked
+    finally:
+        st.cache_resource.clear()
+        st.cache_data.clear()

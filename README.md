@@ -1159,7 +1159,7 @@ The **Binder** (Edit → Binder, `pages/12_Binder.py`) is a storage Location,
 - **Reserved List** and **Game changer** — whatever the price; each can be
   switched off.
 
-Never listed: cards in a deck, cards already in the Binder, basic lands, and
+Not listed: cards in a deck (unless you tick **Decks** in the filter row, off by default; Select all never ticks those, and moving one offers to drop it from the deck list), cards already in the Binder, basic lands, and
 cards you dismissed with **Not for binder** (by card, every printing; Show
 dismissed has an Undo). Locations you untick in the settings aren't scanned.
 There's no scoring and no price history: a card that "went up" simply meets

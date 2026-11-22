@@ -315,3 +315,12 @@ def test_new_lot_notice_uses_the_foil_price_for_foils(conn, card):
     sid = card("Shiny", price=0.5, foil_price=9.0)
     assert binder.reasons_for_new_lot(conn, sid, True, "Box") == ["$9.00"]
     assert binder.reasons_for_new_lot(conn, sid, False, "Box") == []
+
+
+# ---------------------------------------------------------------- Decks tickbox
+def test_deck_lots_listed_only_when_asked(conn, card, lot):
+    _deck(conn, "Doom Deck")
+    lot(card("Dystopia", price=44.88, reserved=1), location="Doom Deck")
+    lot(card("Gem", price=5, number="2"), location="Box")
+    assert _names(conn) == ["Gem"]
+    assert list(binder.binder_candidates(conn, include_decks=True)["name"]) == ["Dystopia", "Gem"]

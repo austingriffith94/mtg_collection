@@ -26,7 +26,7 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 
 Agreed 2026-11-21:
 
-- **Cards in a deck are never candidates.** A copy whose Location is a deck
+- **Cards in a deck are not candidates by default.** (2026-11-22: the Binder page got a Decks tickbox, off by default, that lists them; Select all skips them.) A copy whose Location is a deck
   name is ignored completely, even a game changer or a Reserved List card. It
   becomes a candidate only once it is moved back to storage.
 - **Candidates come from storage.** Any Location that isn't a deck and isn't

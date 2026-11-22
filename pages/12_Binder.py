@@ -13,6 +13,7 @@ this page only shows them and acts on the ticked rows.
   binder.save_settings(), which validates first (a deck name is refused).
 - Price date: the oldest price among the scanned lots. Prices only change
   on a Card Data refresh, so an old date means an out-of-date list.
+- Filter row: a tickbox per storage Location plus Decks (off by default; lists qualifying copies sleeved in a deck).
 - Fill gauge: copies at the binder Location against its capacity, and what
   it would be after moving the ticked rows. Going over warns, never blocks.
 - Candidate table: tick, art, card, copies to move (starts at the lot's
@@ -140,7 +141,16 @@ except StreamlitPageNotFoundError:
 # ------------------------------------------------------------------
 # Candidates
 # ------------------------------------------------------------------
-candidates = binder.binder_candidates(conn, settings)
+# The filter row: one tickbox per storage Location in the list, plus Decks
+# (off by default: a copy in a deck is only listed when you ask). The Decks
+# box is drawn first because it decides what the list holds.
+filter_cols = st.columns(6)
+include_decks = filter_cols[-1].checkbox(
+    "Decks", value=False, key="binder_include_decks",
+    help="Also list qualifying copies that are sleeved in a deck. Moving one takes it out of the "
+         "deck; Select all never ticks these.")
+candidates = binder.binder_candidates(conn, settings, include_decks=include_decks)
+deck_names = q.deck_name_set(conn)
 filled, capacity = binder.binder_fill(conn, settings)
 
 if candidates.empty:
@@ -153,11 +163,14 @@ if candidates.empty:
     st.info("Nothing in storage passes the binder rules — no stored card is "
             + (", ".join(rules[:-1]) + " or " + rules[-1] if len(rules) > 1 else rules[0]) + ".")
 else:
-    locations = sorted({(loc or "").strip() for loc in candidates["location"]}, key=str.casefold)
-    labels = {loc: loc or "(no Location)" for loc in locations}
-    shown_locs = st.multiselect(
-        "Show copies in", locations, default=locations, key="binder_loc_filter",
-        format_func=labels.get)
+    locations = sorted({(loc or "").strip() for loc in candidates["location"]
+                        if (loc or "").strip() not in deck_names}, key=str.casefold)
+    shown_locs = [loc for i, loc in enumerate(locations[:len(filter_cols) - 1])
+                  if filter_cols[i].checkbox(loc or "(no Location)", value=True, key=f"binder_loc_{loc}")]
+    if len(locations) > len(filter_cols) - 1:      # more Locations than boxes: the rest are always shown
+        shown_locs += locations[len(filter_cols) - 1:]
+    if include_decks:
+        shown_locs += sorted({(loc or "").strip() for loc in candidates["location"]} & deck_names)
     view = candidates[candidates["location"].fillna("").str.strip().isin(shown_locs)]
 
     # Select all / Clear rebuild the editor (the flag is part of its key)
@@ -170,7 +183,7 @@ else:
     sel_col, clear_col, _ = st.columns([1, 1, 4])
     sel_col.button("☑️ Select all", key="binder_select_all", width="stretch",
                    on_click=_set_select_all, args=(True,),
-                   help="Tick every row shown. ⚠ rows (planned for a deck) stay unticked.")
+                   help="Tick every row shown. ⚠ rows (planned for a deck) and copies in a deck stay unticked.")
     clear_col.button("⬜ Clear", key="binder_select_none", width="stretch",
                      on_click=_set_select_all, args=(False,), help="Untick every row.")
 
@@ -182,7 +195,7 @@ else:
         "card_key": r["card_key"],
         # Nothing is ticked until you choose; Select all ticks every row
         # shown except ones a deck has planned (those stay a choice per row).
-        "Move": select_all and not r["planned_for"],
+        "Move": select_all and not r["planned_for"] and (r["location"] or "").strip() not in deck_names,
         "Art": art.get(r["scryfall_id"]),
         "Card": r["name"],
         "Set": f"{(r['set_code'] or '').upper()} #{r['collector_number'] or ''}".strip(),
@@ -263,6 +276,7 @@ else:
 
     if do_move:
         moves, errors = [], []
+        move_mark = q.last_move_id(conn)
         # The binder's Location joins the master Location list on the first
         # move (not on page load — viewing the page writes nothing), so the
         # Collection Editor's dropdowns offer it from then on. A different
@@ -282,7 +296,9 @@ else:
         loaders.load_location_options.clear()
         total = sum(m["quantity"] for m in moves)
         cv.finish_edit({"message": f"Moved {total} cop{'y' if total == 1 else 'ies'} to {settings.location}.",
-                        "moves": moves, "errors": errors})
+                        "moves": moves, "errors": errors,
+                        # Copies taken out of a deck offer to drop it from that deck's list.
+                        "deck_sync": q.deck_sync_offers(conn, move_mark)})
 
     if do_dismiss:
         names = {}

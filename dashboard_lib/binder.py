@@ -177,10 +177,10 @@ def _dismissed_keys(conn):
     return {r[0] for r in conn.execute("SELECT oracle_id FROM binder_dismissed").fetchall()}
 
 
-def _in_scope(lot, settings, deck_names):
+def _in_scope(lot, settings, deck_names, include_decks=False):
     place = (lot["location"] or "").strip()
     if place in deck_names:
-        return False
+        return include_decks
     if q.same_location(place, settings.location):
         return False
     if place and any(q.same_location(place, skip) for skip in settings.skip_locations):
@@ -188,14 +188,14 @@ def _in_scope(lot, settings, deck_names):
     return True
 
 
-def _qualifying(conn, settings):
+def _qualifying(conn, settings, include_decks=False):
     """The candidate lots (dicts with `card_key` and `reasons` added), no
     planned_for. Shared by binder_candidates() and the cheap count."""
     deck_names = q.deck_name_set(conn)
     dismissed = _dismissed_keys(conn)
     out = []
     for lot in _all_lots(conn):
-        if not _in_scope(lot, settings, deck_names):
+        if not _in_scope(lot, settings, deck_names, include_decks):
             continue
         lot["card_key"] = card_key(lot["oracle_id"], lot["name"])
         if lot["card_key"] in dismissed:
@@ -242,15 +242,16 @@ CANDIDATE_COLUMNS = [
 ]
 
 
-def binder_candidates(conn, settings=None):
+def binder_candidates(conn, settings=None, include_decks=False):
     """One row per qualifying lot, highest copy value first (no price last):
     CANDIDATE_COLUMNS. `reasons` is the list of rule labels passed;
     `already_in_binder` the copies of the same card already at the binder
     Location; `planned_for` the deck(s) that promised themselves this copy
     (", "-joined), or None. A planned lot is still listed — the page warns
-    and leaves it unticked."""
+    and leaves it unticked. Lots in a deck are left out unless include_decks
+    (the page's Decks tickbox, off by default)."""
     settings = settings or binder_settings(conn)
-    lots = _qualifying(conn, settings)
+    lots = _qualifying(conn, settings, include_decks)
     if not lots:
         return pd.DataFrame(columns=CANDIDATE_COLUMNS)
 

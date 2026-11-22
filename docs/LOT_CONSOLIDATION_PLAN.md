@@ -39,8 +39,17 @@ Agreed 2026-11-22:
   compared trimmed, with blank equal to NULL (the existing `_loc` rule).
   Source, date and price paid are no longer part of the key.
 - **Keep the lot model; don't drop it.** `collection_id` stays the row's
-  identity for the move log, deck-change storage claims, `free_lots`, Undo and
-  the Binder page. Only *when rows merge* changes.
+  identity for the move log, `free_lots`, Undo and the Binder page. (Storage
+  claims by pending deck changes are computed live from the rows, not stored
+  by id, so they're unaffected.) Only *when rows merge* changes. The move log
+  keeps no foreign keys, so history rows may name a `collection_id` that a
+  merge has since deleted; Card Lookup reads history by card name, so that's
+  harmless.
+- **Location is compared trimmed and case-sensitive**, as `_find_twin` does
+  today. `queries.same_location` is case-insensitive for storage names, but
+  the real data has no case variants today, and the Location dropdowns
+  normalise new entries. SQLite's `LOWER()` is ASCII-only, so a case-folded
+  index could disagree with Python.
 - **What a merge keeps:**
   - `quantity`: the two counts add.
   - `price_paid`: the two amounts add, and a NULL side counts as nothing.
@@ -51,12 +60,14 @@ Agreed 2026-11-22:
     than any real date, and a tie keeps the lower `collection_id`'s values.
     The other row's source and date are dropped.
   - `collection_id`: the lower id survives. This is unchanged.
-- **An uncounted row (NULL quantity) absorbs a counted one at the same
-  place.** Today only basic lands have NULL quantity: all 5 such rows are
-  basics in `Lands`, and NULL means "an uncounted pile". Adding counted
-  copies to a pile leaves a pile, so the result stays NULL. Two uncounted rows
-  merge into one uncounted row. Today uncounted rows never merge, so this is
-  new; no existing group is affected.
+- **Uncounted rows ("NULL or 0" quantity, as everywhere else in the code).**
+  Today all 5 such rows are basic lands in `Lands`. Basic lands are generic
+  piles, so an uncounted basic absorbs counted copies at the same place and
+  stays uncounted, and two uncounted basics merge into one. A **non-basic**
+  card with no count is "one copy" (`COALESCE(NULLIF(quantity,0),1)`), so it
+  merges as **1** and the result is counted. If the pile won there, a
+  3-copy row plus an uncounted row would silently lose two copies. Today
+  uncounted rows never merge, so this is new; no existing group is affected.
 - **Splits still happen, and that's correct.** Moving 1 of 3 copies leaves 2
   behind and puts 1 somewhere else. Those are two places, so two rows. The
   change is that the moved copy now always merges into what's at the
@@ -102,10 +113,25 @@ From `mtg_collection.db` on 2026-11-22:
   quantities add (NULL wins), price adds, date and source come from the older
   row, and the lower id is kept. As now, it writes no move-log row and doesn't
   commit.
-- A small helper, `_settle(conn, collection_id)`, finds the twin, merges and
-  returns the surviving id. Every writer below calls it after changing a
-  row's key columns. `move_lot` already does this inline, so it moves into
-  the helper.
+- **Merge before writing, not after.** The unique index (Phase 2) rejects
+  the *intermediate* state "UPDATE this row's Location to where a twin
+  already sits", so "write, then find the twin and merge" would raise
+  `IntegrityError` as soon as the index exists. Every writer instead looks up
+  the occupant of the destination key **first** and, when there is one, folds
+  into it rather than writing a duplicate. One helper does it:
+  `_place(conn, collection_id, *, location=None, foil=None, scryfall_id=None)`
+  returns the id of the row that now holds the copies (the occupant, or the
+  row itself when the destination is empty). `move_lot`'s existing inline
+  merge moves into it. Phase 1's tests also run with the index created, so
+  this is proven before Phase 2 relies on it.
+- **Swaps.** Two rows exchanging places in one save (Box<->Gisa for the same
+  card and finish) pass through a collision. Apply a batch's key-changing
+  edits through `_place`, and for a swap fold through a temporary move, or
+  just refuse it with a clear message (it's a no-op physically). Decide in
+  Phase 1; rare either way.
+- **Races.** Two sessions can both see an empty destination. The index turns
+  that into `IntegrityError`; the writers catch it once, re-read the
+  occupant and retry, instead of letting a page crash.
 
 ### Writers that must settle
 
@@ -113,16 +139,48 @@ Every path that can make a row's key match another row's:
 
 | Writer | Today | Change |
 |---|---|---|
-| `move_lot` | merges, but only on the old key | uses `_settle`, so the new key applies |
-| `add_collection_lot` | always inserts a new row | inserts, then settles: a new copy at an occupied place adds to that row. The move log still records the copies arriving (`from` NULL), against the surviving id. Covers hand adds, the Moxfield list paste (`order_import`, unlocated rows merge with unlocated rows), purchases and builds |
-| `update_collection_lot` | no merge | settles when `location` or `foil` changes (Collection grid and the Workbench unlocated panel) |
-| `set_lot_printing` | no merge | settles after re-pointing to another printing |
-| `_cascade_deck_name` (`rename_deck`) | bulk `UPDATE … WHERE location=old` | settle each row it moved. A collision only happens if a storage Location already used the new name, but the index would reject it |
-| `delete_deck` | bulk `UPDATE … SET location='Box'` | settle each row it moved. **This one collides often**: a deck's Sol Ring going back to Box, where a Sol Ring already sits |
+| `move_lot` | merges, but only on the old key; the split `INSERT` would also collide | goes through `_place` for both the whole-row move and the split-off part |
+| `add_collection_lot` | always inserts a new row | `_place`-style upsert: a new copy at an occupied place adds to that row. The move log still records the copies arriving (`from` NULL), against the surviving id. Covers hand adds, the Moxfield list paste (`order_import`, unlocated rows merge with unlocated rows), purchases and builds |
+| `update_collection_lot` | no merge | when `location` or `foil` changes, goes through `_place` (Collection grid and the Workbench unlocated panel) |
+| `set_lot_printing` | no merge | `_place` with the new `scryfall_id` |
+| `_cascade_deck_name` (`rename_deck`) | bulk `UPDATE … WHERE location=old` | per-row `_place`, no bulk UPDATE. A collision only happens if a storage Location already used the new name, but the index would reject it |
+| `delete_deck` | bulk `UPDATE … SET location='Box'` | per-row `_place`, no bulk UPDATE (the loop that logs each move already exists). **This one collides often**: a deck's Sol Ring going back to Box, where a Sol Ring already sits. Today's bulk UPDATE would raise `IntegrityError` on the first one |
+
+These are the only writers: a search of the code for `UPDATE collection` and
+`INSERT INTO collection` finds nothing else outside tests and the old
+`_test_*_offline.py` scripts.
 
 Writers that return a `collection_id` return the **surviving** id, so callers
 (the move pop-up, Undo lists, Binder's move) always hold a row that exists.
 `move_lot` already does this.
+
+### Batches holding ids that a merge deletes
+
+A merge deletes a row, so anything that loops over ids captured earlier can
+hit a row that is gone. Each of these needs an explicit rule:
+
+- **`bulk_update_collection`** (Collection grid save, Workbench "Save
+  locations"): it reads `current` up front, then applies edits one by one. A
+  row merged away by an earlier edit would be updated as a silent no-op, or
+  deleted by an old `_delete` flag. Rule: apply plain field edits (quantity,
+  price, date, source, delete) **first**, then the key-changing edits
+  (Location, foil) last through `_place`, and keep a `{dropped_id: kept_id}`
+  map so any later edit for a dropped id is redirected to the survivor.
+- **Collection page printing edits.** The save loop calls `set_lot_printing`
+  *then* `bulk_update_collection`. A row whose Set/# and quantity both
+  changed would have its printing merged away and the quantity edit lost.
+  Rule: field edits first, printing change last, same as above.
+- **Edits to two rows that merge with each other.** Moving A onto B's place
+  while also typing a new quantity for B: the quantity edit applies to B
+  first, then A's copies are added on top. Say so in the Collection page's
+  help text.
+- **Import follow-ups.** `order_import` returns one id per line and the
+  "sleeve into a deck waiting on a buy" offer moves a given *quantity* from
+  it, so lines for one card sharing a surviving row is fine, but the offer
+  must keep passing the bought quantity, never the whole row.
+- Loops that already re-read each lot (`fix_location_mismatch`) or take from
+  distinct rows (`sleeve_into_deck`, `unsleeve_from_deck`, Binder's move)
+  need no change, but each gets a test that merges mid-loop.
 
 ### Undo (`revert_moves`)
 
@@ -137,14 +195,32 @@ Writers that return a `collection_id` return the **surviving** id, so callers
   Otherwise skip with the existing message. An uncounted (NULL) row can't be
   subtracted from. Skip it with "merged into an uncounted pile, so it was
   kept".
+- **Price on that subtract.** The move entry doesn't carry what was paid, and
+  the row's `price_paid` now includes it. Subtract `price_paid * removed /
+  have` (the same proportional rule `move_lot` uses for a split), so Undo of a
+  purchase doesn't leave the money behind. A row with several mixed or NULL
+  prices is only an average to begin with, which we accept.
 
 ### Cleanup and enforcement (Phase 2)
 
-- **Migration** (the startup migration list in `dashboard_lib/queries.py`):
-  when the index is missing, take a backup snapshot (`backup.snapshot(conn,
-  "before", "consolidate-lots")`), run `consolidate_lots()` under the new
-  rule, then create the index. It must consolidate first, or the `CREATE`
-  fails on today's 8 groups.
+- **The one-time merge is an explicit step, not part of startup.**
+  `queries.ensure_schema()` runs on every connection (pages, tests, the
+  refresh script) and is deliberately additive and non-destructive. It also
+  can't call `writes.consolidate_lots()` without a circular import
+  (`writes` imports `queries`). So:
+  1. Take `backup.required_snapshot(conn)` (it aborts if the backup fails,
+     as `delete_blank_lots` does), then run `consolidate_lots()` under the new
+     rule. Wire it to the Collection page's Tidy lots panel for this release
+     (a one-shot button that disappears once nothing is left to merge), and
+     run it once on the real DB myself during Phase 2. It must run before the
+     index exists, or the `CREATE` fails on today's 8 groups.
+  2. `ensure_schema()` then does `CREATE UNIQUE INDEX IF NOT EXISTS`
+     inside a `try`: if duplicates are still present it logs a warning and
+     skips the index (the app keeps working) instead of crashing every page.
+     Fresh DBs built from `schema.sql` get the index directly.
+  Real DB, checked: SQLite 3.53 (expression indexes are fine), no blank or
+  unlocated rows, no location case variants, so nothing blocks the index
+  after step 1.
 - **Index**, in `schema.sql` and the migration:
 
   ```sql
@@ -154,10 +230,15 @@ Writers that return a `collection_id` return the **surviving** id, so callers
 
   It's an expression index, so blank and NULL Locations count as the same
   place (SQLite treats plain NULLs as distinct in a unique index).
-- **Collection page**: remove the manual "Consolidate" button
-  (`pages/1_Collection.py` around line 260) and its help text, since there's
-  nothing left for it to do. `consolidate_lots()` stays for the migration and
-  tests.
+- **Collection page**: once the one-time merge has run, remove the manual
+  "Consolidate" button (`pages/1_Collection.py` around line 260) and its help
+  text, since there's nothing left for it to do. `consolidate_lots()` stays
+  for tests and as a repair tool.
+- **Blank rows and the index.** Two blank rows (no quantity, no Location) of
+  the same card and finish share a key, so a path that can create one
+  (`move_lot`'s Undo with `allow_blank`, a raw insert) would hit the index.
+  Real data has none today. `_place` handles them like any other row (they
+  merge), and `prune_collection` still removes them.
 
 ## Edge cases the checks must cover
 
@@ -174,8 +255,18 @@ Writers that return a `collection_id` return the **surviving** id, so callers
 - Editing a row's Location in the Collection grid to an occupied place merges
   it, and the grid re-renders without the old row.
 - Changing a row's printing to one already at the same place merges it.
-- Counted plus uncounted basics at the same place leaves an uncounted row,
-  and the price adds.
+- Counted plus uncounted **basics** at the same place leaves an uncounted
+  row, and the price adds. Counted plus uncounted **non-basic** counts the
+  uncounted one as 1 and stays counted. A quantity of 0 counts as uncounted.
+- A save that changes a row's Set/# and quantity, where the new printing
+  merges it into another row, keeps both edits.
+- A save that moves A onto B's place and also edits B merges once, in the
+  order the batch rule says, and drops no edit.
+- A merge in the middle of `unsleeve_from_deck`, `sleeve_into_deck` and the
+  Binder move loop leaves the right totals.
+- A rename or delete of a deck whose cards are also in Box merges rather
+  than raising `IntegrityError`, and every move is still logged.
+- Two sessions placing the same card at one empty place leave one row.
 - Undo of a move that merged puts the copies back and they merge at the
   origin.
 - Undo of an add that merged subtracts. Undo of an add whose row has since
@@ -195,22 +286,32 @@ Writers that return a `collection_id` return the **surviving** id, so callers
 ### Phase 1: The new merge rule, applied by every writer
 
 - [ ] `_find_twin` on the new key; `_merge_lots` with the older-row and
-      uncounted-pile rules; the `_settle` helper.
-- [ ] Settle in `add_collection_lot`, `update_collection_lot` (Location/foil),
-      `set_lot_printing`, `_cascade_deck_name` and `delete_deck`; `move_lot`
-      uses `_settle`.
-- [ ] `revert_moves`: subtract for a merged `"new"`; update the docstring.
+      uncounted rules (basics vs non-basics, 0 == NULL); the `_place` helper
+      (merge before write, retry once on `IntegrityError`).
+- [ ] `_place` in `add_collection_lot`, `update_collection_lot`
+      (Location/foil), `set_lot_printing`, `_cascade_deck_name` and
+      `delete_deck` (per-row, no bulk UPDATE); `move_lot` uses it for both
+      the whole-row move and the split.
+- [ ] `bulk_update_collection` and the Collection page save loop: field edits
+      first, key changes last, with the dropped-id map.
+- [ ] `revert_moves`: subtract (copies and proportional price) for a merged
+      `"new"`; update the docstring.
 - [ ] Tests in `tests/test_collection_writes.py` and
       `tests/test_collection_moves.py` for the edge cases above. Update tests
       that expect two rows where there is now one (e.g. the
       `consolidate_lots` test with differing prices, and tests adding the same
       card twice to one place).
+- [ ] Run the writer tests against a schema that already has the unique
+      index, so merge-before-write is proven before Phase 2 ships it.
 - [ ] Full test suite passes. The app runs, and nothing on the existing DB
       changes yet, because existing duplicates are only merged when touched.
 
 ### Phase 2: Clean up existing rows and enforce the rule
 
-- [ ] Migration: snapshot, consolidate, create `idx_collection_place`.
+- [ ] The one-time merge: required snapshot, `consolidate_lots()` (run on
+      the real DB, and offered once on the Collection page). Then
+      `ensure_schema()` creates `idx_collection_place` in a `try`, skipping it
+      with a warning if duplicates remain.
 - [ ] `schema.sql`: the index, and a new comment on `collection` (one row per
       printing, finish and Location; source, date and paid are best-effort
       labels, kept from the oldest purchase on merge).
@@ -218,7 +319,13 @@ Writers that return a `collection_id` return the **surviving** id, so callers
 - [ ] Migration test on a fixture DB with duplicate groups, plus a run on a
       **copy** of `mtg_collection.db`, checking the numbers in **Edge cases**.
 - [ ] Test-fixture `INSERT`s that create duplicates now fail. Fix those
-      fixtures.
+      fixtures: `tests/test_pages_smoke.py` (the blank-row cases around lines
+      1679-1704 insert several rows for one card with no Location),
+      `tests/test_collection_moves.py` (adds the same card twice to Box) and
+      `tests/test_collection_writes.py` (the consolidate test). The old
+      `scripts/_test_*_offline.py` scripts also insert duplicates
+      (`_test_prompt_pass6_offline.py` adds two unlocated rows of one
+      printing). Fix them or retire them, whichever is still in use.
 
 ### Phase 3: Docs and wrap-up
 

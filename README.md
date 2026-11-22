@@ -1056,9 +1056,10 @@ python export_moxfield_collection.py -o collection.csv
 ```
 
 One row per printing + foil status you own — quantities and purchase
-prices are summed across any collection lots sharing that exact printing
-(separate lots exist elsewhere for price/date history, but Moxfield's
-own CSV format expects one row per printing/foil, not one row per lot).
+prices are summed across the collection rows sharing that exact printing
+(one row exists per printing, finish and Location, so a card kept in
+several places has several rows, but Moxfield's own CSV format expects
+one row per printing/foil).
 Untracked bulk lots (no counted quantity — e.g. a pile of unsorted
 basics) are excluded, same as everywhere else "tracked" totals are shown
 in this app. Column mapping: `count`/`tradelist count` (0 if that exact

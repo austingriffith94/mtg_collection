@@ -44,9 +44,13 @@ CREATE INDEX idx_cards_name ON cards(name);
 CREATE INDEX idx_cards_oracle ON cards(oracle_id);
 
 -- ------------------------------------------------------------
--- Physical collection. One row per acquisition lot (same
--- printing/finish bought at different times/prices stays separate
--- rows so price-paid history is preserved).
+-- Physical collection. One row per printing, finish and Location
+-- (docs/archive/LOT_CONSOLIDATION_PLAN.md): "my copies of this printing, in this
+-- finish, at this place", not one purchase. The writers in
+-- dashboard_lib/writes.py fold copies arriving at an occupied place into
+-- the row already there, and idx_collection_place below enforces it.
+-- date_acquired, source and price_paid are best-effort labels: on a merge
+-- the prices add and the oldest purchase's date and source are kept.
 -- ------------------------------------------------------------
 CREATE TABLE collection (
     collection_id     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,6 +66,11 @@ CREATE TABLE collection (
 );
 CREATE INDEX idx_collection_card ON collection(scryfall_id);
 CREATE INDEX idx_collection_location ON collection(location);
+-- One row per place. An expression index, so a blank and a NULL Location
+-- are the same place (plain NULLs are distinct in a unique index). Keep in
+-- step with queries.PLACE_INDEX_SQL, which adds it to older databases.
+CREATE UNIQUE INDEX idx_collection_place
+    ON collection(scryfall_id, foil, TRIM(COALESCE(location, '')));
 
 -- ------------------------------------------------------------
 -- Move log (EDIT_FLOW_PLAN.md Phase 6): one row per physical step a copy

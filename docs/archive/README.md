@@ -15,6 +15,7 @@ active work.
 | [TAG_SUGGESTIONS_PLAN.md](TAG_SUGGESTIONS_PLAN.md) | AI-proposed tags applied only by you: primary/secondary order, layer vocabularies, proposal engine and guard, review panel, board layers, two-pass vocabulary (Phases 0-7) | 2026-11-03 |
 | [GOLDFISH_PLAN.md](GOLDFISH_PLAN.md) | Goldfish page: play a deck's first turns alone by clicking, in a browser-only component; payload and mana parsing, zones/turns/mulligan/tap/undo, castable marks, search and scry, turn summary (Phases 0-4) | 2026-11-04 |
 | [BINDER_PLAN.md](BINDER_PLAN.md) | Binder: foil prices on cards, settings table, candidate rules, the Binder page, Home and Collection Editor nudges (Phases 0-4) | 2026-11-21 |
+| [LOT_CONSOLIDATION_PLAN.md](LOT_CONSOLIDATION_PLAN.md) | Lot consolidation: one collection row per printing, finish and Location, merge-before-write in every writer, one-time cleanup, unique index (Phases 0-3) | 2026-11-22 |
 
 Open items from the first two were moved to the backlog in
 `UI_ACTION_PLAN.md` rather than left here.

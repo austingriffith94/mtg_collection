@@ -82,8 +82,7 @@ def test_contention_basics_never_appear(conn, add_card):
 
 def test_contention_no_shortfall_when_owned_covers_demand(conn, add_card):
     sid = add_card("War Room")
-    for _ in range(4):
-        _lot(conn, sid, location="Box", quantity=1)
+    _lot(conn, sid, location="Box", quantity=4)   # one row per place
     deck_id = _deck(conn, "Only Deck")
     _mainboard(conn, deck_id, sid)
     rows = q.contention_table(conn)

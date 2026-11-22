@@ -5,11 +5,14 @@ module can be unit-tested directly against mtg_collection.db (or the
 offline _test_mtg_collection.db) without launching the dashboard.
 """
 import itertools
+import logging
 import os
 import sqlite3
 import pandas as pd
 
 from . import tag_vocab
+
+logger = logging.getLogger(__name__)
 
 # Shared column set for anything that joins in a `cards` row. Kept as one
 # constant so every card-bearing query (collection, deck_cards, shortlist)
@@ -410,6 +413,44 @@ def _existing_objects(conn, kind):
     }
 
 
+# One collection row per printing, finish and Location
+# (docs/archive/LOT_CONSOLIDATION_PLAN.md). An expression index, so a blank and a
+# NULL Location count as the same place (plain NULLs are distinct in a
+# unique index). The writers in writes.py merge before they write, so this
+# only ever fires on a write path that skipped them. schema.sql creates it
+# for a fresh database; ensure_place_index() adds it to an older one.
+PLACE_INDEX_SQL = """CREATE UNIQUE INDEX IF NOT EXISTS idx_collection_place
+    ON collection(scryfall_id, foil, TRIM(COALESCE(location, '')))"""
+
+
+def ensure_place_index(conn):
+    """Create idx_collection_place if it's missing. A database from before the
+    merge rule may still hold two rows at one place, and then the CREATE
+    fails: log a warning and carry on without the index (the app works, and
+    the Collection page offers writes.consolidate_lots(), which merges them
+    and calls this again). Returns True when the index exists afterwards."""
+    try:
+        conn.execute(PLACE_INDEX_SQL)
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        logger.warning("idx_collection_place not created: %d collection row(s) share a place "
+                       "with another; merge them on the Collection page (Tidy lots)",
+                       place_duplicate_count(conn))
+        return False
+
+
+def place_duplicate_count(conn):
+    """How many collection rows a merge would remove: rows beyond the first
+    at each printing, finish and Location (the idx_collection_place key)."""
+    return conn.execute(
+        """SELECT COUNT(*) - COUNT(DISTINCT scryfall_id || '|' || foil || '|'
+                                      || TRIM(COALESCE(location, '')))
+           FROM collection"""
+    ).fetchone()[0]
+
+
 def ensure_schema(conn):
     # New TABLES before new COLUMNS, because a column upgrade may target a
     # table that is itself an upgrade: deck_changes.dest_location (Phase 6)
@@ -438,6 +479,7 @@ def ensure_schema(conn):
             conn.execute(ddl)
             conn.commit()
 
+    ensure_place_index(conn)
     _normalize_retired_decks(conn)
 
 

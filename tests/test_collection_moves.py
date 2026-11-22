@@ -129,15 +129,16 @@ def test_removing_a_lot_that_isnt_there_logs_nothing(conn, world):
 def test_bulk_update_logs_each_change_and_passes_the_reason(conn, world):
     a = writes.add_collection_lot(conn, world["ring"], quantity=1, location="Box")
     b = writes.add_collection_lot(conn, world["signet"], quantity=1, location="Box")
-    c = writes.add_collection_lot(conn, world["signet"], quantity=1, location="Box")
+    c = writes.add_collection_lot(conn, world["signet"], quantity=1, foil=True, location="Box")
     del_before = len(_log(conn))
     writes.bulk_update_collection(
         conn, {a: {"location": "Gisa"}, b: {"_delete": True}, c: {"location": "Box"}},
         reason="reconcile",
     )
+    # Deletes go first, place changes last (docs/archive/LOT_CONSOLIDATION_PLAN.md).
     assert _log(conn)[del_before:] == [
-        ("Sol Ring", 1, "Box", "Gisa", "reconcile"),
         ("Arcane Signet", 1, "Box", None, "reconcile"),
+        ("Sol Ring", 1, "Box", "Gisa", "reconcile"),
     ]
 
 

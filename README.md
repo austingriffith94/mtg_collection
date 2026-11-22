@@ -54,9 +54,6 @@ mtg_dashboard/
 │   ├── deck_board.py                 # Moxfield-style Stacks view of a deck + its Shortlist (custom component; JS/CSS in components/)
 │   └── nav.py                        # page registry: sidebar sections, titles, URLs, Home link cards
 ├── tests/                             # pytest suite on an in-memory DB (python -m pytest tests) — see tests/README.md
-├── data/                              # written by Card Database -> "Export lists to CSV"
-│   ├── game_changers.csv             # your custom Game Changer categories
-│   └── mana_tags.csv                 # your optimized-mana categories
 ├── moxfield_exports/                  # created on first use — .txt files saved from the dashboard
 ├── static/                            # served by Streamlit at app/static/ — see static/README.md
 │   └── image_cache/                   # created on first use — one .jpg per printing (sync_images.py),
@@ -360,8 +357,7 @@ jump to the same deck's other views.
     no card data show without art; a *Scryfall says* column flags entries
     Scryfall no longer lists). Filter by ownership, category or "needs
     attention", delete stale names, add a name directly, fetch missing card
-    data, and **Export lists to CSV** for a plain-text copy of
-    them. The Mana Tags tab works the same way. Edit categories
+    data. The Mana Tags tab works the same way. Edit categories
     per card (picked from a master category dropdown you manage, same
     pattern as Themes), and see at a glance how many copies you own and
     how many of your decks currently run it.
@@ -540,11 +536,11 @@ and updates just these fields — Reserved List, Game Changer, Commander
 legality, and price — without touching anything else. Worth running
 occasionally as general upkeep.
 
-Your `game_changers.csv` (63 cards, categorized as Combo/Mana/Power/
-Stax-Unfun/Tutor/Value) loads into a separate `game_changer_tags` table,
-giving you the sub-category detail Scryfall's flat boolean doesn't
-provide. The two are cross-checked at the end of migration — anything
-where they disagree gets printed in the resolution report, e.g.:
+Your own list (categorized as Combo/Mana/Power/Stax-Unfun/Tutor/Value)
+lives in a separate `game_changer_tags` table, edited on the Card
+Database page, giving you the sub-category detail Scryfall's flat boolean
+doesn't provide. The Game Changers tab cross-checks the two — anything
+where they disagree is flagged, e.g.:
 
 - **In your list, Scryfall says no** — your list may be ahead of a recent
   Scryfall data update, or the card may have been reviewed off the list.
@@ -566,7 +562,7 @@ WHERE d.name = 'Vilis, Blood ATM';
 
 ## Optimized mana sources
 
-`mana_tags.csv` loads into a `mana_tags` table (Fast, Dual, Shockland,
+The `mana_tags` table holds (Fast, Dual, Shockland,
 Fetch, Ritual, Mana Doubler, Medallion, Moxen, etc.) — same static,
 name-keyed pattern as Game Changers, no Scryfall calls needed. As of
 Prompt Pass 12, it also has an in-dashboard editor — the Card Database
@@ -982,7 +978,7 @@ physically exist, they've just come out of a deck that no longer exists.
 ## Banlist / legality check
 
 `cards.commander_legal` is populated straight from Scryfall's legalities
-data during migration. Quick check for anything illegal in a deck:
+data when it's fetched. Quick check for anything illegal in a deck:
 
 ```sql
 SELECT d.name AS deck, c.name AS card

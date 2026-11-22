@@ -16,7 +16,7 @@ half-converted at a phase boundary. Go in order. Work happens on the
 
 Status key: `[ ]` not started · `[~]` in progress · `[x]` done
 
-- [ ] **Phase 0** — Branch and plan.
+- [x] **Phase 0** — Branch and plan.
 - [ ] **Phase 1** — Foil prices on `cards` (schema, Scryfall fetch, refresh).
 - [ ] **Phase 2** — Settings table and the candidate rules (`dashboard_lib/binder.py`, tested).
 - [ ] **Phase 3** — The Binder page: settings, fill gauge, candidate list, move to Binder.
@@ -53,9 +53,30 @@ Agreed 2026-11-21:
 - **Moving uses the normal lot writer.** "Move to Binder" calls
   `writes.move_lot`, so every move is in the move log and shows in Card
   Lookup's History, the same as a move made anywhere else.
-- **Settings are saved.** Minimum value, the two rule switches, the binder's
-  Location name and its capacity are stored in the database, so they stay put
-  between sessions.
+- **Settings are saved.** Minimum value, the two rule switches, which storage
+  Locations to scan, the binder's Location name and its capacity are stored in
+  the database, so they stay put between sessions.
+
+Agreed 2026-11-21, second pass:
+
+- **The Binder is just storage.** Deck building treats it like any other box:
+  Auto sourcing (`queries.free_lots`, biggest lot first) can take a Binder
+  copy, and the source picker offers the Binder as a storage Location. There's
+  no special ordering and no change to the allocator.
+- **Cards leaving a deck still go to Box (or Lands).** `default_dest_for` is
+  unchanged. A qualifying card that lands in Box gets flagged by the tool and
+  counted on Home, and you move it into the Binder yourself.
+- **Which storage Locations get scanned is a setting.** It's a checklist of
+  storage Locations with all of them ticked to start, so the Lands box can be
+  unticked if it's kept as a working box of lands. A Location added later
+  (a new box) is scanned unless you untick it. The setting stores the
+  unticked ones, not the ticked ones.
+- **Cards can be dismissed as "Not for binder".** It's by card (oracle_id, so
+  every printing), kept in its own small table, and hidden from the list and
+  the Home count. A "Show dismissed" toggle lists them with an Undo. A
+  dismissal never expires, even if the price rises a lot later. With no price
+  history there's nothing to compare against, so un-dismissing is a manual
+  check. This is a plain list you keep; nothing learns from it.
 
 ## Data findings behind the design
 
@@ -85,6 +106,27 @@ not basic lands and not in a deck. Prices are the non-foil prices stored today.
   `Lands`, so that box counts as storage too.
 - No `Binder` Location exists yet. It is added to `location_catalog` the first
   time the page runs.
+
+Second pass, same day:
+
+- **Prices are three weeks old.** Every `cards` row has
+  `price_updated_at = 2026-11-01`. Refresh is manual (Card Database → Card
+  Data, or `run.py`) and re-fetches all 2,038 printings one at a time. "Flag
+  cards that went up" only works as well as the last refresh, so the page
+  shows the price date.
+- **12 cards worth $2+ in storage are also on a deck list.** Two decks are
+  `brewing`, and a brewing deck can have promised itself a specific stored
+  copy (`queries.brewing_claims`). A pending shortlist row can also pin a
+  copy to a storage Location (`source='storage'`). Moving a pinned copy to
+  the Binder would leave the plan pointing at the wrong box. Auto rows don't
+  care, because Auto takes from any storage.
+- **Some candidates are split across lots or come in multiples.** Emergence
+  Zone and Thought Vessel each sit in two stored lots. Kediss (2 × $5.27) and
+  Rograkh (2 × $2.32) are 2-copy lots. Commander only needs one of each in a
+  deck, so the page needs a copies-to-move count per row.
+- Stored oddities the rules must cope with: one token and one card that isn't
+  Commander-legal. The value rule handles both, so neither needs a special
+  case.
 
 ## The design
 
@@ -123,6 +165,16 @@ not basic lands and not in a deck. Prices are the non-foil prices stored today.
   | `binder.min_value` | `2.00` |
   | `binder.rule_reserved` | `1` |
   | `binder.rule_game_changer` | `1` |
+  | `binder.skip_locations` | `[]` (JSON list of storage Locations *not* scanned) |
+
+- New table `binder_dismissed (oracle_id TEXT PRIMARY KEY, name TEXT,
+  dismissed_at DATE)` for "Not for binder". Like `app_settings`, it's created
+  through `_SCHEMA_TABLE_UPGRADES` and added to `schema.sql`. `name` is only
+  there so the Show-dismissed list can be read without a join.
+- Settings validation (on the page, before `set_setting`): the binder Location
+  can't be a deck name, and it's compared with `queries.same_location`
+  (ignoring case and spaces), so `binder` and `Binder` are the same place. The
+  minimum value is 0 or more. The capacity is 1 or more.
 
 ### Candidate rules (`dashboard_lib/binder.py`, Phase 2)
 
@@ -137,11 +189,27 @@ not basic lands and not in a deck. Prices are the non-foil prices stored today.
 - The rules are plain Python over one SQL pull (stored, non-basic,
   non-deck, non-Binder lots joined to `cards`). They are written so a new rule
   is one function plus one settings key.
-- **Planned deck adds.** A stored lot can be claimed by a pending deck change
-  (`deck_changes` with `source='storage'` and a `source_location`). Moving it
-  to the Binder would leave that plan pointing at the wrong box. Such lots
-  still appear, but with `planned_for = <deck>` filled in, so the page can
-  warn about them and leave them unticked.
+- **Planned deck adds.** A stored copy can be promised to a deck in two ways:
+  a brewing deck's saved storage choice (`queries.brewing_claims`), or a
+  pending shortlist row pinned to a storage Location (`source='storage'`).
+  Moving that copy to the Binder would leave the plan pointing at the wrong
+  box. `planned_for` reads both of these, using the existing functions rather
+  than a new query, so it can't drift from what the Workbench shows. Matching
+  is by card and Location. Such lots still appear, but with
+  `planned_for = <deck>`, so the page can warn and leave them unticked. Auto
+  rows (no source chosen) are not a claim, because Auto takes from any storage
+  and is fine with the Binder.
+- **Scope filters:** Locations in `binder.skip_locations` are left out, and so
+  are cards in `binder_dismissed`, matched by oracle_id. Locations are compared
+  with `queries.same_location`. Lots with no Location are always scanned.
+- **A cheap count for Home.** `binder_candidate_count(conn)` runs the rules
+  without the `planned_for` work, which pulls in the allocator's reads and is
+  too heavy to run on every Home load.
+- **Refresh summary.** `refresh.refresh_all_cards` counts candidates before
+  and after its UPDATE pass and adds `binder_new` (names that now qualify) to
+  its summary, so the Card Data tab can say "3 stored cards now qualify for
+  the Binder". Both counts are taken in the same run and nothing is stored, so
+  this isn't price history.
 - **Copies of a card already in the Binder still appear**, with the
   `already_in_binder` count shown, so a second Dystopia is a choice you make
   rather than one made silently for you.
@@ -152,19 +220,31 @@ not basic lands and not in a deck. Prices are the non-foil prices stored today.
 Title `BINDER`, icon 📒, `url_path="Binder"`.
 
 - **Settings expander:** minimum value (number input), the Reserved List and
-  Game changer switches, the binder Location name and capacity. Changes are
+  Game changer switches, a checklist of storage Locations to scan, and the
+  binder Location name and capacity. Changes are validated (see Settings) and
   saved through `set_setting`.
+- **Price date:** "Prices as of 2026-11-01", from the oldest
+  `price_updated_at` among the stored lots, with a link to Card Database's
+  Card Data tab. It is shown as a warning when the date is more than 14 days
+  old. Nothing refreshes automatically.
 - **Fill gauge:** `N / 720 copies in Binder`, plus how full it would be after
   moving the selected rows.
 - **Candidate table:** a data editor with a tick column, thumbnail, name,
-  set, foil, quantity, Location, value, reasons, and the already-in-binder and
+  set, foil, quantity, **copies to move** (it starts at the lot's quantity and
+  can be lowered), Location, value, reasons, and the already-in-binder and
   planned-for notes. Rows with `planned_for` start unticked and show a ⚠ note.
   A filter lets you narrow by current Location (e.g. only `Box`).
-- **Move selected to Binder:** calls `writes.move_lot(conn, id, location)`
-  for each ticked lot, then reruns. The whole lot moves; to move part of a
-  lot, use the Collection page as usual. The binder Location is added to
+- **Move selected to Binder:** calls
+  `writes.move_lot(conn, id, location, quantity=copies, reason="binder")` for
+  each ticked lot, then reruns. A partial move leaves the rest behind as its
+  own lot, and a move into the Binder merges with a matching lot already there
+  (both are existing `move_lot` behaviour). The binder Location is added to
   `location_catalog` if it's missing. A warning appears, without blocking the
-  move, if the move would go over capacity.
+  move, if the move would go over capacity. Check that `reason="binder"` reads
+  well in Card Lookup's History (`card_view.move_label`); if it doesn't, use
+  the existing `collection_edit` reason.
+- **Not for binder:** a button that dismisses the ticked rows' cards. A "Show
+  dismissed" toggle lists them, each with an Undo.
 - **Empty state:** "Nothing in storage passes the binder rules", with the
   current minimum value shown so it's clear why.
 
@@ -197,6 +277,19 @@ Title `BINDER`, icon 📒, `url_path="Binder"`.
 - A NULL-quantity lot counts as one copy (the collection's existing rule).
 - Turning off both switches with a very high minimum gives an empty list and
   no errors.
+- A Location in `skip_locations` is left out, matched without regard to case
+  or spaces. A newly added storage Location is scanned by default. Lots with
+  no Location are always scanned.
+- A dismissed card is hidden in every printing. Undo brings it back.
+- A copy claimed by a brewing deck's saved choice, or by a pinned
+  `source='storage'` shortlist row, shows `planned_for`. A copy only an Auto
+  row wants does not.
+- Moving 1 of a 2-copy lot leaves a 1-copy lot behind at the old Location,
+  and both moves are logged.
+- A binder Location that matches a deck name is refused. Changing the case
+  (`binder`) is treated as the same place.
+- The refresh summary's `binder_new` lists only cards that didn't qualify
+  before the run, and is empty on a second run straight after.
 
 ## Phases
 
@@ -217,9 +310,11 @@ Create the `binder` branch and commit this file.
 
 ### Phase 2 — Settings and rules
 
-- Add the `app_settings` table and the get/set helpers.
-- Write `dashboard_lib/binder.py` (settings dataclass, candidates, fill), with
-  a header comment explaining the rules.
+- Add the `app_settings` and `binder_dismissed` tables and the get/set and
+  dismiss/undo helpers.
+- Write `dashboard_lib/binder.py` (settings dataclass, candidates, the cheap
+  count, fill), with a header comment explaining the rules.
+- Add `binder_new` to the refresh summary and show it in the Card Data tab.
 - Tests (`tests/test_binder.py`): every edge case above, on a small fixture
   database.
 
@@ -244,6 +339,12 @@ Create the `binder` branch and commit this file.
 - A **"could come out"** list: Binder cards that no longer pass any rule, e.g.
   after a price drop. Left out for now to keep the tool simple. It is the same
   rules run on the Binder's own lots.
+- A "Binder candidates only" filter on the Collection page, and a "Binder
+  candidate: reasons" badge in Card Lookup.
+- Sending a qualifying card straight to the Binder when it leaves a deck, by
+  changing `default_dest_for`. Turned down on 2026-11-21 in favour of flagging.
+- Making Auto sourcing take Binder copies last. Turned down on 2026-11-21: the
+  Binder is just storage.
 - Use the finish-aware copy value in deck value and collection totals.
 - A rule for cards tagged by hand ("always binder"), if that's ever needed.
 - Page/slot numbers inside the binder (for physical order). Not tracked; the

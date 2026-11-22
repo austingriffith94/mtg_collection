@@ -23,7 +23,8 @@ import streamlit as st
 
 from dashboard_lib import db, nav
 
-pg = st.navigation(nav.build_navigation())
+# expanded=True lists every page; the default folds the list behind "View more".
+pg = st.navigation(nav.build_navigation(), expanded=True)
 pg.run()
 
 # Sidebar footer. Drawn after pg.run() so it sits below the page's own

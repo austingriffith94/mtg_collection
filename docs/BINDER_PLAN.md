@@ -232,7 +232,9 @@ Title `BINDER`, icon 📒, `url_path="Binder"`.
 - **Candidate table:** a data editor with a tick column, thumbnail, name,
   set, foil, quantity, **copies to move** (it starts at the lot's quantity and
   can be lowered), Location, value, reasons, and the already-in-binder and
-  planned-for notes. Rows with `planned_for` start unticked and show a ⚠ note.
+  planned-for notes. Every row starts unticked. Select all / Clear buttons
+  tick or untick every row shown, and Select all skips rows with
+  `planned_for`, which show a ⚠ note.
   A filter lets you narrow by current Location (e.g. only `Box`).
 - **Move selected to Binder:** calls
   `writes.move_lot(conn, id, location, quantity=copies, reason="binder")` for
@@ -344,8 +346,10 @@ page writes nothing. Two read helpers were added to `binder.py`:
 `prices_as_of()` and `scan_location_options()`, which is the scan checklist
 (the catalog plus any non-deck Location a lot sits at, minus the binder).
 Saving the settings keeps unticked Locations that aren't offered right now.
-Rows start ticked unless a deck has planned them, so "Not for binder" acts on
-every ticked row. Its label gives the card count. Browser check on a copy of
+Every row starts **unticked**, because you decide (changed at the user's
+request). **Select all** ticks every row shown except rows a deck has planned,
+and **Clear** unticks them all. Moving or dismissing resets the table to
+unticked. Browser check on a copy of
 the live DB: 78 lots / 80 copies / 76 cards listed. Move all gave 80 copies
 in 77 Binder lots (the split cards merged) and 78 `binder` move rows.
 

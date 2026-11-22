@@ -16,9 +16,10 @@ this page only shows them and acts on the ticked rows.
 - Fill gauge: copies at the binder Location against its capacity, and what
   it would be after moving the ticked rows. Going over warns, never blocks.
 - Candidate table: tick, art, card, copies to move (starts at the lot's
-  quantity) and why it qualifies. Rows a deck has promised itself
-  (planned_for) start unticked with a ⚠ note: moving them would leave that
-  deck's plan pointing at the wrong box.
+  quantity) and why it qualifies. Every row starts unticked: you decide.
+  Select all ticks every row shown except ones a deck has promised itself
+  (planned_for, a ⚠ note: moving them would leave that deck's plan pointing
+  at the wrong box); Clear unticks everything.
 - Move: writes.move_lot(..., reason="binder") per ticked row, so every move
   is in the move log and Card Lookup's History. A partial move leaves the
   rest behind as its own lot; a move merges into a matching Binder lot.
@@ -40,6 +41,8 @@ from dashboard_lib import card_view as cv
 
 # A price date older than this is shown as a warning, not a caption.
 STALE_PRICE_DAYS = 14
+# Session flag: True after Select all, False after Clear / a move / a dismiss.
+SELECT_ALL_KEY = "binder_select_all_on"
 
 cv.setup_page("Binder · MTG Dashboard", "📒")
 
@@ -157,13 +160,29 @@ else:
         format_func=labels.get)
     view = candidates[candidates["location"].fillna("").str.strip().isin(shown_locs)]
 
+    # Select all / Clear rebuild the editor (the flag is part of its key)
+    # with every row ticked or none. Set in on_click so it's in place before
+    # the table is drawn on the rerun.
+    def _set_select_all(value):
+        st.session_state[SELECT_ALL_KEY] = value
+
+    select_all = st.session_state.get(SELECT_ALL_KEY, False)
+    sel_col, clear_col, _ = st.columns([1, 1, 4])
+    sel_col.button("☑️ Select all", key="binder_select_all", width="stretch",
+                   on_click=_set_select_all, args=(True,),
+                   help="Tick every row shown. ⚠ rows (planned for a deck) stay unticked.")
+    clear_col.button("⬜ Clear", key="binder_select_none", width="stretch",
+                     on_click=_set_select_all, args=(False,), help="Untick every row.")
+
     art = {r[0]: r[1] for r in conn.execute(
         "SELECT scryfall_id, image_uri FROM cards WHERE scryfall_id IN (%s)"
         % ",".join("?" * len(view)), tuple(view["scryfall_id"])).fetchall()} if len(view) else {}
     rows = [{
         "collection_id": int(r["collection_id"]),
         "card_key": r["card_key"],
-        "Move": not r["planned_for"],
+        # Nothing is ticked until you choose; Select all ticks every row
+        # shown except ones a deck has planned (those stay a choice per row).
+        "Move": select_all and not r["planned_for"],
         "Art": art.get(r["scryfall_id"]),
         "Card": r["name"],
         "Set": f"{(r['set_code'] or '').upper()} #{r['collector_number'] or ''}".strip(),
@@ -178,11 +197,12 @@ else:
     } for _, r in view.iterrows()]
 
     st.caption(f"{len(view)} lot(s), {int(view['quantity'].sum()) if len(view) else 0} copies, "
-               f"{view['card_key'].nunique()} card(s). Lower **To move** to leave copies behind; "
-               "⚠ rows are promised to a deck and start unticked.")
+               f"{view['card_key'].nunique()} card(s). Tick the rows to act on; lower **To move** "
+               "to leave copies behind. ⚠ rows are promised to a deck.")
     # Keyed by the visible lot ids so a new filter or a finished move gives
-    # a fresh editor instead of replaying old ticks onto different rows.
-    editor_key = f"binder_table_{hash(tuple(r['collection_id'] for r in rows))}"
+    # a fresh editor instead of replaying old ticks onto different rows,
+    # and by the Select all flag so those buttons reset every tick.
+    editor_key = f"binder_table_{select_all}_{hash(tuple(r['collection_id'] for r in rows))}"
     edited = st.data_editor(
         pd.DataFrame(rows, columns=["collection_id", "card_key", "Move", "Art", "Card", "Set", "Foil",
                                     "Qty", "To move", "Location", "Value", "Why", "In binder",
@@ -226,13 +246,20 @@ else:
                    f"({after - capacity} over). The move still goes ahead if you want it.")
 
     move_col, dismiss_col = st.columns(2)
-    do_move = move_col.button(f"📒 Move {moving} copies to {settings.location}", type="primary",
-                              disabled=not moving, key="binder_move", width="stretch")
+    do_move = move_col.button(
+        f"📒 Move {moving} cop{'y' if moving == 1 else 'ies'} to {settings.location}" if moving
+        else f"📒 Move to {settings.location} (tick rows first)",
+        type="primary", disabled=not moving, key="binder_move", width="stretch")
     n_cards = picked["card_key"].nunique()
     do_dismiss = dismiss_col.button(
-        f"🚫 Not for binder ({n_cards} card{'' if n_cards == 1 else 's'})", disabled=not n_cards,
+        f"🚫 Not for binder ({n_cards} card{'' if n_cards == 1 else 's'})" if n_cards
+        else "🚫 Not for binder", disabled=not n_cards,
         key="binder_dismiss", width="stretch",
         help="Hide these cards (every printing) from the list for good. Undo under Show dismissed.")
+
+    if do_move or do_dismiss:
+        # The next list starts unticked again, whatever was selected.
+        st.session_state[SELECT_ALL_KEY] = False
 
     if do_move:
         moves, errors = [], []

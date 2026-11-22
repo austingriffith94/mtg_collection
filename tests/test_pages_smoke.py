@@ -1744,7 +1744,7 @@ def test_add_form_refuses_a_lot_with_neither_field(smoke_db_path, tmp_path, monk
 # ---------------------------------------------------------------- Binder page
 def _binder_db(smoke_db_path, tmp_path, monkeypatch):
     """A copy of the smoke DB with one candidate: a 2-copy Reserved List
-    lot in Box worth $44.88. Rows start ticked (no deck has planned it)."""
+    lot in Box worth $44.88. Rows start unticked; Select all ticks it."""
     from dashboard_lib import db
 
     path = str(tmp_path / "mtg_collection.db")
@@ -1775,7 +1775,14 @@ def test_binder_page_moves_a_ticked_row(smoke_db_path, tmp_path, monkeypatch):
         # Viewing the page writes nothing; the first move adds the Location.
         catalog_sql = "SELECT 1 FROM location_catalog WHERE location='Binder'"
         assert sqlite3.connect(path).execute(catalog_sql).fetchone() is None
+        # Nothing is ticked until you choose.
+        assert at.button(key="binder_move").disabled
+        assert at.button(key="binder_dismiss").disabled
+        at.button(key="binder_select_all").click().run()
         assert at.button(key="binder_move").label.startswith("📒 Move 2 copies")
+        at.button(key="binder_select_none").click().run()
+        assert at.button(key="binder_move").disabled
+        at.button(key="binder_select_all").click().run()
         at.button(key="binder_move").click().run()
         assert not at.exception
         check = sqlite3.connect(path)
@@ -1794,6 +1801,7 @@ def test_binder_page_moves_a_ticked_row(smoke_db_path, tmp_path, monkeypatch):
 def test_binder_page_dismiss_and_undo(smoke_db_path, tmp_path, monkeypatch):
     try:
         at, path, _ = _binder_db(smoke_db_path, tmp_path, monkeypatch)
+        at.button(key="binder_select_all").click().run()
         at.button(key="binder_dismiss").click().run()
         assert not at.exception
         assert sqlite3.connect(path).execute(
@@ -1803,7 +1811,9 @@ def test_binder_page_dismiss_and_undo(smoke_db_path, tmp_path, monkeypatch):
         at.button(key="binder_undo_oracle-dystopia").click().run()
         assert not at.exception
         assert sqlite3.connect(path).execute("SELECT COUNT(*) FROM binder_dismissed").fetchone() == (0,)
-        assert at.button(key="binder_move").label.startswith("📒 Move 2 copies")
+        # Back on the list, and unticked again after the dismiss.
+        assert at.button(key="binder_move").disabled
+        assert any(b.label == "☑️ Select all" for b in at.button)
     finally:
         st.cache_resource.clear()
         st.cache_data.clear()

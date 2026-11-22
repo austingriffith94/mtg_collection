@@ -36,6 +36,7 @@ how many cards and features it names, so a row count alone can't bound it.
 Measured across this collection the panel costs 0.36-1.02in and no deck
 clips a single card line.
 """
+import re
 import html
 from datetime import date
 
@@ -176,6 +177,19 @@ def _curve_svg(nonland_df):
     return "".join(parts), legend
 
 
+def _hard_stop_gradient(gradient):
+    """Turn a smooth "linear-gradient(90deg, A, B, ...)" into equal-width
+    solid bands, so each identity color reads as its own block (like the
+    mana-curve segments) instead of blending. Non-matching input is returned
+    unchanged."""
+    colors = re.findall(r"#[0-9A-Fa-f]{3,8}", gradient or "")
+    if len(colors) < 2:
+        return gradient
+    n = len(colors)
+    stops = ", ".join(f"{c} {100 * i / n:.2f}% {100 * (i + 1) / n:.2f}%" for i, c in enumerate(colors))
+    return f"linear-gradient(90deg, {stops})"
+
+
 def _type_bars(main_df):
     """Horizontal bar per card type (non-empty types only), pure CSS."""
     counts = main_df.groupby("card_type")["quantity"].sum()
@@ -271,7 +285,7 @@ def _combo_panel(combos):
     runs long enough (148 rows on one deck in this collection) that even a
     count would be noise here; the Decks page is where that bucket lives.
 
-    Each row is "A + B + C", the Spellbook bracket tag as a chip, and what
+    Each row is "A + B + C" and what
     it produces in gray underneath — the three things a turn 0 rundown
     actually needs. Combos hinging on a template ("Creature with Persist
     or Undying") get that spelled out, because the combo is only live if
@@ -297,13 +311,11 @@ def _combo_panel(combos):
             produced = ", ".join(produces)
             if len(c.get("produces") or []) > COMBO_PRODUCES_CAP:
                 produced += " …"
-            tag = c.get("bracket_tag")
             mana = c.get("mana_needed")
             # Template slots are a caveat, not a card, so they read as
             # "also needs" rather than joining the card list above.
             requires = "; ".join(c.get("requires") or [])
             bits = "".join([
-                f'<span class="combo-tag">{_esc(tag)}</span>' if tag else "",
                 f'<span class="combo-mana">{_esc(mana)}</span>' if mana else "",
             ])
             sub = _esc(produced)
@@ -405,7 +417,7 @@ body { background: #d9d9d9; font-family: "Segoe UI", Helvetica, Arial, sans-seri
 .bar-row { display: flex; align-items: center; gap: 5px; font-size: 7.5pt; margin-bottom: 3px; }
 .bar-name { width: 0.8in; flex: none; }
 .bar-track { flex: 1; height: 8px; background: #eee; border-radius: 4px; overflow: hidden; }
-.bar-fill { display: block; height: 100%; background: var(--gradient); }
+.bar-fill { display: block; height: 100%; background: var(--bars, var(--gradient)); }
 .bar-num { width: 18px; text-align: right; font-weight: 700; }
 .share-bar { display: flex; height: 9px; margin-top: 4px; border: 1px solid #888; border-radius: 3px; overflow: hidden; }
 .share-bar span { display: block; height: 100%; }
@@ -424,18 +436,15 @@ li { margin-bottom: 2px; }
 /* Hard height bound, not just a row cap: a row's height varies with how
    many cards and features it names, so COMBO_ROW_CAP alone can't promise a
    ceiling. Measured worst case across this collection is 1.02in (5 combos,
-   3 cards each); 1.12in clears that with room to spare and clips anything
+   3 cards each); 1.3in clears that with room to spare (names wrap in a half-width column) and clips anything
    pathological rather than letting it eat the decklist — the same
    clip-don't-spill contract .page and .decklist already use. */
-.combo-panel { flex: none; max-height: 1.12in; overflow: hidden; }
+.combo-panel { flex: none; max-height: 1.3in; overflow: hidden; }
 .combo-panel > .muted { margin-left: 0; }
 .combo-cols { column-count: 2; column-gap: 0.18in; column-rule: 1px solid #e4e4e4; }
 .combo { break-inside: avoid; margin-bottom: 3px; }
 .combo-head { font-size: 7.2pt; line-height: 1.3; }
 .combo-uses { font-weight: 700; }
-.combo-tag { font-size: 6pt; text-transform: uppercase; letter-spacing: .5px; color: #fff;
-  background: var(--accent-dark); border-radius: 6px; padding: 0 4px; margin-left: 4px;
-  vertical-align: 1px; white-space: nowrap; }
 .combo-mana { font-size: 6.4pt; color: #666; margin-left: 4px; white-space: nowrap; }
 .combo-prod { font-size: 6.4pt; color: #666; line-height: 1.25; }
 .combo-req { color: #999; font-style: italic; }
@@ -562,7 +571,7 @@ def build_deck_printout_html(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{_esc(meta.get('name') or 'Deck')} — deck sheet</title>
 <style>{_CSS}
-:root {{ --gradient: {accent_gradient}; --accent: {accent_hex}; --accent-dark: #2a2a35; }}
+:root {{ --gradient: {accent_gradient}; --bars: {_hard_stop_gradient(accent_gradient)}; --accent: {accent_hex}; --accent-dark: #2a2a35; }}
 </style></head><body>
 <div class="toolbar"><button onclick="window.print()">Print / Save as PDF</button>
 <div style="font:12px sans-serif;color:#555;margin-top:4px">Tip: set paper to Letter, margins to None, and tick "Background graphics".</div></div>

@@ -149,12 +149,15 @@ def main():
     # ------------------------------------------------------------------
     # 3. Moxfield Collection CSV exporter
     # ------------------------------------------------------------------
-    # 3a. Header compliance against the real Moxfield sample export.
-    sample_path = os.path.join(PROJECT_ROOT, "moxfield_samples", "moxfield_collection.csv")
-    with open(sample_path, newline="") as f:
-        sample_header = next(csv.reader(f))
+    # 3a. Header compliance against Moxfield's real sample export (the file
+    # itself was deleted; its header row is inlined here).
+    sample_header = [
+        "Count", "Tradelist Count", "Name", "Edition", "Condition", "Language",
+        "Foil", "Tags", "Last Modified", "Collector Number", "Alter", "Proxy",
+        "Purchase Price",
+    ]
     check(
-        "COLLECTION_CSV_HEADERS matches moxfield_samples/moxfield_collection.csv exactly",
+        "COLLECTION_CSV_HEADERS matches Moxfield's sample export header exactly",
         mox.COLLECTION_CSV_HEADERS == sample_header,
     )
 

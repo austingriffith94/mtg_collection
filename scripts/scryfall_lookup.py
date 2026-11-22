@@ -6,9 +6,9 @@ or maybeboards (never bulk-downloads the full Scryfall catalog).
 
 Two lookup paths:
   - get_by_set_number(set_code, collector_number): exact printing lookup,
-    used for collection.csv rows where you already know the printing.
-  - get_by_name(name): used for decks.csv / maybeboard.csv rows that
-    don't have a pinned printing. Falls back exact -> fuzzy, and handles
+    used when you already know the printing.
+  - get_by_name(name): used for cards that don't have a pinned
+    printing. Falls back exact -> fuzzy, and handles
     MDFC names ("A // B") by trying the front face if the full name misses.
 
 Respects Scryfall's rate-limit guidance (~50-100ms between requests).

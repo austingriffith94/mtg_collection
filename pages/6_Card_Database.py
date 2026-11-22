@@ -6,8 +6,8 @@ tags, and a Scryfall data refresh across every card already tracked.
 The Game Changers and Mana Tags tabs show the WHOLE hand-maintained list
 (the tag tables), not just names that happen to have a `cards` row. Each
 has ownership / tag / "needs attention" filters, a Delete column, an "add by
-name" form, a "fetch card data" button for names with no card row, and an
-"Export lists to CSV" backup. The Card Data tab also has a "Clean up" panel
+name" form, and a "fetch card data" button for names with no card row.
+The Card Data tab also has a "Clean up" panel
 listing stale rows (unreferenced cards, tags for cards no longer in a deck,
 orphaned image files) with a confirm step before anything is deleted.
 
@@ -40,7 +40,7 @@ conn = db.get_connection()
 
 st.title("🗄️ Card Database")
 cv.how_it_works(
-    "Everything here writes straight to the database — no CSV editing or re-migration needed.",
+    "Everything here writes straight to the database.",
     "**Game Changers** lists every name on your custom list plus every card Scryfall flags as a "
     "Game Changer — whether or not it's in your collection. *Scryfall says* flags entries that "
     "Scryfall no longer lists. *Owned* sums collection quantity across all printings; *In decks* "
@@ -59,7 +59,6 @@ ORPHAN_LABELS = {
     "missing_image_files": "missing image file(s)",
 }
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 OWNERSHIP_FILTERS = ["All", "Owned", "In a deck", "Not owned"]
 
 
@@ -193,13 +192,6 @@ def _render_reference_list(cfg):
                 "message": f"Updated {changed} card(s)" + (f", removed {removed} from the list." if removed else "."),
                 "reference": True,
             })
-
-    st.divider()
-    if st.button("💾 Export lists to CSV", key=f"{pre}_export",
-                 help="Writes data/game_changers.csv and data/mana_tags.csv from the database, "
-                      "as a plain-text copy of these lists."):
-        counts = writes.export_reference_lists(conn, DATA_DIR)
-        st.toast("Wrote " + ", ".join(f"data/{f} ({n} rows)" for f, n in counts.items()), icon="✅")
 
 
 GC_CFG = {

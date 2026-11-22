@@ -35,8 +35,6 @@ person is meant to read meaning into; entries are always ordered by date
 (then game_id as a same-day tiebreaker) instead, so out-of-order data
 entry never produces a misleading "Game #".
 
-No CSV editing or re-migration required for any of this — same as the
-rest of the dashboard since Prompt Pass 1.
 """
 import sys
 import os

@@ -1,7 +1,7 @@
 """
 Refreshes Scryfall-derived fields for every card already in your
 database — Reserved List flag, Game Changer flag, Commander legality,
-and current price — WITHOUT the full wipe-and-rebuild migrate.py does.
+and current price — WITHOUT rebuilding anything else.
 
 Fetches each card directly by its permanent scryfall_id (Scryfall's
 fastest, most precise lookup — no re-resolving by name or set+number
@@ -16,7 +16,7 @@ collection rather than just `cards` — everything else (decklists, tags)
 is untouched.
 
 Needs `requests` + network access (reuses scripts/scryfall_lookup.py, the
-same client migrate.py and card_resolver.py use). Shared by
+same client card_resolver.py uses). Shared by
 scripts/refresh_card_data.py (CLI) and the Editor page's "Card Data" tab.
 """
 import datetime

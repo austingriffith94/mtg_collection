@@ -1,7 +1,7 @@
 """
 Refresh Scryfall-derived fields (Reserved List, Game Changer, Commander
 legality, price) for every card already in your database — WITHOUT
-wiping or rebuilding anything else, unlike migrate.py. Updates
+wiping or rebuilding anything else. Updates
 cards.is_reserved / is_game_changer / commander_legal / current_price_usd
 / price_updated_at / last_fetched_at, matched by each card's permanent
 scryfall_id. Doesn't touch your decklists or tags.
@@ -11,8 +11,7 @@ assigned location, a quantity of 0/none, and not present in any deck's
 mainboard or maybeboard is deleted (see dashboard_lib.writes.prune_collection).
 
 Safe to run anytime, as often as you like — this is a normal maintenance
-task, unlike migrate.py, which is one-way and meant for your initial CSV
-import only (see migrate.py's module docstring).
+task.
 
 This is also available directly in the dashboard (Editor page → "Card
 Data" tab), sharing this exact logic via dashboard_lib/refresh.py so the

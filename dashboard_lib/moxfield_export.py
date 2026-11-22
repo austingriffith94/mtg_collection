@@ -8,8 +8,8 @@ Shared by scripts/export_moxfield.py (CLI) and the Decks
 page's in-dashboard export section, so both always produce identical
 output. No Streamlit dependency — plain sqlite3, unit-testable directly.
 
-Uses the exact printing stored in deck_cards/deck_changes, which migrate.py
-(and the Editor page's card_resolver) prefer your OWNED collection
+Uses the exact printing stored in deck_cards/deck_changes, which the card
+resolver (card_resolver) prefers to pick from your OWNED collection
 printing for wherever you have a copy — that's what makes the pasted-in
 art match what you actually have.
 

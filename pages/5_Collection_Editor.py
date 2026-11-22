@@ -2,7 +2,7 @@
 Collection Editor page — manage the physical collection directly in the
 database: import a marketplace purchase-order CSV and add a single card lot
 by hand (with Scryfall lookup for brand-new printings). Editing/removing
-existing lots lives on the Collection page, alongside its filters. No CSV editing or re-migration required.
+existing lots lives on the Collection page, alongside its filters.
 
 Not deck-scoped — unlike Deck Editor, there's no "choose a deck" sidebar
 here, since every action on this page operates on the collection as a
@@ -47,7 +47,7 @@ conn = db.get_connection()
 
 st.title("📥 Collection Editor")
 cv.how_it_works(
-    "Everything here writes straight to the database — no CSV editing or re-migration needed.",
+    "Everything here writes straight to the database.",
     "**Import a purchase order** adds every line item of a marketplace export (e.g. Mana Pool's "
     "`order_<id>_<date>.csv`) at once. Each row's Set Code + Collector # is looked up against your "
     "database, falling back to a live Scryfall lookup, to resolve the exact printing and its real "

@@ -4,8 +4,8 @@ Export a deck to Moxfield's plain-text import format:
     1 Combustible Gearhulk (C21) 163
     1 Birgi, God of Storytelling // Harnfel, Horn of Bounty (KHM) 129
 
-Uses the exact printing stored in deck_cards (which, per migrate.py,
-prefers your OWNED collection printing wherever you have a copy —
+Uses the exact printing stored in deck_cards (which the card resolver
+prefers to pick from your OWNED collection printing wherever you have a copy —
 falling back to a default Scryfall printing only for cards you don't
 own yet). That's what makes the pasted-in art match what you actually
 have.

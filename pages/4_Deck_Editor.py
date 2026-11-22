@@ -3,8 +3,7 @@ Deck Editor page — add, rename, and remove deck-level things directly in
 the database: deck names/metadata, whole new decks, themes, card tags,
 mainboard cards (including brand-new cards, via a live Scryfall lookup
 when needed), and the Shortlist — ideas for the deck, the swaps staged from
-them, and the history of what was applied. No CSV editing or re-migration
-required for any of this.
+them, and the history of what was applied.
 
 The Board tab (docs/archive/VISUAL_DECK_PLAN.md Phases B-C) is the visual way to edit the
 mainboard: the Stacks view with a card menu (+1 / −1 / Remove / Move to
@@ -103,7 +102,7 @@ conn = db.get_connection()
 
 st.title("✏️ Deck Editor")
 cv.how_it_works(
-    "Everything here writes straight to the database — no CSV editing or re-migration needed.",
+    "Everything here writes straight to the database.",
     "**Deck Info** edits the deck's metadata, **Themes** and **Card Tags** label it, "
     "**Board** edits the card list visually, **Mainboard** edits it as a table, "
     "and **Shortlist** holds ideas you're weighing.",

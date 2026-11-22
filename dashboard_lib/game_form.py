@@ -83,8 +83,8 @@ def validate_and_build_participants(seat_raw_widgets, label_to_id):
       3. Exactly one seat must be marked the winner — no more, no
          fewer (a 0-winner "draw" is no longer accepted from this
          form; see writes._validate_game_participants()'s docstring
-         for how this interacts with older, migrate.py-imported draws,
-         which bypass this validation entirely and are unaffected).
+         for how this interacts with older imported draws, which bypass
+         this validation entirely and are unaffected).
 
     seat_raw_widgets: list of (deck_pick, opp_pick, opp_free,
     player_pick, player_free, is_winner) tuples, one per seat, in seat

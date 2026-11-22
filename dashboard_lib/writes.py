@@ -258,7 +258,7 @@ def bulk_set_mana_tags(conn, edits):
 
 # ------------------------------------------------------------------
 # Reference-list maintenance (UI plan Phase 8) — remove names from a tag
-# list outright, and back the lists up as the CSVs migrate.py reads.
+# list outright.
 # ------------------------------------------------------------------
 def delete_game_changer_names(conn, names):
     """Remove every game_changer_tags row for each name (a stale list entry
@@ -278,32 +278,6 @@ def _delete_tag_list_names(conn, table, names):
         removed += 1 if cur.rowcount else 0
     conn.commit()
     return removed
-
-
-# Column headers match what migrate.py's load_static_reference_lists reads.
-# utf-8-sig + CRLF mirrors the hand-made files already in data/.
-REFERENCE_LIST_EXPORTS = [
-    ("game_changers.csv", "game_changer_tags", "Game Changers"),
-    ("mana_tags.csv", "mana_tags", "Optimized Mana"),
-]
-
-
-def export_reference_lists(conn, data_dir):
-    """Write game_changers.csv / mana_tags.csv into `data_dir` from the
-    live tag tables, so a migrate.py rebuild can't discard hand-curated
-    work. Returns {filename: row_count}."""
-    import csv
-    counts = {}
-    for filename, table, header in REFERENCE_LIST_EXPORTS:
-        rows = conn.execute(
-            f"SELECT card_name, tag FROM {table} ORDER BY card_name COLLATE NOCASE, tag COLLATE NOCASE"
-        ).fetchall()
-        with open(os.path.join(data_dir, filename), "w", encoding="utf-8-sig", newline="") as f:
-            out = csv.writer(f, lineterminator="\r\n")
-            out.writerow([header, "Tag"])
-            out.writerows([(r[0], r[1]) for r in rows])
-        counts[filename] = len(rows)
-    return counts
 
 
 # ------------------------------------------------------------------
@@ -748,13 +722,10 @@ def rename_deck(conn, deck_id, new_name, update_collection_locations=True):
     """Returns (success, error). decks.name is UNIQUE and is matched as
     free text elsewhere (collection.location for "sleeved in this deck"
     tracking, deck_changes.dest_location for an open removal headed to
-    this deck, and scripts/migrate.py's tag backup/restore keys off the
-    name too) — so a rename here, by default, also updates any
+    this deck) — so a rename here, by default, also updates any
     collection.location rows that exactly matched the old name (open
     dest_location rows are always kept in sync, since they aren't
-    collection data). It does NOT touch decks.csv/deck_mapping.csv: if you
-    later re-run the CSV migration, the deck will reappear under its old
-    CSV name unless you update the CSV to match."""
+    collection data)."""
     new_name = (new_name or "").strip()
     if not new_name:
         return False, "Name can't be empty."
@@ -3153,9 +3124,9 @@ def _validate_game_participants(participants):
     seat-numbered error message) is expected to catch these cases
     first, but this layer means a game can't be logged with zero or
     multiple winners no matter how it's called. Note this only applies
-    going forward — historical games imported by migrate.py insert
-    directly via SQL and never pass through here, so any real draws
-    (zero winners) already in games_played.csv are preserved as-is."""
+    going forward — historical games from the original CSV import were
+    inserted directly via SQL and never passed through here, so any real
+    draws (zero winners) already in the database are preserved as-is."""
     usable = [p for p in participants if (p.get("deck_name") or "").strip()]
     if not usable:
         return "Add at least one deck/participant before logging the game."
@@ -3172,7 +3143,7 @@ def _insert_game_participants(conn, game_id, participants):
     is assumed already filtered/validated. Seat number is assigned
     1..N by list position; deck_id is None for opponent decks not in
     the tracked `decks` table (free-text entry), and is_own_deck is
-    derived from that, matching migrate.py's original convention."""
+    derived from that."""
     for seat, p in enumerate(participants, start=1):
         deck_id = p.get("deck_id")
         conn.execute(

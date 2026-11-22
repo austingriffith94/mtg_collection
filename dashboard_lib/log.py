@@ -53,6 +53,6 @@ def setup_logging(level=logging.INFO):
     root.addHandler(console_handler)
 
     # Scryfall calls are chatty at INFO (one line per card during a
-    # full refresh/migration) — quiet the underlying HTTP library down
+    # full card-data refresh) — quiet the underlying HTTP library down
     # to warnings so it doesn't drown out the app's own log lines.
     logging.getLogger("urllib3").setLevel(logging.WARNING)

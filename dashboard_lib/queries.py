@@ -39,10 +39,8 @@ CARD_COLUMNS = """
 # its own table column anywhere, only consumed by those pure functions.
 
 # Additive, non-destructive schema upgrades for databases built before a
-# given column existed. migrate.py is one-way and won't be re-run once
-# you've moved to managing things in the dashboard (see its module
-# docstring), so this is how the schema evolves from here on instead —
-# applied automatically on every connect, never touches existing data,
+# given column existed. The database is never rebuilt from CSVs, so this
+# is how the schema evolves — applied automatically on every connect, never touches existing data,
 # and is a no-op once a database is already current.
 _SCHEMA_UPGRADES = [
     ("cards", "is_reserved", "ALTER TABLE cards ADD COLUMN is_reserved BOOLEAN DEFAULT 0"),

@@ -207,9 +207,8 @@ CREATE TABLE deck_themes (
 
 -- Master list of theme names offered in the Editor's Themes dropdown
 -- (Phase 2). Seeded once from whatever distinct theme names already
--- exist in deck_themes (originally sourced from deck_themes.csv at
--- migration) — see migrate.py's load_decks() and queries.ensure_schema()'s
--- bootstrap for upgraded pre-Phase-2 databases. Adding/removing entries
+-- exist in deck_themes (see queries.ensure_schema()'s bootstrap for
+-- upgraded pre-Phase-2 databases). Adding/removing entries
 -- here only affects what the dropdown offers; it never touches existing
 -- deck_themes assignments.
 CREATE TABLE theme_catalog (
@@ -446,8 +445,7 @@ CREATE TABLE game_changer_tags (
 
 -- Master list of Game Changer categories offered in the Editor's Game
 -- Changers dropdown (Phase 2). Seeded once from whatever distinct tag
--- values already exist in game_changer_tags (originally sourced from
--- game_changers.csv at migration). Adding/removing entries here only
+-- values already exist in game_changer_tags. Adding/removing entries here only
 -- affects what the dropdown offers; it never touches existing
 -- game_changer_tags assignments.
 CREATE TABLE game_changer_category_catalog (
@@ -465,8 +463,7 @@ CREATE TABLE mana_tags (
 
 -- Master list of Optimized-mana categories offered in the Editor's Mana
 -- Tags dropdown (Prompt Pass 12). Seeded once from whatever distinct tag
--- values already exist in mana_tags (originally sourced from
--- mana_tags.csv at migration). Adding/removing entries here only affects
+-- values already exist in mana_tags. Adding/removing entries here only affects
 -- what the dropdown offers; it never touches existing mana_tags
 -- assignments — same pattern as game_changer_category_catalog above.
 CREATE TABLE mana_tag_catalog (

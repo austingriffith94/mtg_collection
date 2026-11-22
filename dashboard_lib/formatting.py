@@ -75,8 +75,7 @@ def color_identity_display(ci_str):
 
 def deck_color_identity_letters(ci_str):
     """DECK-level color_identity is a different format from card-level:
-    decks.color_identity comes straight from deck_mapping.csv's 'Color'
-    column as concatenated WUBRG letters with NO separator (e.g. 'RB',
+    decks.color_identity is stored as concatenated WUBRG letters with NO separator (e.g. 'RB',
     'GUW'), not comma-separated like cards.color_identity. Returns the
     individual letters found, in WUBRG order (e.g. 'RB' -> ['R','B'] in
     WUBRG order would be ['R','B']... concretely 'GUW' -> ['G','U','W']).

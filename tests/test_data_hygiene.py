@@ -163,17 +163,6 @@ def test_prune_orphaned_keeps_tag_listed_and_dry_run(conn, add_card, tmp_path, m
     assert (tmp_path / f"{listed}.jpg").exists()
 
 
-# ------------------------------ CSV export ------------------------------
-def test_export_writes_both_reference_lists(conn, tmp_path):
-    _tag(conn, "game_changer_tags", "Ad Nauseam", "Combo")
-    _tag(conn, "game_changer_tags", "Rhystic Study", "Value")
-    _tag(conn, "mana_tags", "Sol Ring", "Fast")
-    counts = writes.export_reference_lists(conn, str(tmp_path))
-    assert counts == {"game_changers.csv": 2, "mana_tags.csv": 1}
-    assert "Ad Nauseam" in (tmp_path / "game_changers.csv").read_text(encoding="utf-8")
-    assert "Sol Ring" in (tmp_path / "mana_tags.csv").read_text(encoding="utf-8")
-
-
 # ------------------------------ page (AppTest) ------------------------------
 def test_card_database_page_lists_unlinked_names_and_cleans_up(tmp_path, monkeypatch):
     import sqlite3
